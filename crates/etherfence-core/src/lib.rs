@@ -113,6 +113,11 @@ pub enum FindingKind {
     SecretLookingEnvName,
     TirithBinaryDetected,
     TirithConfigDetected,
+    PolicyUnexpectedMcpServer,
+    PolicyDisallowedFilesystemPath,
+    PolicyDisallowedEnvironmentExposure,
+    PolicySecretLikeEnvironmentExposure,
+    PolicyRequiredTirithMissing,
 }
 
 impl FindingKind {
@@ -126,6 +131,11 @@ impl FindingKind {
             Self::SecretLookingEnvName => "secret-looking-env-name",
             Self::TirithBinaryDetected => "tirith-binary-detected",
             Self::TirithConfigDetected => "tirith-config-detected",
+            Self::PolicyUnexpectedMcpServer => "policy-unexpected-mcp-server",
+            Self::PolicyDisallowedFilesystemPath => "policy-disallowed-filesystem-path",
+            Self::PolicyDisallowedEnvironmentExposure => "policy-disallowed-environment-exposure",
+            Self::PolicySecretLikeEnvironmentExposure => "policy-secret-like-environment-exposure",
+            Self::PolicyRequiredTirithMissing => "policy-required-tirith-missing",
         }
     }
 }
@@ -150,6 +160,25 @@ impl BaselineStatus {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum PolicyStatus {
+    Pass,
+    Violation,
+    #[default]
+    NotApplicable,
+}
+
+impl PolicyStatus {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Pass => "pass",
+            Self::Violation => "violation",
+            Self::NotApplicable => "not_applicable",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Finding {
     pub id: String,
@@ -165,6 +194,10 @@ pub struct Finding {
     pub references: Vec<String>,
     pub fingerprint: String,
     pub baseline_status: BaselineStatus,
+    #[serde(default)]
+    pub policy_status: PolicyStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy_id: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub evidence: Vec<String>,
 }
@@ -219,6 +252,17 @@ pub struct BaselineComparison {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PolicyMetadata {
+    pub policy_path: String,
+    pub policy_name: String,
+    pub require_tirith: bool,
+    pub checks_total: usize,
+    pub pass: usize,
+    pub violation: usize,
+    pub not_applicable: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ScanReport {
     pub schema_version: String,
     pub tool: String,
@@ -228,6 +272,8 @@ pub struct ScanReport {
     pub inventory: Vec<InventoryItem>,
     pub findings: Vec<Finding>,
     pub summary: Summary,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub policy: Option<PolicyMetadata>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub baseline: Option<BaselineComparison>,
 }
@@ -298,6 +344,8 @@ mod tests {
             references: Vec::new(),
             fingerprint: String::new(),
             baseline_status: BaselineStatus::NotApplicable,
+            policy_status: PolicyStatus::NotApplicable,
+            policy_id: None,
             evidence,
         };
         finding.refresh_fingerprint();

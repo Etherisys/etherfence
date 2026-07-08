@@ -15,6 +15,7 @@ pub fn to_human(report: &ScanReport) -> String {
     out.push_str(&summary_line(report));
     out.push('\n');
     append_human_baseline(&mut out, report);
+    append_human_policy(&mut out, report);
     out.push('\n');
     append_human_inventory(&mut out, report);
     append_human_findings(&mut out, report);
@@ -48,6 +49,17 @@ pub fn to_markdown(report: &ScanReport) -> String {
         out.push_str(&format!("- New findings: {}\n", baseline.new));
         out.push_str(&format!("- Existing findings: {}\n", baseline.existing));
         out.push_str(&format!("- Resolved findings: {}\n\n", baseline.resolved));
+    }
+
+    if let Some(policy) = &report.policy {
+        out.push_str("## Policy Summary\n\n");
+        out.push_str(&format!("- Policy: `{}`\n", policy.policy_name));
+        out.push_str(&format!("- Policy file: `{}`\n", policy.policy_path));
+        out.push_str(&format!("- Require Tirith: `{}`\n", policy.require_tirith));
+        out.push_str(&format!("- Checks: {}\n", policy.checks_total));
+        out.push_str(&format!("- Pass: {}\n", policy.pass));
+        out.push_str(&format!("- Violations: {}\n", policy.violation));
+        out.push_str(&format!("- Not applicable: {}\n\n", policy.not_applicable));
     }
 
     out.push_str("## Inventory\n\n");
@@ -85,6 +97,13 @@ pub fn to_markdown(report: &ScanReport) -> String {
                     "- Status: `{}`\n",
                     finding.baseline_status.label()
                 ));
+                out.push_str(&format!(
+                    "- Policy status: `{}`\n",
+                    finding.policy_status.label()
+                ));
+                if let Some(policy_id) = &finding.policy_id {
+                    out.push_str(&format!("- Policy ID: `{policy_id}`\n"));
+                }
                 out.push_str(&format!("- Fingerprint: `{}`\n", finding.fingerprint));
                 out.push_str(&format!("- Agent: **{}**\n", finding.agent));
                 out.push_str(&format!("- Target: `{}`\n", finding.target));
@@ -116,6 +135,21 @@ fn append_human_baseline(out: &mut String, report: &ScanReport) {
         out.push_str(&format!(
             "Baseline: {} (new={}, existing={}, resolved={})\n",
             baseline.baseline_path, baseline.new, baseline.existing, baseline.resolved
+        ));
+    }
+}
+
+fn append_human_policy(out: &mut String, report: &ScanReport) {
+    if let Some(policy) = &report.policy {
+        out.push_str(&format!(
+            "Policy: {} ({}) checks={}, pass={}, violations={}, not_applicable={}, require_tirith={}\n",
+            policy.policy_name,
+            policy.policy_path,
+            policy.checks_total,
+            policy.pass,
+            policy.violation,
+            policy.not_applicable,
+            policy.require_tirith
         ));
     }
 }
@@ -156,13 +190,14 @@ fn append_human_findings(out: &mut String, report: &ScanReport) {
             out.push_str(&format!("\n{}\n", severity.label()));
             for finding in findings {
                 out.push_str(&format!(
-                    "- {} {}: {} [{} / {}] status={} fingerprint={}\n",
+                    "- {} {}: {} [{} / {}] status={} policy_status={} fingerprint={}\n",
                     finding.id,
                     finding.title,
                     finding.target,
                     finding.agent,
                     finding.config_path,
                     finding.baseline_status.label(),
+                    finding.policy_status.label(),
                     finding.fingerprint
                 ));
                 out.push_str(&format!("  Rationale: {}\n", finding.rationale));
@@ -188,6 +223,7 @@ mod tests {
             inventory: Vec::new(),
             findings: Vec::new(),
             summary: Summary::from_counts(0, &[]),
+            policy: None,
             baseline: None,
         };
         let rendered = to_human(&report);
@@ -206,6 +242,7 @@ mod tests {
             inventory: Vec::new(),
             findings: Vec::new(),
             summary: Summary::from_counts(0, &[]),
+            policy: None,
             baseline: None,
         };
         let rendered = to_markdown(&report);

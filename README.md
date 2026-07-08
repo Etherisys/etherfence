@@ -4,11 +4,11 @@ EtherFence is an open-source **AI Agent Security Posture & Runtime Control** pro
 
 One-line idea: **Tirith protects terminal commands; EtherFence governs agent access.**
 
-Status: **pre-alpha**. The current v0.1.3 foundation is scan-only posture discovery with remediation guidance, CI posture gates, review-friendly exports, and baseline/diff support. It is not production-ready.
+Status: **pre-alpha**. The current v0.1.4 foundation is scan-only posture discovery with remediation guidance, CI posture gates, baseline/diff support, and TOML policy profile evaluation. It is not production-ready and does not enforce policy at runtime.
 
-## What v0.1.3 does
+## What v0.1.4 does
 
-`etherfence scan` conservatively discovers local AI agent and MCP configuration files and reports posture risks/hints with rationale, impact, recommendations, fingerprints, and optional baseline status:
+`etherfence scan` conservatively discovers local AI agent and MCP configuration files and reports posture risks/hints with rationale, impact, recommendations, fingerprints, optional baseline status, and optional policy status:
 
 - MCP server configured
 - broad filesystem path access hints
@@ -17,6 +17,7 @@ Status: **pre-alpha**. The current v0.1.3 foundation is scan-only posture discov
 - MCP environment variables
 - secret-looking environment variable names
 - Tirith binary/config/lockfile presence when detectable
+- scan-only policy violations from a TOML policy profile
 
 Initial inventory targets:
 
@@ -29,6 +30,40 @@ Initial inventory targets:
 - Tirith
 
 The parser intentionally uses conservative path discovery and fixture-backed config parsing. Missing files are skipped gracefully. Findings are posture hints, not proof of exploitability.
+
+## Policy profile mode
+
+Policy profile mode is scan-only. `--policy <file>` evaluates scan results against expected posture and emits policy-generated findings. It does not block agents, proxy MCP traffic, intercept commands, install shell hooks, run a daemon, or intercept network traffic.
+
+Example policy: `examples/policies/strict.toml`.
+
+```toml
+[policy]
+name = "strict-local-ai-agent-policy"
+require_tirith = true
+
+[agents."Claude Code"]
+allowed_mcp_servers = ["filesystem", "github"]
+
+[agents."Cursor"]
+allowed_mcp_servers = ["github"]
+
+[filesystem]
+allowed_path_prefixes = ["/path/to/project"]
+denied_paths = ["/", "/home/user", "/Users/example"]
+
+[environment]
+allowed_name_patterns = ["^GITHUB_", "^NODE_"]
+deny_secret_like_names = true
+```
+
+Policy-generated finding IDs:
+
+- `EF-POL-001` unexpected MCP server
+- `EF-POL-002` disallowed filesystem path
+- `EF-POL-003` disallowed environment variable exposure
+- `EF-POL-004` secret-like environment variable exposure
+- `EF-POL-005` Tirith not detected when required
 
 ## CLI examples
 
@@ -62,6 +97,21 @@ Fail CI when high-severity posture hints are present:
 cargo run -p etherfence-cli -- scan --format json --fail-on high
 ```
 
+Scan with a policy profile:
+
+```sh
+cargo run -p etherfence-cli -- scan --policy examples/policies/strict.toml
+```
+
+Fail CI on high-severity policy violations and posture hints:
+
+```sh
+cargo run -p etherfence-cli -- scan \
+  --policy examples/policies/strict.toml \
+  --fail-on high \
+  --format json
+```
+
 Create a baseline from current known findings:
 
 ```sh
@@ -83,33 +133,44 @@ cargo run -p etherfence-cli -- scan \
   --format json
 ```
 
+Combine baseline and policy so policy findings participate in `--fail-on-new`:
+
+```sh
+cargo run -p etherfence-cli -- scan \
+  --policy examples/policies/strict.toml \
+  --baseline etherfence-baseline.json \
+  --fail-on-new high \
+  --format json
+```
+
 For fixture scans during development:
 
 ```sh
 cargo run -p etherfence-cli -- scan --root tests/fixtures/home
 cargo run -p etherfence-cli -- scan --root tests/fixtures/home --format json
-cargo run -p etherfence-cli -- scan --root tests/fixtures/home --format markdown
+cargo run -p etherfence-cli -- scan --root tests/fixtures/home --policy examples/policies/strict.toml
+cargo run -p etherfence-cli -- scan --root tests/fixtures/home --format markdown --policy examples/policies/strict.toml
 ```
 
-## Sample baseline output
+## Sample policy output
 
 ```text
 EtherFence scan report
 ======================
 Schema: ef-scan-report/v0.1.1
 Status: pre-alpha-scan-only
-Summary: 7 inventory item(s), 3 finding(s): high=3, medium=0, low=0, info=0
-Baseline: etherfence-baseline.json (new=3, existing=0, resolved=1)
+Summary: 7 inventory item(s), 24 finding(s): high=12, medium=8, low=4, info=0
+Policy: strict-local-ai-agent-policy (examples/policies/strict.toml) checks=17, pass=6, violations=11, not_applicable=0, require_tirith=true
 
 Findings by severity:
 
 HIGH
-- EF-MCP-001 Broad filesystem access hint: filesystem [Claude Code / ~/.claude.json] status=new fingerprint=efp1-...
-  Rationale: The MCP server configuration contains values that look like broad filesystem roots or filesystem-capable tooling.
-  Recommendation: Restrict MCP filesystem servers to explicit project directories such as /path/to/project, avoid home-directory or root-level grants, and separate sensitive repos where possible.
+- EF-POL-001 Unexpected MCP server for agent policy: shell-tools [Claude Code / ~/.claude.json] status=not_applicable policy_status=violation fingerprint=efp1-...
+  Rationale: The MCP server is not in the policy allowlist for this agent.
+  Recommendation: Remove the MCP server or add it to the agent's allowed_mcp_servers after review.
 ```
 
-JSON output uses the documented `ef-scan-report/v0.1.1` shape with `schema_version`, `scanned_root`, `inventory`, `findings`, `summary`, and optional `baseline`. Baseline files use `ef-baseline/v0.1.3`. See `docs/json-schema.md`.
+JSON output uses the documented `ef-scan-report/v0.1.1` shape with `schema_version`, `scanned_root`, `inventory`, `findings`, `summary`, optional `policy`, and optional `baseline`. Baseline files use `ef-baseline/v0.1.3`. See `docs/json-schema.md`.
 
 ## Non-goals for v0.1.x
 

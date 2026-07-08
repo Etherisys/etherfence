@@ -33,12 +33,26 @@
 - Baseline JSON schema documentation
 - CLI tests for baseline write, comparison, resolved findings, and new-finding gates
 
+## v0.1.4 - scan-only policy profile mode
+
+- `etherfence scan --policy <file>` for TOML policy evaluation
+- Example strict policy under `examples/policies/strict.toml`
+- Agent MCP server allowlists with unexpected-server violations
+- Filesystem-capable MCP path prefix checks with broad root/home-directory deny handling
+- Environment variable allowed-name patterns and secret-like name denial
+- Optional Tirith-required policy check without duplicating Tirith terminal detection
+- Policy metadata in JSON output and policy summary sections in human/Markdown output
+- Policy-generated findings with stable IDs `EF-POL-001` through `EF-POL-005`
+- Policy findings participating in severity filtering, `--fail-on`, baseline comparison, and `--fail-on-new`
+- Tests for parser, violation generation, CLI policy output, CI gates, baseline combination, Markdown summary, and JSON metadata
+
 ## v0.2 ideas
 
 - Expand tested config schemas and platform paths
 - Add baseline fingerprint migration notes if needed
-- Add machine-readable policy checks without enforcement
+- Add richer machine-readable policy checks without enforcement
 - Improve documentation for safe enterprise rollout
+- Consider policy schema/versioning once real-world policy examples stabilize
 
 ## Later, not v0.1
 

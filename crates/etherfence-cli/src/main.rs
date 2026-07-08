@@ -1,7 +1,8 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use etherfence_core::{
-    BaselineComparison, BaselineFile, BaselineStatus, Finding, ScanReport, Severity, Summary,
+    BaselineComparison, BaselineFile, BaselineStatus, Finding, PolicyMetadata, ScanReport,
+    Severity, Summary,
 };
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -34,6 +35,9 @@ enum Command {
         /// Compare current findings with a JSON baseline file.
         #[arg(long)]
         baseline: Option<PathBuf>,
+        /// Evaluate scan results against a TOML scan-only policy file.
+        #[arg(long)]
+        policy: Option<PathBuf>,
         /// Write current findings to a JSON baseline file.
         #[arg(long)]
         write_baseline: Option<PathBuf>,
@@ -80,6 +84,7 @@ fn main() -> Result<()> {
             severity_threshold,
             fail_on,
             baseline,
+            policy,
             write_baseline,
             fail_on_new,
             root,
@@ -88,6 +93,7 @@ fn main() -> Result<()> {
             severity_threshold: severity_threshold.into(),
             fail_on: fail_on.map(Severity::from),
             baseline,
+            policy,
             write_baseline,
             fail_on_new: fail_on_new.map(Severity::from),
             root,
@@ -100,6 +106,7 @@ struct ScanOptions {
     severity_threshold: Severity,
     fail_on: Option<Severity>,
     baseline: Option<PathBuf>,
+    policy: Option<PathBuf>,
     write_baseline: Option<PathBuf>,
     fail_on_new: Option<Severity>,
     root: Option<PathBuf>,
@@ -115,6 +122,22 @@ fn run_scan(options: ScanOptions) -> Result<()> {
         .unwrap_or_else(etherfence_inventory::default_scan_root);
     let inventory = etherfence_inventory::discover(&root);
     let mut current_findings = etherfence_detectors::analyze(&inventory);
+    let mut policy_meta = None;
+
+    if let Some(path) = &options.policy {
+        let policy = etherfence_policy::load_policy(path)?;
+        let evaluation = etherfence_policy::evaluate_policy(&policy, &inventory)?;
+        current_findings.extend(evaluation.findings);
+        policy_meta = Some(PolicyMetadata {
+            policy_path: path.display().to_string(),
+            policy_name: evaluation.policy_name,
+            require_tirith: evaluation.require_tirith,
+            checks_total: evaluation.checks_total,
+            pass: evaluation.pass,
+            violation: evaluation.violation,
+            not_applicable: evaluation.not_applicable,
+        });
+    }
 
     if let Some(path) = &options.write_baseline {
         write_baseline(path, &current_findings)?;
@@ -153,6 +176,7 @@ fn run_scan(options: ScanOptions) -> Result<()> {
         inventory,
         findings: display_findings,
         summary,
+        policy: policy_meta,
         baseline: baseline_meta,
     };
     let output = match options.format {

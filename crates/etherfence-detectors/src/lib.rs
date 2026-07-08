@@ -1,4 +1,6 @@
-use etherfence_core::{AgentKind, Finding, FindingKind, InventoryItem, McpServer, Severity};
+use etherfence_core::{
+    AgentKind, Finding, FindingKind, InventoryItem, McpServer, PolicyStatus, Severity,
+};
 
 pub fn analyze(items: &[InventoryItem]) -> Vec<Finding> {
     let mut findings = Vec::new();
@@ -202,6 +204,8 @@ fn finding(
         references: Vec::new(),
         fingerprint: String::new(),
         baseline_status: etherfence_core::BaselineStatus::NotApplicable,
+        policy_status: PolicyStatus::NotApplicable,
+        policy_id: None,
         evidence,
     };
     finding.refresh_fingerprint();

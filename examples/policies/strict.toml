@@ -1,0 +1,20 @@
+[policy]
+name = "strict-local-ai-agent-policy"
+require_tirith = true
+
+[agents."Claude Code"]
+allowed_mcp_servers = ["filesystem", "github"]
+
+[agents."Cursor"]
+allowed_mcp_servers = ["github"]
+
+[agents."Codex CLI"]
+allowed_mcp_servers = ["filesystem", "github"]
+
+[filesystem]
+allowed_path_prefixes = ["/path/to/project"]
+denied_paths = ["/", "/home/user", "/Users/example"]
+
+[environment]
+allowed_name_patterns = ["^GITHUB_", "^NODE_"]
+deny_secret_like_names = true

@@ -7,6 +7,13 @@ fn fixture_root(name: &str) -> String {
     format!("{}/../../tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"))
 }
 
+fn strict_policy() -> String {
+    format!(
+        "{}/../../examples/policies/strict.toml",
+        env!("CARGO_MANIFEST_DIR")
+    )
+}
+
 fn temp_file(name: &str) -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -39,7 +46,7 @@ fn scan_fixture_json_has_stable_top_level_schema() {
 
     assert_eq!(json["schema_version"], "ef-scan-report/v0.1.1");
     assert_eq!(json["tool"], "etherfence");
-    assert_eq!(json["version"], "0.1.3");
+    assert_eq!(json["version"], "0.1.4");
     assert_eq!(json["status"], "pre-alpha-scan-only");
     assert!(json.get("scanned_root").is_some());
     assert!(json["inventory"].is_array());
@@ -64,6 +71,7 @@ fn scan_fixture_json_has_stable_top_level_schema() {
         "references",
         "fingerprint",
         "baseline_status",
+        "policy_status",
     ] {
         assert!(first.get(key).is_some(), "missing finding key {key}");
     }
@@ -330,4 +338,118 @@ fn fail_on_new_high_returns_zero_when_high_findings_are_existing() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("new=0"));
     assert!(stdout.contains("existing="));
+}
+
+#[test]
+fn policy_json_includes_metadata_and_policy_findings() {
+    let root = fixture_root("home");
+    let policy = strict_policy();
+    let output = run(&[
+        "scan", "--root", &root, "--policy", &policy, "--format", "json",
+    ]);
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: Value = serde_json::from_slice(&output.stdout).expect("valid JSON output");
+    assert_eq!(
+        json["policy"]["policy_name"],
+        "strict-local-ai-agent-policy"
+    );
+    assert_eq!(json["policy"]["require_tirith"], true);
+    assert!(json["policy"]["violation"].as_u64().unwrap() > 0);
+    assert!(json["findings"].as_array().unwrap().iter().any(|finding| {
+        finding["id"] == "EF-POL-001"
+            && finding["policy_status"] == "violation"
+            && finding["policy_id"] == "unexpected-mcp-server"
+    }));
+}
+
+#[test]
+fn policy_fail_on_high_returns_non_zero_for_high_policy_violations() {
+    let root = fixture_root("home");
+    let policy = strict_policy();
+    let output = run(&[
+        "scan",
+        "--root",
+        &root,
+        "--policy",
+        &policy,
+        "--fail-on",
+        "high",
+    ]);
+
+    assert_eq!(output.status.code(), Some(2));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Policy:"));
+    assert!(stdout.contains("EF-POL-001"));
+}
+
+#[test]
+fn policy_baseline_fail_on_new_high_returns_zero_when_policy_findings_are_existing() {
+    let root = fixture_root("home");
+    let policy = strict_policy();
+    let baseline = temp_file("policy-existing");
+    let baseline_s = baseline.to_string_lossy().to_string();
+    assert!(run(&[
+        "scan",
+        "--root",
+        &root,
+        "--policy",
+        &policy,
+        "--write-baseline",
+        &baseline_s,
+    ])
+    .status
+    .success());
+
+    let output = run(&[
+        "scan",
+        "--root",
+        &root,
+        "--policy",
+        &policy,
+        "--baseline",
+        &baseline_s,
+        "--fail-on-new",
+        "high",
+    ]);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("new=0"));
+    assert!(stdout.contains("Policy:"));
+}
+
+#[test]
+fn markdown_policy_output_has_policy_summary() {
+    let root = fixture_root("home");
+    let policy = strict_policy();
+    let output = run(&[
+        "scan", "--root", &root, "--policy", &policy, "--format", "markdown",
+    ]);
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("## Policy Summary"));
+    assert!(stdout.contains("- Policy: `strict-local-ai-agent-policy`"));
+    assert!(stdout.contains("- Policy status: `violation`"));
+}
+
+#[test]
+fn invalid_policy_file_fails_with_clear_error() {
+    let root = fixture_root("home");
+    let policy_path = temp_file("invalid-policy");
+    std::fs::write(&policy_path, "[policy\nname = broken\n").expect("write invalid policy");
+    let policy_s = policy_path.to_string_lossy().to_string();
+    let output = run(&["scan", "--root", &root, "--policy", &policy_s]);
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("parsing policy file"), "stderr: {stderr}");
 }
