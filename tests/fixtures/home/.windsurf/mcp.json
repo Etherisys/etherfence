@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "repo-context": {
+      "command": "node",
+      "args": ["repo-context-mcp", "/home/user/repo"]
+    }
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "browser": {
+      "command": "node",
+      "args": ["playwright-mcp"],
+      "url": "https://example.invalid/mcp"
+    }
+  }
+}

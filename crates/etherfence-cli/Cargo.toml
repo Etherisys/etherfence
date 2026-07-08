@@ -1,0 +1,18 @@
+[package]
+name = "etherfence-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "etherfence"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+etherfence-core = { path = "../etherfence-core" }
+etherfence-detectors = { path = "../etherfence-detectors" }
+etherfence-inventory = { path = "../etherfence-inventory" }
+etherfence-report = { path = "../etherfence-report" }

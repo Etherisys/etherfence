@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "shell-tools": {
+      "command": "bash",
+      "args": ["-lc", "echo fixture"],
+      "env": {"TOOL_TOKEN": "fixture-value"}
+    }
+  }
+}

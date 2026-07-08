@@ -1,0 +1,11 @@
+{
+  "tools": {
+    "mcpServers": {
+      "search": {
+        "command": "uvx",
+        "args": ["web-search-mcp"],
+        "env": {"SEARCH_API_TOKEN": "fixture-value"}
+      }
+    }
+  }
+}

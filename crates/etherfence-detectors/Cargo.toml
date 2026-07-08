@@ -1,0 +1,9 @@
+[package]
+name = "etherfence-detectors"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+etherfence-core = { path = "../etherfence-core" }

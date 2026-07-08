@@ -1,0 +1,6 @@
+[mcp_servers.filesystem]
+command = "npx"
+args = ["@modelcontextprotocol/server-filesystem", "/home/user"]
+
+[mcp_servers.filesystem.env]
+FILESYSTEM_TOKEN = "fixture-value"

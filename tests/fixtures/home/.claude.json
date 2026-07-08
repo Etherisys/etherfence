@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["@modelcontextprotocol/server-filesystem", "/home/user/projects"],
+      "env": {"ANTHROPIC_API_KEY": "fixture-value"}
+    }
+  }
+}

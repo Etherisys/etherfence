@@ -1,88 +1,73 @@
 # EtherFence
 
-**Secure AI agents before they act.**
+EtherFence is an open-source **AI Agent Security Posture & Runtime Control** project.
 
-EtherFence is an open-source project for **AI Agent Runtime Protection**: protecting local AI agents, MCP-connected tools, coding agents, self-hosted assistants, and multi-agent workflows before unsafe actions happen.
+One-line idea: **Tirith protects terminal commands; EtherFence governs agent access.**
 
-## Status
+Status: **pre-alpha**. The current v0.1.0 foundation is scan-only posture discovery. It is not production-ready.
 
-EtherFence is currently in design / pre-alpha. It is not production-ready and should not be used as a security control for critical environments yet.
+## What v0.1.0 does
 
-## Why EtherFence exists
+`etherfence scan` conservatively discovers local AI agent and MCP configuration files and reports early posture findings:
 
-AI agents can read files, call tools, run shell commands, access networks, and coordinate with other agents. As agent workflows become more autonomous, security needs to move closer to runtime decisions: what an agent is allowed to see, call, write, execute, send, or schedule.
+- MCP server configured
+- broad filesystem path access hints
+- risky command/shell-capable tool hints
+- network-capable tool hints
+- MCP environment variables
+- secret-looking environment variable names
+- Tirith binary/config/lockfile presence when detectable
 
-EtherFence is intended to provide a practical control layer for agentic systems: discover risky configurations, enforce action boundaries, protect secrets, require approvals, and keep an auditable record of sensitive agent activity.
-
-## Product category
-
-**AI Agent Runtime Protection**
-
-EtherFence is not just an MCP scanner, and it is not branded as a firewall. The goal is runtime protection and policy enforcement for local and self-hosted agent environments.
-
-## Target environments
-
-EtherFence is intended to support or integrate with:
+Initial inventory targets:
 
 - Claude Code
 - Cursor
-- VS Code agent workflows
+- VS Code
 - Windsurf
 - Gemini CLI
 - Codex CLI
-- Hermes Agent
-- OpenClaw
-- MCP servers
-- custom local agents
+- Tirith
 
-## Threats targeted
+The parser intentionally uses conservative path discovery and fixture-backed config parsing. Missing files are skipped gracefully. Findings are hints, not proof of exploitability.
 
-EtherFence is being designed to help reduce risk from:
+## Non-goals for v0.1.0
 
-- indirect prompt injection
-- MCP tool poisoning
-- malicious or changed tool descriptions
-- unsafe MCP configs
-- over-permissive agent profiles
-- secret exposure
-- unsafe file reads/writes
-- shell command misuse
-- network exfiltration
-- unsafe scheduled or multi-agent automation
+EtherFence v0.1.0 does **not** implement:
 
-## Planned capabilities
+- daemon mode
+- runtime blocking
+- MCP proxying
+- network interception
+- shell hooks
+- terminal command scanning duplicated from Tirith
+- homograph, `curl | bash`, paste, or shell-hook detection
 
-Planned capabilities include:
+Tirith is treated as complementary terminal-command protection.
 
-- agent and MCP discovery
-- MCP risk scanning
-- runtime policy enforcement
-- secret protection
-- file boundary control
-- network boundary control
-- approval workflow
-- audit logging
+## Build and run
 
-## Roadmap
+```sh
+cargo build
+cargo run -p etherfence-cli -- scan
+cargo run -p etherfence-cli -- scan --format json
+```
 
-- **v0.1:** Agent and MCP risk scanner
-- **v0.2:** MCP proxy and policy enforcement
-- **v0.3:** Secret and output protection
-- **v0.4:** File/network boundary control
-- **v0.5:** Developer and multi-agent workflow hardening
+For fixture scans during development:
 
-## Non-goals
+```sh
+cargo run -p etherfence-cli -- scan --root tests/fixtures/home
+```
 
-EtherFence is not intended to be:
+## Development checks
 
-- an EDR replacement
-- a malware scanner
-- a general network firewall
-- a jailbreak-proofing tool
-- a guarantee that prompt injection cannot happen
+```sh
+cargo fmt --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test
+cargo build
+git diff --check
+```
 
-## Development
+## License
 
-The planned implementation language is Rust.
-
-Contributions and design feedback will be welcome as the project moves from design into early implementation.
+Apache-2.0.
