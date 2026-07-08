@@ -32,6 +32,16 @@ const CANDIDATES: &[Candidate] = &[
         format: ConfigFormat::Json,
     },
     Candidate {
+        agent: AgentKind::ClaudeCode,
+        relative_path: "AppData/Roaming/Claude/settings.json",
+        format: ConfigFormat::Json,
+    },
+    Candidate {
+        agent: AgentKind::ClaudeCode,
+        relative_path: "Claude/settings.json",
+        format: ConfigFormat::Json,
+    },
+    Candidate {
         agent: AgentKind::Cursor,
         relative_path: ".cursor/mcp.json",
         format: ConfigFormat::Json,
@@ -39,6 +49,16 @@ const CANDIDATES: &[Candidate] = &[
     Candidate {
         agent: AgentKind::Cursor,
         relative_path: ".cursor/settings.json",
+        format: ConfigFormat::Json,
+    },
+    Candidate {
+        agent: AgentKind::Cursor,
+        relative_path: "AppData/Roaming/Cursor/User/mcp.json",
+        format: ConfigFormat::Json,
+    },
+    Candidate {
+        agent: AgentKind::Cursor,
+        relative_path: "Cursor/User/mcp.json",
         format: ConfigFormat::Json,
     },
     Candidate {
@@ -57,6 +77,16 @@ const CANDIDATES: &[Candidate] = &[
         format: ConfigFormat::Json,
     },
     Candidate {
+        agent: AgentKind::VsCode,
+        relative_path: "AppData/Roaming/Code/User/settings.json",
+        format: ConfigFormat::Json,
+    },
+    Candidate {
+        agent: AgentKind::VsCode,
+        relative_path: "Code/User/settings.json",
+        format: ConfigFormat::Json,
+    },
+    Candidate {
         agent: AgentKind::Windsurf,
         relative_path: ".windsurf/mcp.json",
         format: ConfigFormat::Json,
@@ -67,13 +97,43 @@ const CANDIDATES: &[Candidate] = &[
         format: ConfigFormat::Json,
     },
     Candidate {
+        agent: AgentKind::Windsurf,
+        relative_path: "AppData/Roaming/Windsurf/User/mcp_config.json",
+        format: ConfigFormat::Json,
+    },
+    Candidate {
+        agent: AgentKind::Windsurf,
+        relative_path: "Windsurf/User/mcp_config.json",
+        format: ConfigFormat::Json,
+    },
+    Candidate {
         agent: AgentKind::GeminiCli,
         relative_path: ".gemini/settings.json",
         format: ConfigFormat::Json,
     },
     Candidate {
+        agent: AgentKind::GeminiCli,
+        relative_path: "AppData/Roaming/Gemini/settings.json",
+        format: ConfigFormat::Json,
+    },
+    Candidate {
+        agent: AgentKind::GeminiCli,
+        relative_path: "Gemini/settings.json",
+        format: ConfigFormat::Json,
+    },
+    Candidate {
         agent: AgentKind::CodexCli,
         relative_path: ".codex/config.toml",
+        format: ConfigFormat::Toml,
+    },
+    Candidate {
+        agent: AgentKind::CodexCli,
+        relative_path: "AppData/Roaming/Codex/config.toml",
+        format: ConfigFormat::Toml,
+    },
+    Candidate {
+        agent: AgentKind::CodexCli,
+        relative_path: "Codex/config.toml",
         format: ConfigFormat::Toml,
     },
     Candidate {
@@ -89,12 +149,53 @@ const CANDIDATES: &[Candidate] = &[
 ];
 
 pub fn default_scan_root() -> PathBuf {
-    env::var_os("HOME")
-        .map(PathBuf::from)
+    default_scan_roots()
+        .into_iter()
+        .next()
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
+pub fn default_scan_roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    push_env_path(&mut roots, "HOME");
+    push_env_path(&mut roots, "USERPROFILE");
+    push_env_path(&mut roots, "APPDATA");
+    push_env_path(&mut roots, "LOCALAPPDATA");
+    if roots.is_empty() {
+        roots.push(PathBuf::from("."));
+    }
+    roots
+}
+
+fn push_env_path(roots: &mut Vec<PathBuf>, name: &str) {
+    let Some(value) = env::var_os(name) else {
+        return;
+    };
+    if value.is_empty() {
+        return;
+    }
+    let path = PathBuf::from(value);
+    if !roots.iter().any(|existing| existing == &path) {
+        roots.push(path);
+    }
+}
+
 pub fn discover(root: &Path) -> Vec<InventoryItem> {
+    let mut items = discover_candidates(root);
+    append_tirith_binary(&mut items);
+    items
+}
+
+pub fn discover_roots(roots: &[PathBuf]) -> Vec<InventoryItem> {
+    let mut items = Vec::new();
+    for root in roots {
+        items.extend(discover_candidates(root));
+    }
+    append_tirith_binary(&mut items);
+    items
+}
+
+fn discover_candidates(root: &Path) -> Vec<InventoryItem> {
     let mut items = Vec::new();
     for candidate in CANDIDATES {
         let path = root.join(candidate.relative_path);
@@ -111,6 +212,10 @@ pub fn discover(root: &Path) -> Vec<InventoryItem> {
             }),
         }
     }
+    items
+}
+
+fn append_tirith_binary(items: &mut Vec<InventoryItem>) {
     if tirith_binary_present() {
         items.push(InventoryItem {
             agent: AgentKind::Tirith,
@@ -119,7 +224,6 @@ pub fn discover(root: &Path) -> Vec<InventoryItem> {
             evidence: vec!["tirith binary found on PATH".to_string()],
         });
     }
-    items
 }
 
 fn parse_candidate(root: &Path, path: &Path, candidate: Candidate) -> Result<InventoryItem> {
@@ -147,8 +251,12 @@ fn parse_candidate(root: &Path, path: &Path, candidate: Candidate) -> Result<Inv
 
 fn display_path(root: &Path, path: &Path) -> String {
     path.strip_prefix(root)
-        .map(|p| format!("~/{}", p.display()))
-        .unwrap_or_else(|_| path.display().to_string())
+        .map(|p| format!("~/{}", normalize_path_string(&p.display().to_string())))
+        .unwrap_or_else(|_| normalize_path_string(&path.display().to_string()))
+}
+
+fn normalize_path_string(path: &str) -> String {
+    path.replace('\\', "/")
 }
 
 fn parse_json_mcp_servers(value: &JsonValue) -> Vec<McpServer> {
@@ -281,7 +389,8 @@ fn tirith_binary_present() -> bool {
     };
     env::split_paths(&path_var).any(|dir| {
         let candidate = dir.join("tirith");
-        candidate.is_file()
+        let windows_candidate = dir.join("tirith.exe");
+        candidate.is_file() || windows_candidate.is_file()
     })
 }
 
@@ -290,7 +399,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn discovers_fixture_configs() {
+    fn discovers_linux_fixture_configs() {
         let root = Path::new("../../tests/fixtures/home");
         let items = discover(root);
         assert!(items.iter().any(|i| i.agent == AgentKind::ClaudeCode));
@@ -299,6 +408,21 @@ mod tests {
         assert!(items.iter().any(|i| i.agent == AgentKind::Windsurf));
         assert!(items.iter().any(|i| i.agent == AgentKind::GeminiCli));
         assert!(items.iter().any(|i| i.agent == AgentKind::Tirith));
+    }
+
+    #[test]
+    fn discovers_windows_fixture_configs() {
+        let root = Path::new("../../tests/fixtures/windows-home");
+        let items = discover(root);
+        assert!(items.iter().any(|i| i.agent == AgentKind::ClaudeCode));
+        assert!(items.iter().any(|i| i.agent == AgentKind::Cursor));
+        assert!(items.iter().any(|i| i.agent == AgentKind::VsCode));
+        assert!(items.iter().any(|i| i.agent == AgentKind::Windsurf));
+        assert!(items.iter().any(|i| i.agent == AgentKind::GeminiCli));
+        assert!(items.iter().any(|i| i.agent == AgentKind::CodexCli));
+        assert!(items
+            .iter()
+            .any(|i| i.config_path == "~/AppData/Roaming/Code/User/settings.json"));
     }
 
     #[test]
@@ -311,5 +435,13 @@ mod tests {
             .expect("codex fixture");
         assert_eq!(codex.mcp_servers[0].name, "filesystem");
         assert_eq!(codex.mcp_servers[0].env[0].name, "FILESYSTEM_TOKEN");
+    }
+
+    #[test]
+    fn display_path_normalizes_separators() {
+        assert_eq!(
+            normalize_path_string(r"C:\Users\example\AppData\Roaming\Code\User\settings.json"),
+            "C:/Users/example/AppData/Roaming/Code/User/settings.json"
+        );
     }
 }

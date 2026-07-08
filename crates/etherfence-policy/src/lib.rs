@@ -421,6 +421,7 @@ fn looks_like_path(value: &str) -> bool {
         || value.starts_with("/home/")
         || value.starts_with("/Users/")
         || value.starts_with("/path/")
+        || windows_user_path(value)
 }
 
 fn is_broad_filesystem_path(path: &str) -> bool {
@@ -430,12 +431,28 @@ fn is_broad_filesystem_path(path: &str) -> bool {
         || path == "/home/user"
         || path == "/Users"
         || path == "/Users/example"
+        || path == "C:/Users"
+        || path == "C:/Users/example"
         || home_wide_grant(&path)
+        || windows_home_wide_grant(&path)
 }
 
 fn home_wide_grant(path: &str) -> bool {
     let parts: Vec<&str> = path.trim_matches('/').split('/').collect();
     matches!(parts.as_slice(), ["home", _] | ["Users", _])
+}
+
+fn windows_user_path(path: &str) -> bool {
+    let normalized = normalized_path(path);
+    normalized.len() >= 10
+        && normalized.as_bytes().get(1) == Some(&b':')
+        && normalized[2..].starts_with("/Users/")
+}
+
+fn windows_home_wide_grant(path: &str) -> bool {
+    let normalized = normalized_path(path);
+    let parts: Vec<&str> = normalized.split('/').collect();
+    matches!(parts.as_slice(), [drive, "Users", _] if drive.ends_with(':'))
 }
 
 fn path_has_prefix(path: &str, prefix: &str) -> bool {

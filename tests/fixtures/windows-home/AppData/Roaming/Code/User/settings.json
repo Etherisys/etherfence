@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "C:\\Users\\example\\Projects\\demo"],
+      "env": {
+        "FILESYSTEM_TOKEN": "example"
+      }
+    },
+    "browser-search": {
+      "command": "node",
+      "args": ["C:\\Users\\example\\tools\\browser-search.js"]
+    }
+  }
+}

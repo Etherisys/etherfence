@@ -254,6 +254,9 @@ pub struct BaselineComparison {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PolicyMetadata {
     pub policy_path: String,
+    pub policy_source: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy_profile: Option<String>,
     pub policy_schema_version: String,
     pub policy_name: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -361,6 +364,25 @@ mod tests {
         let b = sample_finding(vec!["filesystem".to_string(), "/home/user".to_string()]);
         assert_eq!(a.fingerprint, b.fingerprint);
         assert!(a.fingerprint.starts_with("efp1-"));
+    }
+
+    #[test]
+    fn fingerprint_normalizes_windows_path_separators() {
+        let mut windows = sample_finding(vec![
+            r"C:\Users\example\Projects\demo".to_string(),
+            "filesystem".to_string(),
+        ]);
+        windows.config_path = r"~\AppData\Roaming\Code\User\settings.json".to_string();
+        windows.refresh_fingerprint();
+
+        let mut normalized = sample_finding(vec![
+            "C:/Users/example/Projects/demo".to_string(),
+            "filesystem".to_string(),
+        ]);
+        normalized.config_path = "~/AppData/Roaming/Code/User/settings.json".to_string();
+        normalized.refresh_fingerprint();
+
+        assert_eq!(windows.fingerprint, normalized.fingerprint);
     }
 
     #[test]

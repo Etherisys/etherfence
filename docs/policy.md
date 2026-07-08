@@ -57,7 +57,7 @@ Filesystem policy violations emit `EF-POL-002`.
 
 ## Built-in example profiles
 
-The built-in/example profiles live under `examples/policies/` and can be inspected with:
+Built-in profiles can be selected directly with `etherfence scan --policy-profile <name>` and inspected with:
 
 ```sh
 cargo run -p etherfence-cli -- policy list
@@ -66,7 +66,9 @@ cargo run -p etherfence-cli -- policy show developer-laptop
 
 ### developer-laptop
 
-File: `examples/policies/developer-laptop.toml`
+Built-in name: `developer-laptop`
+
+File equivalent: `examples/policies/developer-laptop.toml`
 
 Intent: balanced local developer workstation policy.
 
@@ -74,17 +76,19 @@ Intent: balanced local developer workstation policy.
 - Allows expected MCP servers such as `filesystem`, `github`, and selected context/search servers where reasonable.
 - Denies root and home-directory-wide filesystem exposure.
 - Denies secret-like environment variable names.
-- Recommends Tirith conceptually, but does not require it because warning-only Tirith recommendations are not represented as policy findings in v0.1.5.
+- Recommends Tirith conceptually, but does not require it because warning-only Tirith recommendations are not represented as policy findings in v0.1.7.
 
 Example:
 
 ```sh
-cargo run -p etherfence-cli -- scan --policy examples/policies/developer-laptop.toml
+cargo run -p etherfence-cli -- scan --policy-profile developer-laptop
 ```
 
 ### ci-runner
 
-File: `examples/policies/ci-runner.toml`
+Built-in name: `ci-runner`
+
+File equivalent: `examples/policies/ci-runner.toml`
 
 Intent: stricter CI or ephemeral automation host policy.
 
@@ -98,25 +102,41 @@ Example CI gate:
 
 ```sh
 cargo run -p etherfence-cli -- scan \
-  --policy examples/policies/ci-runner.toml \
+  --policy-profile ci-runner \
   --fail-on high \
   --format json
 ```
 
 ### research-workstation
 
-File: `examples/policies/research-workstation.toml`
+Built-in name: `research-workstation`
+
+File equivalent: `examples/policies/research-workstation.toml`
 
 Intent: research-friendly workstation policy.
 
 - Allows browser/search/network-capable MCP servers used for literature and web research workflows.
 - Still denies broad filesystem access and secret-looking environment variable names.
-- Shell-capable MCP tools remain scanner findings and should be reviewed separately; v0.1.5 does not add shell-command scanner logic or enforcement.
+- Shell-capable MCP tools remain scanner findings and should be reviewed separately; v0.1.7 does not add shell-command scanner logic or enforcement.
 
 Example:
 
 ```sh
-cargo run -p etherfence-cli -- scan --policy examples/policies/research-workstation.toml
+cargo run -p etherfence-cli -- scan --policy-profile research-workstation
+```
+
+## `--policy-profile <name>` vs `--policy <file>`
+
+Use `--policy-profile <name>` when one of the built-in profiles fits your posture target and you want deterministic scans without carrying a policy file path. Supported built-in names are `developer-laptop`, `ci-runner`, `research-workstation`, and `strict`. Unknown names fail clearly and suggest `etherfence policy list`.
+
+Use `--policy <file>` when you maintain a custom TOML policy file for a project, organization, or lab fixture. `--policy` and `--policy-profile` are mutually exclusive in a single scan.
+
+Direct profile examples:
+
+```sh
+etherfence scan --policy-profile developer-laptop
+etherfence scan --policy-profile ci-runner --fail-on high
+etherfence scan --policy-profile ci-runner --baseline etherfence-baseline.json --fail-on-new high
 ```
 
 ## Policy findings and CI gates
@@ -125,7 +145,7 @@ Policy findings are regular scan findings after evaluation:
 
 - `--severity-threshold` controls whether they are displayed.
 - `--fail-on high` exits non-zero when high-severity policy or scanner findings exist.
-- `--write-baseline` records policy findings if `--policy` is used.
+- `--write-baseline` records policy findings if `--policy` or `--policy-profile` is used.
 - `--baseline` marks policy findings as `new`, `existing`, or `resolved` by fingerprint.
 - `--fail-on-new high` exits non-zero only for newly introduced high-severity policy or scanner findings.
 
@@ -133,7 +153,7 @@ Baseline plus policy example:
 
 ```sh
 cargo run -p etherfence-cli -- scan \
-  --policy examples/policies/ci-runner.toml \
+  --policy-profile ci-runner \
   --baseline etherfence-baseline.json \
   --fail-on-new high \
   --format json

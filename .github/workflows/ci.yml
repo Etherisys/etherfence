@@ -6,12 +6,20 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
   rust:
-    runs-on: ubuntu-latest
+    name: rust (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
         with:
           components: rustfmt, clippy
       - name: cargo fmt
@@ -22,3 +30,30 @@ jobs:
         run: cargo test
       - name: cargo build
         run: cargo build
+      - name: cargo build release
+        run: cargo build --release -p etherfence-cli
+      - name: package linux release artifact
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p dist/etherfence-v${{ github.sha }}-linux-x86_64
+          cp target/release/etherfence dist/etherfence-v${{ github.sha }}-linux-x86_64/
+          tar -C dist -czf dist/etherfence-linux-x86_64.tar.gz etherfence-v${{ github.sha }}-linux-x86_64
+      - name: package windows release artifact
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist/etherfence-v${{ github.sha }}-windows-x86_64 | Out-Null
+          Copy-Item target/release/etherfence.exe dist/etherfence-v${{ github.sha }}-windows-x86_64/
+          Compress-Archive -Path dist/etherfence-v${{ github.sha }}-windows-x86_64 -DestinationPath dist/etherfence-windows-x86_64.zip -Force
+      - name: upload linux artifact
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: etherfence-linux-x86_64
+          path: dist/etherfence-linux-x86_64.tar.gz
+      - name: upload windows artifact
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: etherfence-windows-x86_64
+          path: dist/etherfence-windows-x86_64.zip

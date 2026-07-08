@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "web-fetch": {
+      "command": "node",
+      "args": ["C:\\Users\\example\\tools\\fetch.js"],
+      "url": "https://example.invalid/mcp"
+    }
+  }
+}

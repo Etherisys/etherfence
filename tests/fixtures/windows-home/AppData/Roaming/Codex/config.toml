@@ -1,0 +1,6 @@
+[mcp_servers.filesystem]
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-filesystem", "C:\\Users\\example"]
+
+[mcp_servers.filesystem.env]
+WINDOWS_SECRET_TOKEN = "example"
