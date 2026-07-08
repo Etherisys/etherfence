@@ -102,9 +102,13 @@ impl Severity {
     }
 }
 
+/// Evidence prefix used by inventory items whose config file could not be parsed.
+pub const PARSE_ERROR_EVIDENCE_PREFIX: &str = "parse-error:";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum FindingKind {
+    ConfigParseError,
     McpServerConfigured,
     BroadFilesystemAccess,
     RiskyCommandToolHint,
@@ -123,6 +127,7 @@ pub enum FindingKind {
 impl FindingKind {
     pub fn key(self) -> &'static str {
         match self {
+            Self::ConfigParseError => "config-parse-error",
             Self::McpServerConfigured => "mcp-server-configured",
             Self::BroadFilesystemAccess => "broad-filesystem-access",
             Self::RiskyCommandToolHint => "risky-command-tool-hint",

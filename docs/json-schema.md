@@ -6,7 +6,7 @@ Status: pre-alpha. This document describes the current scan report and baseline 
 
 Current report schema: `ef-scan-report/v0.1.1`
 
-EtherFence v0.1.7 keeps the v0.1.1 report shape and adds explicit policy schema/source metadata in scan output when `--policy` or `--policy-profile` is used. These additions are backward-compatible for consumers that ignore unknown fields.
+EtherFence v0.1.8 keeps the v0.1.1 report shape unchanged. New finding IDs (such as `EF-CFG-001` for unparseable config files) and SARIF output are additive and do not alter the JSON report schema. Policy schema/source metadata appears in scan output when `--policy` or `--policy-profile` is used. These additions are backward-compatible for consumers that ignore unknown fields.
 
 CLI filtering with `--severity-threshold` changes which findings are included in the emitted report and recomputes `summary` for the displayed findings, but it does not change field names or object layout. Policy findings are ordinary findings for filtering, `--fail-on`, baseline comparison, and `--fail-on-new`.
 
@@ -75,7 +75,7 @@ When `--policy <file>` or `--policy-profile <name>` is used, the report includes
 | `violation` | integer | Number of policy-generated violation findings. |
 | `not_applicable` | integer | Number of checks skipped as not applicable. |
 
-Policy-generated IDs in v0.1.7:
+Policy-generated IDs in v0.1.8:
 
 | ID | Meaning |
 | --- | --- |

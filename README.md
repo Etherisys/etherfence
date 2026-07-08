@@ -4,9 +4,9 @@ EtherFence is an open-source **AI Agent Security Posture & Runtime Control** pro
 
 One-line idea: **Tirith protects terminal commands; EtherFence governs agent access.**
 
-Status: **pre-alpha**. The current v0.1.7 foundation is scan-only posture discovery with remediation guidance, CI posture gates, baseline/diff support, versioned TOML policy profiles, built-in policy profiles, direct `scan --policy-profile <name>` selection, conservative Linux/Windows discovery helpers, and Linux/Windows release packaging. It is not production-ready and does not enforce policy at runtime.
+Status: **pre-alpha**. The current v0.1.8 foundation is scan-only posture discovery with remediation guidance, CI posture gates, baseline/diff support, versioned TOML policy profiles, built-in policy profiles, direct `scan --policy-profile <name>` selection, conservative Linux/Windows discovery helpers, hardened fixture-backed config parsing, SARIF 2.1.0 export, and Linux/Windows release packaging. It is not production-ready and does not enforce policy at runtime.
 
-## What v0.1.7 does
+## What v0.1.8 does
 
 `etherfence scan` conservatively discovers local AI agent and MCP configuration files and reports posture risks/hints with rationale, impact, recommendations, fingerprints, optional baseline status, and optional policy status:
 
@@ -18,6 +18,7 @@ Status: **pre-alpha**. The current v0.1.7 foundation is scan-only posture discov
 - secret-looking environment variable names
 - Tirith binary/config/lockfile presence when detectable
 - scan-only policy violations from a versioned TOML policy profile
+- agent config files that exist but could not be parsed (`EF-CFG-001`)
 
 Initial inventory targets:
 
@@ -29,7 +30,7 @@ Initial inventory targets:
 - Codex CLI
 - Tirith
 
-The parser intentionally uses conservative path discovery and fixture-backed config parsing. Missing files are skipped gracefully. Findings are posture hints, not proof of exploitability.
+The parser intentionally uses conservative path discovery and fixture-backed config parsing. Missing files are skipped gracefully, malformed JSON/TOML config files are reported instead of aborting the scan, and unknown extra config fields are ignored. Fixture coverage exercises common shapes (minimal configs, multiple MCP servers, no MCP servers, malformed files, Linux- and Windows-style paths), but EtherFence does not claim complete support for every agent config format or install location. Findings are posture hints, not proof of exploitability.
 
 
 ## Linux and Windows usage
@@ -126,6 +127,15 @@ Markdown output for security review notes:
 ```sh
 cargo run -p etherfence-cli -- scan --format markdown
 ```
+
+SARIF 2.1.0 output for code-scanning dashboards and SARIF-aware tooling:
+
+```sh
+etherfence scan --format sarif > etherfence.sarif
+etherfence scan --policy-profile ci-runner --format sarif > etherfence.sarif
+```
+
+SARIF export works with `--policy`, `--policy-profile`, `--baseline`, and `--severity-threshold`; high maps to `error`, medium to `warning`, and low/info to `note`. See `docs/sarif.md` for the full mapping.
 
 Only display high-severity findings:
 
@@ -228,7 +238,7 @@ HIGH
   Recommendation: Remove the MCP server or add it to the agent's allowed_mcp_servers after review.
 ```
 
-JSON output uses the documented `ef-scan-report/v0.1.1` shape with `schema_version`, `scanned_root`, `inventory`, `findings`, `summary`, optional `policy`, and optional `baseline`. Baseline files use `ef-baseline/v0.1.3`. See `docs/json-schema.md`.
+JSON output uses the documented `ef-scan-report/v0.1.1` shape with `schema_version`, `scanned_root`, `inventory`, `findings`, `summary`, optional `policy`, and optional `baseline`. Baseline files use `ef-baseline/v0.1.3`. See `docs/json-schema.md`. SARIF output is documented in `docs/sarif.md`.
 
 ## Non-goals for v0.1.x
 
@@ -252,18 +262,18 @@ Linux:
 
 ```sh
 cargo build --release -p etherfence-cli
-mkdir -p dist/etherfence-v0.1.7-linux-x86_64
-cp target/release/etherfence dist/etherfence-v0.1.7-linux-x86_64/
-tar -C dist -czf dist/etherfence-linux-x86_64.tar.gz etherfence-v0.1.7-linux-x86_64
+mkdir -p dist/etherfence-v0.1.8-linux-x86_64
+cp target/release/etherfence dist/etherfence-v0.1.8-linux-x86_64/
+tar -C dist -czf dist/etherfence-linux-x86_64.tar.gz etherfence-v0.1.8-linux-x86_64
 ```
 
 Windows PowerShell:
 
 ```powershell
 cargo build --release -p etherfence-cli
-New-Item -ItemType Directory -Force -Path dist/etherfence-v0.1.7-windows-x86_64 | Out-Null
-Copy-Item target/release/etherfence.exe dist/etherfence-v0.1.7-windows-x86_64/
-Compress-Archive -Path dist/etherfence-v0.1.7-windows-x86_64 -DestinationPath dist/etherfence-windows-x86_64.zip -Force
+New-Item -ItemType Directory -Force -Path dist/etherfence-v0.1.8-windows-x86_64 | Out-Null
+Copy-Item target/release/etherfence.exe dist/etherfence-v0.1.8-windows-x86_64/
+Compress-Archive -Path dist/etherfence-v0.1.8-windows-x86_64 -DestinationPath dist/etherfence-windows-x86_64.zip -Force
 ```
 
 GitHub Actions builds and uploads matching Linux `tar.gz` and Windows `zip` artifacts for CI runs.

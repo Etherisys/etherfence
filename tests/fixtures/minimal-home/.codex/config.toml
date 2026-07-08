@@ -1,0 +1,2 @@
+# Fixture: Codex CLI config with no MCP servers configured.
+model = "example-model"

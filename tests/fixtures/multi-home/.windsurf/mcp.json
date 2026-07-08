@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "repo-context": {
+      "command": "node",
+      "args": ["repo-context-mcp", "/home/user/repo"],
+      "timeout": 30
+    },
+    "browser": {
+      "command": "npx",
+      "args": ["-y", "playwright-mcp"],
+      "disabled": false
+    }
+  }
+}

@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use etherfence_core::{AgentKind, EnvVar, InventoryItem, McpServer};
+use etherfence_core::{AgentKind, EnvVar, InventoryItem, McpServer, PARSE_ERROR_EVIDENCE_PREFIX};
 use serde_json::Value as JsonValue;
 use std::env;
 use std::fs;
@@ -208,7 +208,7 @@ fn discover_candidates(root: &Path) -> Vec<InventoryItem> {
                 agent: candidate.agent,
                 config_path: display_path(root, &path),
                 mcp_servers: Vec::new(),
-                evidence: vec![format!("parse error: {err}")],
+                evidence: vec![parse_error_evidence(&err)],
             }),
         }
     }
@@ -238,15 +238,39 @@ fn parse_candidate(root: &Path, path: &Path, candidate: Candidate) -> Result<Inv
     match candidate.format {
         ConfigFormat::Json => {
             let value: JsonValue = serde_json::from_str(&content).context("parsing JSON")?;
-            item.mcp_servers = parse_json_mcp_servers(&value);
+            let parsed = parse_json_mcp_servers(&value);
+            item.mcp_servers = parsed.servers;
+            item.evidence.extend(parsed.warnings);
         }
         ConfigFormat::Toml => {
             let value: TomlValue = content.parse::<TomlValue>().context("parsing TOML")?;
-            item.mcp_servers = parse_toml_mcp_servers(&value);
+            let parsed = parse_toml_mcp_servers(&value);
+            item.mcp_servers = parsed.servers;
+            item.evidence.extend(parsed.warnings);
         }
         ConfigFormat::PresenceOnly => item.evidence.push("Tirith file present".to_string()),
     }
+    item.mcp_servers.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(item)
+}
+
+/// Deterministic, single-line parse-error evidence. TOML errors in particular
+/// render as multi-line spans, so whitespace is collapsed and the message capped.
+fn parse_error_evidence(err: &anyhow::Error) -> String {
+    let mut message = format!("{err:#}")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    const MAX_LEN: usize = 200;
+    if message.len() > MAX_LEN {
+        let mut end = MAX_LEN;
+        while !message.is_char_boundary(end) {
+            end -= 1;
+        }
+        message.truncate(end);
+        message.push_str("...");
+    }
+    format!("{PARSE_ERROR_EVIDENCE_PREFIX} {message}")
 }
 
 fn display_path(root: &Path, path: &Path) -> String {
@@ -259,13 +283,31 @@ fn normalize_path_string(path: &str) -> String {
     path.replace('\\', "/")
 }
 
-fn parse_json_mcp_servers(value: &JsonValue) -> Vec<McpServer> {
-    let Some(map) = find_json_key(value, "mcpServers").and_then(JsonValue::as_object) else {
-        return Vec::new();
-    };
-    map.iter()
-        .map(|(name, server)| json_server(name, server))
-        .collect()
+#[derive(Debug, Default)]
+struct ParsedServers {
+    servers: Vec<McpServer>,
+    warnings: Vec<String>,
+}
+
+fn parse_json_mcp_servers(value: &JsonValue) -> ParsedServers {
+    let mut parsed = ParsedServers::default();
+    match find_json_key(value, "mcpServers") {
+        Some(JsonValue::Object(map)) => {
+            for (name, server) in map {
+                if !server.is_object() {
+                    parsed.warnings.push(format!(
+                        "mcpServers entry {name:?} is not a JSON object; recorded name only"
+                    ));
+                }
+                parsed.servers.push(json_server(name, server));
+            }
+        }
+        Some(JsonValue::Null) | None => {}
+        Some(_) => parsed
+            .warnings
+            .push("mcpServers present but not a JSON object; ignored".to_string()),
+    }
+    parsed
 }
 
 fn find_json_key<'a>(value: &'a JsonValue, key: &str) -> Option<&'a JsonValue> {
@@ -324,34 +366,34 @@ fn json_to_string(value: &JsonValue) -> Option<String> {
     })
 }
 
-fn parse_toml_mcp_servers(value: &TomlValue) -> Vec<McpServer> {
-    let Some(table) = value.get("mcp_servers").and_then(TomlValue::as_table) else {
-        return Vec::new();
-    };
-    table
-        .iter()
-        .map(|(name, server)| toml_server(name, server))
-        .collect()
+fn parse_toml_mcp_servers(value: &TomlValue) -> ParsedServers {
+    let mut parsed = ParsedServers::default();
+    match value.get("mcp_servers") {
+        Some(TomlValue::Table(table)) => {
+            for (name, server) in table {
+                if !server.is_table() {
+                    parsed.warnings.push(format!(
+                        "mcp_servers entry {name:?} is not a TOML table; recorded name only"
+                    ));
+                }
+                parsed.servers.push(toml_server(name, server));
+            }
+        }
+        None => {}
+        Some(_) => parsed
+            .warnings
+            .push("mcp_servers present but not a TOML table; ignored".to_string()),
+    }
+    parsed
 }
 
 fn toml_server(name: &str, value: &TomlValue) -> McpServer {
-    let command = value
-        .get("command")
-        .and_then(TomlValue::as_str)
-        .map(ToOwned::to_owned);
-    let url = value
-        .get("url")
-        .and_then(TomlValue::as_str)
-        .map(ToOwned::to_owned);
+    let command = value.get("command").and_then(toml_to_string);
+    let url = value.get("url").and_then(toml_to_string);
     let args = value
         .get("args")
         .and_then(TomlValue::as_array)
-        .map(|values| {
-            values
-                .iter()
-                .filter_map(|v| v.as_str().map(ToOwned::to_owned))
-                .collect()
-        })
+        .map(|values| values.iter().filter_map(toml_to_string).collect())
         .unwrap_or_default();
     let env = value
         .get("env")
@@ -360,7 +402,7 @@ fn toml_server(name: &str, value: &TomlValue) -> McpServer {
             env.iter()
                 .map(|(name, value)| EnvVar {
                     name: name.clone(),
-                    value_hint: value.as_str().map(redact_env_value),
+                    value_hint: toml_to_string(value).map(redact_env_value),
                 })
                 .collect()
         })
@@ -371,6 +413,16 @@ fn toml_server(name: &str, value: &TomlValue) -> McpServer {
         args,
         env,
         url,
+    }
+}
+
+fn toml_to_string(value: &TomlValue) -> Option<String> {
+    match value {
+        TomlValue::String(text) => Some(text.clone()),
+        TomlValue::Integer(number) => Some(number.to_string()),
+        TomlValue::Float(number) => Some(number.to_string()),
+        TomlValue::Boolean(flag) => Some(flag.to_string()),
+        _ => None,
     }
 }
 
@@ -443,5 +495,163 @@ mod tests {
             normalize_path_string(r"C:\Users\example\AppData\Roaming\Code\User\settings.json"),
             "C:/Users/example/AppData/Roaming/Code/User/settings.json"
         );
+    }
+
+    #[test]
+    fn minimal_fixture_configs_have_no_mcp_servers_and_no_parse_errors() {
+        let root = Path::new("../../tests/fixtures/minimal-home");
+        let items = discover(root);
+        assert_eq!(items.len(), 5);
+        for item in &items {
+            assert!(
+                item.mcp_servers.is_empty(),
+                "unexpected servers in {}",
+                item.config_path
+            );
+            assert!(
+                !item
+                    .evidence
+                    .iter()
+                    .any(|e| e.starts_with(PARSE_ERROR_EVIDENCE_PREFIX)),
+                "unexpected parse error in {}",
+                item.config_path
+            );
+        }
+    }
+
+    #[test]
+    fn multi_fixture_servers_are_sorted_by_name_with_unknown_fields_ignored() {
+        let root = Path::new("../../tests/fixtures/multi-home");
+        let items = discover(root);
+        let claude = items
+            .iter()
+            .find(|i| i.agent == AgentKind::ClaudeCode)
+            .expect("claude fixture");
+        let names: Vec<&str> = claude.mcp_servers.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["fetch", "filesystem", "github"]);
+        assert!(claude.evidence.is_empty());
+
+        let windsurf = items
+            .iter()
+            .find(|i| i.agent == AgentKind::Windsurf)
+            .expect("windsurf fixture");
+        let names: Vec<&str> = windsurf
+            .mcp_servers
+            .iter()
+            .map(|s| s.name.as_str())
+            .collect();
+        assert_eq!(names, ["browser", "repo-context"]);
+    }
+
+    #[test]
+    fn multi_fixture_url_only_server_is_recorded() {
+        let root = Path::new("../../tests/fixtures/multi-home");
+        let items = discover(root);
+        let vscode = items
+            .iter()
+            .find(|i| i.agent == AgentKind::VsCode)
+            .expect("vscode fixture");
+        let server = &vscode.mcp_servers[0];
+        assert_eq!(server.name, "remote-docs");
+        assert_eq!(server.command, None);
+        assert_eq!(server.url.as_deref(), Some("https://example.invalid/mcp"));
+    }
+
+    #[test]
+    fn toml_args_and_env_accept_numbers_and_booleans_like_json() {
+        let root = Path::new("../../tests/fixtures/multi-home");
+        let items = discover(root);
+        let codex = items
+            .iter()
+            .find(|i| i.agent == AgentKind::CodexCli)
+            .expect("codex fixture");
+        let search = codex
+            .mcp_servers
+            .iter()
+            .find(|s| s.name == "search")
+            .expect("search server");
+        assert_eq!(search.args, ["web-search-mcp", "8080", "true"]);
+        let timeout = search
+            .env
+            .iter()
+            .find(|e| e.name == "SEARCH_TIMEOUT")
+            .expect("numeric env value");
+        assert_eq!(timeout.value_hint.as_deref(), Some("<set>"));
+    }
+
+    #[test]
+    fn malformed_fixture_configs_are_inventoried_without_panics() {
+        let root = Path::new("../../tests/fixtures/malformed-home");
+        let items = discover(root);
+        assert_eq!(items.len(), 6);
+
+        let claude = items
+            .iter()
+            .find(|i| i.agent == AgentKind::ClaudeCode)
+            .expect("claude fixture");
+        assert!(claude.mcp_servers.is_empty());
+        assert!(claude.evidence[0].starts_with(PARSE_ERROR_EVIDENCE_PREFIX));
+        assert!(claude.evidence[0].contains("parsing JSON"));
+
+        let codex = items
+            .iter()
+            .find(|i| i.agent == AgentKind::CodexCli)
+            .expect("codex fixture");
+        assert!(codex.mcp_servers.is_empty());
+        assert!(codex.evidence[0].starts_with(PARSE_ERROR_EVIDENCE_PREFIX));
+        assert!(codex.evidence[0].contains("parsing TOML"));
+        assert!(
+            !codex.evidence[0].contains('\n'),
+            "parse error evidence must be single-line"
+        );
+    }
+
+    #[test]
+    fn malformed_fixture_wrong_shapes_degrade_gracefully() {
+        let root = Path::new("../../tests/fixtures/malformed-home");
+        let items = discover(root);
+
+        let cursor = items
+            .iter()
+            .find(|i| i.agent == AgentKind::Cursor)
+            .expect("cursor fixture");
+        assert!(cursor.mcp_servers.is_empty());
+        assert!(cursor
+            .evidence
+            .iter()
+            .any(|e| e.contains("not a JSON object")));
+
+        let vscode = items
+            .iter()
+            .find(|i| i.agent == AgentKind::VsCode)
+            .expect("vscode fixture");
+        let names: Vec<&str> = vscode.mcp_servers.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["bad-args", "broken"]);
+        let bad_args = &vscode.mcp_servers[0];
+        assert!(bad_args.args.is_empty(), "non-array args are ignored");
+        assert!(bad_args.env.is_empty(), "non-object env is ignored");
+
+        let gemini = items
+            .iter()
+            .find(|i| i.agent == AgentKind::GeminiCli)
+            .expect("gemini fixture");
+        assert!(gemini.mcp_servers.is_empty());
+        assert!(
+            gemini.evidence.is_empty(),
+            "null mcpServers is not a warning"
+        );
+
+        let windsurf = items
+            .iter()
+            .find(|i| i.agent == AgentKind::Windsurf)
+            .expect("windsurf fixture");
+        let server = &windsurf.mcp_servers[0];
+        assert_eq!(server.args, ["1", "true", "script.js"]);
+        let null_env = server
+            .env
+            .iter()
+            .find(|e| e.name == "API_TOKEN")
+            .expect("null env entry");
+        assert_eq!(null_env.value_hint, None);
     }
 }

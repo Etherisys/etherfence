@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "odd-types": {
+      "command": "node",
+      "args": [1, true, "script.js"],
+      "env": {
+        "PORT": 8080,
+        "DEBUG": true,
+        "API_TOKEN": null
+      }
+    }
+  }
+}

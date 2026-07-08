@@ -1,0 +1,2 @@
+[mcp_servers.filesystem
+command = "npx"

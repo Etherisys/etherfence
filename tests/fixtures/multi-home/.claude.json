@@ -1,0 +1,22 @@
+{
+  "theme": "dark",
+  "numStartups": 42,
+  "mcpServers": {
+    "github": {
+      "command": "docker",
+      "args": ["run", "-i", "--rm", "mcp/github"],
+      "env": {"GITHUB_PERSONAL_ACCESS_TOKEN": "fixture-value"},
+      "disabled": false
+    },
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/home/user/projects"]
+    },
+    "fetch": {
+      "command": "uvx",
+      "args": ["mcp-server-fetch"],
+      "unknownExtraField": {"nested": true}
+    }
+  },
+  "unknownTopLevel": ["a", "b"]
+}

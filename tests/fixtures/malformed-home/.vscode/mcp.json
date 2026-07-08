@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "broken": "just-a-string",
+    "bad-args": {
+      "command": "node",
+      "args": "not-an-array",
+      "env": ["not-an-object"]
+    }
+  }
+}

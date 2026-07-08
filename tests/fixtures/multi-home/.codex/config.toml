@@ -1,0 +1,19 @@
+# Fixture: Codex CLI config with multiple MCP servers and unknown extra keys.
+model = "example-model"
+unknown_top_level = "ignored"
+
+[mcp_servers.filesystem]
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-filesystem", "C:/Users/example/Projects/demo"]
+unknown_key = true
+
+[mcp_servers.filesystem.env]
+FILESYSTEM_TOKEN = "fixture-value"
+
+[mcp_servers.search]
+command = "uvx"
+args = ["web-search-mcp", 8080, true]
+
+[mcp_servers.search.env]
+SEARCH_API_KEY = "fixture-value"
+SEARCH_TIMEOUT = 30

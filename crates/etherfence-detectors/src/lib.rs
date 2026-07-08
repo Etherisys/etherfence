@@ -1,5 +1,6 @@
 use etherfence_core::{
     AgentKind, Finding, FindingKind, InventoryItem, McpServer, PolicyStatus, Severity,
+    PARSE_ERROR_EVIDENCE_PREFIX,
 };
 
 pub fn analyze(items: &[InventoryItem]) -> Vec<Finding> {
@@ -7,6 +8,10 @@ pub fn analyze(items: &[InventoryItem]) -> Vec<Finding> {
     for item in items {
         if item.agent == AgentKind::Tirith {
             findings.push(tirith_finding(item));
+            continue;
+        }
+        if let Some(evidence) = parse_error_evidence(item) {
+            findings.push(config_parse_error(item, evidence));
             continue;
         }
         for server in &item.mcp_servers {
@@ -45,6 +50,33 @@ struct FindingTemplate {
     rationale: &'static str,
     impact: &'static str,
     recommendation: &'static str,
+}
+
+fn parse_error_evidence(item: &InventoryItem) -> Option<Vec<String>> {
+    let matches: Vec<String> = item
+        .evidence
+        .iter()
+        .filter(|value| value.starts_with(PARSE_ERROR_EVIDENCE_PREFIX))
+        .cloned()
+        .collect();
+    (!matches.is_empty()).then_some(matches)
+}
+
+fn config_parse_error(item: &InventoryItem, evidence: Vec<String>) -> Finding {
+    finding(
+        item,
+        "config",
+        evidence,
+        FindingTemplate {
+            id: "EF-CFG-001",
+            title: "Agent config file could not be parsed",
+            severity: Severity::Low,
+            kind: FindingKind::ConfigParseError,
+            rationale: "A discovered agent configuration file exists but could not be parsed, so its MCP posture could not be inventoried.",
+            impact: "MCP servers or risky settings inside an unparseable config file are invisible to posture scanning until the file is fixed.",
+            recommendation: "Repair or regenerate the configuration file, then re-run the scan so its contents can be inventoried.",
+        },
+    )
 }
 
 fn mcp_configured(item: &InventoryItem, server: &McpServer) -> Finding {
@@ -381,5 +413,25 @@ mod tests {
         let findings = analyze(&[config, binary]);
         assert!(findings.iter().any(|f| f.id == "EF-TIRITH-002"));
         assert!(findings.iter().any(|f| f.id == "EF-TIRITH-001"));
+    }
+
+    #[test]
+    fn unparseable_config_yields_single_parse_error_finding() {
+        let item = InventoryItem {
+            agent: AgentKind::CodexCli,
+            config_path: "~/.codex/config.toml".to_string(),
+            mcp_servers: Vec::new(),
+            evidence: vec![format!(
+                "{PARSE_ERROR_EVIDENCE_PREFIX} parsing TOML: invalid table header"
+            )],
+        };
+        let findings = analyze(&[item]);
+        assert_eq!(findings.len(), 1);
+        let finding = &findings[0];
+        assert_eq!(finding.id, "EF-CFG-001");
+        assert_eq!(finding.kind, FindingKind::ConfigParseError);
+        assert_eq!(finding.severity, Severity::Low);
+        assert_eq!(finding.target, "config");
+        assert!(finding.evidence[0].starts_with(PARSE_ERROR_EVIDENCE_PREFIX));
     }
 }
