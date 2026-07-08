@@ -1,11 +1,15 @@
 use serde_json::Value;
 use std::process::Command;
 
+fn fixture_root(name: &str) -> String {
+    format!("{}/../../tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"))
+}
+
 #[test]
 fn scan_fixture_json_has_stable_top_level_schema() {
-    let fixture_root = format!("{}/../../tests/fixtures/home", env!("CARGO_MANIFEST_DIR"));
+    let root = fixture_root("home");
     let output = Command::new(env!("CARGO_BIN_EXE_etherfence"))
-        .args(["scan", "--root", &fixture_root, "--format", "json"])
+        .args(["scan", "--root", &root, "--format", "json"])
         .output()
         .expect("run etherfence scan");
 
@@ -60,9 +64,9 @@ fn scan_fixture_json_has_stable_top_level_schema() {
 
 #[test]
 fn scan_fixture_human_groups_by_severity_and_guidance() {
-    let fixture_root = format!("{}/../../tests/fixtures/home", env!("CARGO_MANIFEST_DIR"));
+    let root = fixture_root("home");
     let output = Command::new(env!("CARGO_BIN_EXE_etherfence"))
-        .args(["scan", "--root", &fixture_root])
+        .args(["scan", "--root", &root])
         .output()
         .expect("run etherfence scan");
 
@@ -78,4 +82,75 @@ fn scan_fixture_human_groups_by_severity_and_guidance() {
     assert!(stdout.contains("Rationale:"));
     assert!(stdout.contains("Recommendation:"));
     assert!(stdout.contains("posture risks/hints, not confirmed exploitability"));
+}
+
+#[test]
+fn severity_threshold_high_displays_only_high_findings() {
+    let root = fixture_root("home");
+    let output = Command::new(env!("CARGO_BIN_EXE_etherfence"))
+        .args(["scan", "--root", &root, "--severity-threshold", "high"])
+        .output()
+        .expect("run etherfence scan");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("HIGH"));
+    assert!(stdout.contains("EF-MCP-001"));
+    assert!(!stdout.contains("\nMEDIUM\n"));
+    assert!(!stdout.contains("\nLOW\n"));
+    assert!(!stdout.contains("\nINFO\n"));
+    assert!(stdout
+        .contains("Summary: 7 inventory item(s), 3 finding(s): high=3, medium=0, low=0, info=0"));
+}
+
+#[test]
+fn fail_on_high_returns_non_zero_when_high_findings_exist() {
+    let root = fixture_root("home");
+    let output = Command::new(env!("CARGO_BIN_EXE_etherfence"))
+        .args(["scan", "--root", &root, "--fail-on", "high"])
+        .output()
+        .expect("run etherfence scan");
+
+    assert_eq!(output.status.code(), Some(2));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("EF-MCP-001"));
+}
+
+#[test]
+fn fail_on_high_returns_zero_when_no_high_findings_exist() {
+    let root = fixture_root("safe-home");
+    let output = Command::new(env!("CARGO_BIN_EXE_etherfence"))
+        .args(["scan", "--root", &root, "--fail-on", "high"])
+        .output()
+        .expect("run etherfence scan");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("high=0"));
+}
+
+#[test]
+fn markdown_output_has_review_headings_and_guidance() {
+    let root = fixture_root("home");
+    let output = Command::new(env!("CARGO_BIN_EXE_etherfence"))
+        .args(["scan", "--root", &root, "--format", "markdown"])
+        .output()
+        .expect("run etherfence scan");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("# EtherFence Scan Report"));
+    assert!(stdout.contains("## Summary"));
+    assert!(stdout.contains("| Inventory items | Findings | High | Medium | Low | Info |"));
+    assert!(stdout.contains("## Inventory"));
+    assert!(stdout.contains("## Findings"));
+    assert!(stdout.contains("### HIGH"));
+    assert!(stdout.contains("#### EF-MCP-001 - Broad filesystem access hint"));
+    assert!(stdout.contains("- Rationale:"));
+    assert!(stdout.contains("- Impact:"));
+    assert!(stdout.contains("- Recommendation:"));
 }

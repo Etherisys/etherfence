@@ -1,0 +1,10 @@
+{
+  "tools": {
+    "mcpServers": {
+      "notes": {
+        "command": "node",
+        "args": ["notes-mcp"]
+      }
+    }
+  }
+}

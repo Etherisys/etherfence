@@ -16,6 +16,14 @@
 - Human report grouped by severity with concise remediation guidance
 - Snapshot-like CLI assertions for JSON schema stability
 
+## v0.1.2 - CI posture gates and exports
+
+- `--severity-threshold` for concise review output
+- `--fail-on` for CI posture gates without runtime enforcement
+- Markdown report output for security review notes and PR artifacts
+- JSON schema documentation for `ef-scan-report/v0.1.1`
+- CLI tests for gate behavior and export formats
+
 ## v0.2 ideas
 
 - Expand tested config schemas and platform paths
