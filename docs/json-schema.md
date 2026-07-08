@@ -6,7 +6,7 @@ Status: pre-alpha. This document describes the current scan report and baseline 
 
 Current report schema: `ef-scan-report/v0.1.1`
 
-EtherFence v0.1.4 keeps the v0.1.1 report shape and adds optional scan-only policy metadata plus finding-level `policy_status` and `policy_id` fields. These additions are backward-compatible for consumers that ignore unknown fields.
+EtherFence v0.1.5 keeps the v0.1.1 report shape and adds explicit policy schema metadata in scan output when `--policy` is used. These additions are backward-compatible for consumers that ignore unknown fields.
 
 CLI filtering with `--severity-threshold` changes which findings are included in the emitted report and recomputes `summary` for the displayed findings, but it does not change field names or object layout. Policy findings are ordinary findings for filtering, `--fail-on`, baseline comparison, and `--fail-on-new`.
 
@@ -46,21 +46,36 @@ CLI filtering with `--severity-threshold` changes which findings are included in
 | `policy_id` | string/null | Short machine policy check identifier for policy-generated findings. Omitted for non-policy findings. |
 | `evidence` | array | Supporting strings from configuration or policy evaluation. |
 
-## Policy metadata
+## Policy file schema metadata
+
+Policy files use top-level TOML metadata:
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `schema_version` | string | Required. Must currently be `ef-policy/v0.1`; unsupported versions fail before scanning completes. |
+| `name` | string | Required stable policy name. |
+| `description` | string | Optional human-readable policy intent. |
+| `require_tirith` | boolean | Optional; when true, emits `EF-POL-005` if Tirith is not detected. |
+
+See `docs/policy.md` for complete policy file documentation.
+
+## Policy metadata in scan output
 
 When `--policy <file>` is used, the report includes:
 
 | Field | Type | Description |
 | --- | --- | --- |
 | `policy_path` | string | Policy file path used for evaluation. |
-| `policy_name` | string | Policy display name from `[policy].name`. |
+| `policy_schema_version` | string | Policy file schema version, currently `ef-policy/v0.1`. |
+| `policy_name` | string | Policy display name from top-level `name`. |
+| `policy_description` | string | Policy description from top-level `description`; omitted when empty. |
 | `require_tirith` | boolean | Whether the policy required Tirith detection. |
 | `checks_total` | integer | Number of policy checks evaluated. |
 | `pass` | integer | Number of policy checks that passed. |
 | `violation` | integer | Number of policy-generated violation findings. |
 | `not_applicable` | integer | Number of checks skipped as not applicable. |
 
-Policy-generated IDs in v0.1.4:
+Policy-generated IDs in v0.1.5:
 
 | ID | Meaning |
 | --- | --- |
@@ -68,7 +83,7 @@ Policy-generated IDs in v0.1.4:
 | `EF-POL-002` | Disallowed filesystem path for a filesystem-capable MCP server. |
 | `EF-POL-003` | Environment variable name not allowed by configured name patterns. |
 | `EF-POL-004` | Secret-like environment variable name exposed while `deny_secret_like_names = true`. |
-| `EF-POL-005` | Tirith not detected while `[policy].require_tirith = true`. |
+| `EF-POL-005` | Tirith not detected while `require_tirith = true`. |
 
 ## Fingerprint stability
 

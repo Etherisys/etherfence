@@ -9,22 +9,22 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 
+pub const SUPPORTED_POLICY_SCHEMA_VERSION: &str = "ef-policy/v0.1";
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct PolicyFile {
-    pub policy: PolicyHeader,
+    pub schema_version: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub require_tirith: bool,
     #[serde(default)]
     pub agents: HashMap<String, AgentPolicy>,
     #[serde(default)]
     pub filesystem: FilesystemPolicy,
     #[serde(default)]
     pub environment: EnvironmentPolicy,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct PolicyHeader {
-    pub name: String,
-    #[serde(default)]
-    pub require_tirith: bool,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -51,7 +51,9 @@ pub struct EnvironmentPolicy {
 
 #[derive(Debug, Clone)]
 pub struct PolicyEvaluation {
+    pub policy_schema_version: String,
     pub policy_name: String,
+    pub policy_description: String,
     pub require_tirith: bool,
     pub findings: Vec<Finding>,
     pub checks_total: usize,
@@ -68,7 +70,24 @@ struct CompiledPolicy {
 pub fn load_policy(path: &Path) -> Result<PolicyFile> {
     let content = fs::read_to_string(path)
         .with_context(|| format!("reading policy file {}", path.display()))?;
-    toml::from_str(&content).with_context(|| format!("parsing policy file {}", path.display()))
+    parse_policy(&content).with_context(|| format!("parsing policy file {}", path.display()))
+}
+
+pub fn parse_policy(content: &str) -> Result<PolicyFile> {
+    let policy: PolicyFile = toml::from_str(content)?;
+    validate_policy_schema(&policy)?;
+    Ok(policy)
+}
+
+fn validate_policy_schema(policy: &PolicyFile) -> Result<()> {
+    if policy.schema_version != SUPPORTED_POLICY_SCHEMA_VERSION {
+        anyhow::bail!(
+            "unsupported policy schema_version {:?}; supported schema_version is {:?}",
+            policy.schema_version,
+            SUPPORTED_POLICY_SCHEMA_VERSION
+        );
+    }
+    Ok(())
 }
 
 pub fn evaluate_policy(
@@ -148,12 +167,12 @@ pub fn evaluate_policy(
         }
     }
 
-    if compiled.file.policy.require_tirith {
+    if compiled.file.require_tirith {
         checks_total += 1;
         if inventory.iter().any(|item| item.agent == AgentKind::Tirith) {
             pass += 1;
         } else {
-            findings.push(tirith_required_finding(&compiled.file.policy.name));
+            findings.push(tirith_required_finding(&compiled.file.name));
         }
     }
 
@@ -166,8 +185,10 @@ pub fn evaluate_policy(
 
     let violation = findings.len();
     Ok(PolicyEvaluation {
-        policy_name: compiled.file.policy.name,
-        require_tirith: compiled.file.policy.require_tirith,
+        policy_schema_version: compiled.file.schema_version,
+        policy_name: compiled.file.name,
+        policy_description: compiled.file.description,
+        require_tirith: compiled.file.require_tirith,
         findings,
         checks_total,
         pass,
@@ -461,10 +482,11 @@ mod tests {
     use etherfence_core::{EnvVar, McpServer};
 
     fn strict_policy() -> PolicyFile {
-        toml::from_str(
+        parse_policy(
             r#"
-[policy]
+schema_version = "ef-policy/v0.1"
 name = "strict-local-ai-agent-policy"
+description = "Strict local AI agent policy for policy evaluator tests."
 require_tirith = true
 
 [agents."Claude Code"]
@@ -518,12 +540,27 @@ deny_secret_like_names = true
     #[test]
     fn parses_policy_toml() {
         let policy = strict_policy();
-        assert_eq!(policy.policy.name, "strict-local-ai-agent-policy");
-        assert!(policy.policy.require_tirith);
+        assert_eq!(policy.name, "strict-local-ai-agent-policy");
+        assert_eq!(policy.schema_version, SUPPORTED_POLICY_SCHEMA_VERSION);
+        assert!(policy.require_tirith);
         assert_eq!(
             policy.agents["Claude Code"].allowed_mcp_servers,
             vec!["filesystem", "github"]
         );
+    }
+
+    #[test]
+    fn rejects_unsupported_policy_schema_version() {
+        let err = parse_policy(
+            r#"
+schema_version = "ef-policy/v9.9"
+name = "future-policy"
+"#,
+        )
+        .expect_err("unsupported schema should fail");
+        assert!(err
+            .to_string()
+            .contains("unsupported policy schema_version"));
     }
 
     #[test]

@@ -1,0 +1,30 @@
+schema_version = "ef-policy/v0.1"
+name = "ci-runner"
+description = "Strict scan-only posture policy for CI runners and ephemeral automation hosts. Tirith is optional because many CI runners do not provide interactive terminal controls."
+require_tirith = false
+
+[agents."Claude Code"]
+allowed_mcp_servers = ["github"]
+
+[agents."Cursor"]
+allowed_mcp_servers = ["github"]
+
+[agents."VS Code"]
+allowed_mcp_servers = ["github"]
+
+[agents."Windsurf"]
+allowed_mcp_servers = ["github"]
+
+[agents."Gemini CLI"]
+allowed_mcp_servers = ["github"]
+
+[agents."Codex CLI"]
+allowed_mcp_servers = ["github"]
+
+[filesystem]
+allowed_path_prefixes = ["/path/to/project", "/path/to/project/workspace"]
+denied_paths = ["/", "/home/user", "/Users/example"]
+
+[environment]
+allowed_name_patterns = ["^GITHUB_", "^CI$", "^NODE_ENV$", "^RUST_", "^CARGO_"]
+deny_secret_like_names = true

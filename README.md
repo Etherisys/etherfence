@@ -4,9 +4,9 @@ EtherFence is an open-source **AI Agent Security Posture & Runtime Control** pro
 
 One-line idea: **Tirith protects terminal commands; EtherFence governs agent access.**
 
-Status: **pre-alpha**. The current v0.1.4 foundation is scan-only posture discovery with remediation guidance, CI posture gates, baseline/diff support, and TOML policy profile evaluation. It is not production-ready and does not enforce policy at runtime.
+Status: **pre-alpha**. The current v0.1.5 foundation is scan-only posture discovery with remediation guidance, CI posture gates, baseline/diff support, versioned TOML policy profiles, and built-in example policy profiles. It is not production-ready and does not enforce policy at runtime.
 
-## What v0.1.4 does
+## What v0.1.5 does
 
 `etherfence scan` conservatively discovers local AI agent and MCP configuration files and reports posture risks/hints with rationale, impact, recommendations, fingerprints, optional baseline status, and optional policy status:
 
@@ -17,7 +17,7 @@ Status: **pre-alpha**. The current v0.1.4 foundation is scan-only posture discov
 - MCP environment variables
 - secret-looking environment variable names
 - Tirith binary/config/lockfile presence when detectable
-- scan-only policy violations from a TOML policy profile
+- scan-only policy violations from a versioned TOML policy profile
 
 Initial inventory targets:
 
@@ -35,18 +35,16 @@ The parser intentionally uses conservative path discovery and fixture-backed con
 
 Policy profile mode is scan-only. `--policy <file>` evaluates scan results against expected posture and emits policy-generated findings. It does not block agents, proxy MCP traffic, intercept commands, install shell hooks, run a daemon, or intercept network traffic.
 
-Example policy: `examples/policies/strict.toml`.
+Policy files use schema `ef-policy/v0.1`:
 
 ```toml
-[policy]
-name = "strict-local-ai-agent-policy"
-require_tirith = true
+schema_version = "ef-policy/v0.1"
+name = "developer-laptop"
+description = "Balanced scan-only posture policy for local AI coding agents on developer workstations."
+require_tirith = false
 
 [agents."Claude Code"]
 allowed_mcp_servers = ["filesystem", "github"]
-
-[agents."Cursor"]
-allowed_mcp_servers = ["github"]
 
 [filesystem]
 allowed_path_prefixes = ["/path/to/project"]
@@ -64,6 +62,22 @@ Policy-generated finding IDs:
 - `EF-POL-003` disallowed environment variable exposure
 - `EF-POL-004` secret-like environment variable exposure
 - `EF-POL-005` Tirith not detected when required
+
+Built-in/example profiles:
+
+- `examples/policies/developer-laptop.toml`
+- `examples/policies/ci-runner.toml`
+- `examples/policies/research-workstation.toml`
+- `examples/policies/strict.toml`
+
+Inspect built-in profile metadata/content:
+
+```sh
+cargo run -p etherfence-cli -- policy list
+cargo run -p etherfence-cli -- policy show developer-laptop
+```
+
+See `docs/policy.md` for the full policy schema and profile intent.
 
 ## CLI examples
 
@@ -97,17 +111,19 @@ Fail CI when high-severity posture hints are present:
 cargo run -p etherfence-cli -- scan --format json --fail-on high
 ```
 
-Scan with a policy profile:
+Scan with each built-in policy profile:
 
 ```sh
-cargo run -p etherfence-cli -- scan --policy examples/policies/strict.toml
+cargo run -p etherfence-cli -- scan --policy examples/policies/developer-laptop.toml
+cargo run -p etherfence-cli -- scan --policy examples/policies/ci-runner.toml
+cargo run -p etherfence-cli -- scan --policy examples/policies/research-workstation.toml
 ```
 
-Fail CI on high-severity policy violations and posture hints:
+Fail CI on high-severity policy violations and posture hints using the CI runner profile:
 
 ```sh
 cargo run -p etherfence-cli -- scan \
-  --policy examples/policies/strict.toml \
+  --policy examples/policies/ci-runner.toml \
   --fail-on high \
   --format json
 ```
@@ -137,7 +153,7 @@ Combine baseline and policy so policy findings participate in `--fail-on-new`:
 
 ```sh
 cargo run -p etherfence-cli -- scan \
-  --policy examples/policies/strict.toml \
+  --policy examples/policies/ci-runner.toml \
   --baseline etherfence-baseline.json \
   --fail-on-new high \
   --format json
@@ -148,8 +164,8 @@ For fixture scans during development:
 ```sh
 cargo run -p etherfence-cli -- scan --root tests/fixtures/home
 cargo run -p etherfence-cli -- scan --root tests/fixtures/home --format json
-cargo run -p etherfence-cli -- scan --root tests/fixtures/home --policy examples/policies/strict.toml
-cargo run -p etherfence-cli -- scan --root tests/fixtures/home --format markdown --policy examples/policies/strict.toml
+cargo run -p etherfence-cli -- scan --root tests/fixtures/home --policy examples/policies/developer-laptop.toml
+cargo run -p etherfence-cli -- scan --root tests/fixtures/home --format markdown --policy examples/policies/ci-runner.toml
 ```
 
 ## Sample policy output
@@ -160,7 +176,7 @@ EtherFence scan report
 Schema: ef-scan-report/v0.1.1
 Status: pre-alpha-scan-only
 Summary: 7 inventory item(s), 24 finding(s): high=12, medium=8, low=4, info=0
-Policy: strict-local-ai-agent-policy (examples/policies/strict.toml) checks=17, pass=6, violations=11, not_applicable=0, require_tirith=true
+Policy: ci-runner (examples/policies/ci-runner.toml, schema=ef-policy/v0.1) checks=17, pass=6, violations=11, not_applicable=0, require_tirith=false
 
 Findings by severity:
 

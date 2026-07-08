@@ -254,7 +254,10 @@ pub struct BaselineComparison {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PolicyMetadata {
     pub policy_path: String,
+    pub policy_schema_version: String,
     pub policy_name: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub policy_description: String,
     pub require_tirith: bool,
     pub checks_total: usize,
     pub pass: usize,

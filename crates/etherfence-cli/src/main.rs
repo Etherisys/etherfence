@@ -48,6 +48,19 @@ enum Command {
         #[arg(long, hide = true)]
         root: Option<PathBuf>,
     },
+    /// Inspect built-in scan-only policy profile examples.
+    Policy {
+        #[command(subcommand)]
+        command: PolicyCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum PolicyCommand {
+    /// List built-in policy profiles.
+    List,
+    /// Show the TOML for a built-in policy profile.
+    Show { profile: String },
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -76,6 +89,30 @@ impl From<CliSeverity> for Severity {
     }
 }
 
+struct BuiltInPolicy {
+    name: &'static str,
+    description: &'static str,
+    content: &'static str,
+}
+
+const BUILT_IN_POLICIES: &[BuiltInPolicy] = &[
+    BuiltInPolicy {
+        name: "developer-laptop",
+        description: "Balanced scan-only posture policy for local AI coding agents on developer workstations.",
+        content: include_str!("../../../examples/policies/developer-laptop.toml"),
+    },
+    BuiltInPolicy {
+        name: "ci-runner",
+        description: "Stricter scan-only posture policy for CI runners and ephemeral automation hosts.",
+        content: include_str!("../../../examples/policies/ci-runner.toml"),
+    },
+    BuiltInPolicy {
+        name: "research-workstation",
+        description: "Research-friendly scan-only posture policy allowing browser/search MCP use while still denying broad filesystem and secret exposure.",
+        content: include_str!("../../../examples/policies/research-workstation.toml"),
+    },
+];
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
@@ -98,6 +135,26 @@ fn main() -> Result<()> {
             fail_on_new: fail_on_new.map(Severity::from),
             root,
         }),
+        Command::Policy { command } => run_policy_command(command),
+    }
+}
+
+fn run_policy_command(command: PolicyCommand) -> Result<()> {
+    match command {
+        PolicyCommand::List => {
+            for policy in BUILT_IN_POLICIES {
+                println!("{}\t{}", policy.name, policy.description);
+            }
+            Ok(())
+        }
+        PolicyCommand::Show { profile } => {
+            let policy = BUILT_IN_POLICIES
+                .iter()
+                .find(|policy| policy.name == profile)
+                .with_context(|| format!("unknown built-in policy profile {profile:?}"))?;
+            print!("{}", policy.content);
+            Ok(())
+        }
     }
 }
 
@@ -130,7 +187,9 @@ fn run_scan(options: ScanOptions) -> Result<()> {
         current_findings.extend(evaluation.findings);
         policy_meta = Some(PolicyMetadata {
             policy_path: path.display().to_string(),
+            policy_schema_version: evaluation.policy_schema_version,
             policy_name: evaluation.policy_name,
+            policy_description: evaluation.policy_description,
             require_tirith: evaluation.require_tirith,
             checks_total: evaluation.checks_total,
             pass: evaluation.pass,

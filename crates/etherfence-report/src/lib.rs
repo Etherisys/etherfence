@@ -54,6 +54,13 @@ pub fn to_markdown(report: &ScanReport) -> String {
     if let Some(policy) = &report.policy {
         out.push_str("## Policy Summary\n\n");
         out.push_str(&format!("- Policy: `{}`\n", policy.policy_name));
+        out.push_str(&format!(
+            "- Policy schema: `{}`\n",
+            policy.policy_schema_version
+        ));
+        if !policy.policy_description.is_empty() {
+            out.push_str(&format!("- Description: {}\n", policy.policy_description));
+        }
         out.push_str(&format!("- Policy file: `{}`\n", policy.policy_path));
         out.push_str(&format!("- Require Tirith: `{}`\n", policy.require_tirith));
         out.push_str(&format!("- Checks: {}\n", policy.checks_total));
@@ -142,9 +149,10 @@ fn append_human_baseline(out: &mut String, report: &ScanReport) {
 fn append_human_policy(out: &mut String, report: &ScanReport) {
     if let Some(policy) = &report.policy {
         out.push_str(&format!(
-            "Policy: {} ({}) checks={}, pass={}, violations={}, not_applicable={}, require_tirith={}\n",
+            "Policy: {} ({}, schema={}) checks={}, pass={}, violations={}, not_applicable={}, require_tirith={}\n",
             policy.policy_name,
             policy.policy_path,
+            policy.policy_schema_version,
             policy.checks_total,
             policy.pass,
             policy.violation,

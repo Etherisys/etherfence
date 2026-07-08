@@ -7,11 +7,15 @@ fn fixture_root(name: &str) -> String {
     format!("{}/../../tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"))
 }
 
-fn strict_policy() -> String {
+fn policy_path(profile: &str) -> String {
     format!(
-        "{}/../../examples/policies/strict.toml",
+        "{}/../../examples/policies/{profile}.toml",
         env!("CARGO_MANIFEST_DIR")
     )
+}
+
+fn strict_policy() -> String {
+    policy_path("strict")
 }
 
 fn temp_file(name: &str) -> PathBuf {
@@ -46,7 +50,7 @@ fn scan_fixture_json_has_stable_top_level_schema() {
 
     assert_eq!(json["schema_version"], "ef-scan-report/v0.1.1");
     assert_eq!(json["tool"], "etherfence");
-    assert_eq!(json["version"], "0.1.4");
+    assert_eq!(json["version"], "0.1.5");
     assert_eq!(json["status"], "pre-alpha-scan-only");
     assert!(json.get("scanned_root").is_some());
     assert!(json["inventory"].is_array());
@@ -359,6 +363,11 @@ fn policy_json_includes_metadata_and_policy_findings() {
         "strict-local-ai-agent-policy"
     );
     assert_eq!(json["policy"]["require_tirith"], true);
+    assert_eq!(json["policy"]["policy_schema_version"], "ef-policy/v0.1");
+    assert!(json["policy"]["policy_description"]
+        .as_str()
+        .unwrap()
+        .contains("Strict scan-only"));
     assert!(json["policy"]["violation"].as_u64().unwrap() > 0);
     assert!(json["findings"].as_array().unwrap().iter().any(|finding| {
         finding["id"] == "EF-POL-001"
@@ -452,4 +461,87 @@ fn invalid_policy_file_fails_with_clear_error() {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("parsing policy file"), "stderr: {stderr}");
+}
+
+#[test]
+fn unsupported_policy_schema_fails_with_clear_error() {
+    let root = fixture_root("home");
+    let policy_path = temp_file("unsupported-policy");
+    std::fs::write(
+        &policy_path,
+        "schema_version = \"ef-policy/v9.9\"\nname = \"future\"\n",
+    )
+    .expect("write unsupported policy");
+    let policy_s = policy_path.to_string_lossy().to_string();
+    let output = run(&["scan", "--root", &root, "--policy", &policy_s]);
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("unsupported policy schema_version"),
+        "stderr: {stderr}"
+    );
+}
+
+#[test]
+fn built_in_example_policies_parse_and_scan_fixture() {
+    let root = fixture_root("home");
+    for profile in ["developer-laptop", "ci-runner", "research-workstation"] {
+        let policy = policy_path(profile);
+        let output = run(&[
+            "scan", "--root", &root, "--policy", &policy, "--format", "json",
+        ]);
+        assert!(
+            output.status.success(),
+            "profile={profile} stderr={}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let json: Value = serde_json::from_slice(&output.stdout).expect("valid JSON output");
+        assert_eq!(json["policy"]["policy_schema_version"], "ef-policy/v0.1");
+        assert_eq!(json["policy"]["policy_name"], profile);
+    }
+}
+
+#[test]
+fn ci_runner_policy_has_deterministic_policy_findings_on_risky_fixture() {
+    let root = fixture_root("home");
+    let policy = policy_path("ci-runner");
+    let output = run(&[
+        "scan", "--root", &root, "--policy", &policy, "--format", "json",
+    ]);
+
+    assert!(output.status.success());
+    let json: Value = serde_json::from_slice(&output.stdout).expect("valid JSON output");
+    let ids: Vec<&str> = json["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|finding| finding["id"].as_str())
+        .filter(|id| id.starts_with("EF-POL"))
+        .collect();
+    assert!(ids.contains(&"EF-POL-001"));
+    assert!(ids.contains(&"EF-POL-002"));
+    assert!(ids.contains(&"EF-POL-003"));
+    assert!(ids.contains(&"EF-POL-004"));
+    assert_eq!(json["policy"]["policy_name"], "ci-runner");
+    assert_eq!(
+        json["policy"]["violation"].as_u64().unwrap(),
+        ids.len() as u64
+    );
+}
+
+#[test]
+fn policy_list_and_show_work_for_builtin_profiles() {
+    let list = run(&["policy", "list"]);
+    assert!(list.status.success());
+    let stdout = String::from_utf8_lossy(&list.stdout);
+    assert!(stdout.contains("developer-laptop"));
+    assert!(stdout.contains("ci-runner"));
+    assert!(stdout.contains("research-workstation"));
+
+    let show = run(&["policy", "show", "developer-laptop"]);
+    assert!(show.status.success());
+    let stdout = String::from_utf8_lossy(&show.stdout);
+    assert!(stdout.contains("schema_version = \"ef-policy/v0.1\""));
+    assert!(stdout.contains("name = \"developer-laptop\""));
 }

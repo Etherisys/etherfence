@@ -1,5 +1,6 @@
-[policy]
+schema_version = "ef-policy/v0.1"
 name = "strict-local-ai-agent-policy"
+description = "Strict scan-only policy profile used to demonstrate all policy violation types."
 require_tirith = true
 
 [agents."Claude Code"]

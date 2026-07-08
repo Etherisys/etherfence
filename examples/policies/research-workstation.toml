@@ -1,0 +1,30 @@
+schema_version = "ef-policy/v0.1"
+name = "research-workstation"
+description = "Research-friendly scan-only posture policy for workstations that may use browser and search MCP servers. Shell-capable tools should still be reviewed separately."
+require_tirith = false
+
+[agents."Claude Code"]
+allowed_mcp_servers = ["filesystem", "github", "browser", "search", "web-search", "context7"]
+
+[agents."Cursor"]
+allowed_mcp_servers = ["filesystem", "github", "browser", "search", "web-search"]
+
+[agents."VS Code"]
+allowed_mcp_servers = ["filesystem", "github", "browser", "search", "web-search"]
+
+[agents."Windsurf"]
+allowed_mcp_servers = ["filesystem", "github", "browser", "search", "web-search", "repo-context"]
+
+[agents."Gemini CLI"]
+allowed_mcp_servers = ["filesystem", "github", "browser", "search", "web-search"]
+
+[agents."Codex CLI"]
+allowed_mcp_servers = ["filesystem", "github", "browser", "search", "web-search"]
+
+[filesystem]
+allowed_path_prefixes = ["/path/to/project", "/path/to/project/research", "/path/to/project/workspace"]
+denied_paths = ["/", "/home/user", "/Users/example"]
+
+[environment]
+allowed_name_patterns = ["^GITHUB_", "^NODE_", "^NPM_", "^RUST_", "^CARGO_", "^ZOTERO_", "^OPENALEX_", "^SEMANTIC_SCHOLAR_"]
+deny_secret_like_names = true

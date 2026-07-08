@@ -46,13 +46,23 @@
 - Policy findings participating in severity filtering, `--fail-on`, baseline comparison, and `--fail-on-new`
 - Tests for parser, violation generation, CLI policy output, CI gates, baseline combination, Markdown summary, and JSON metadata
 
+## v0.1.5 - policy schema metadata and built-in profiles
+
+- Versioned policy schema metadata with `schema_version = "ef-policy/v0.1"`, top-level `name`, `description`, and `require_tirith`
+- Clear failure for unsupported policy schema versions
+- Built-in/example policy profiles: `developer-laptop`, `ci-runner`, and `research-workstation`
+- CLI helpers: `etherfence policy list` and `etherfence policy show <profile>`
+- `docs/policy.md` covering policy schema, profile intent, CI gates, and baseline behavior
+- JSON policy metadata fields for policy schema version and description
+- Tests for supported/unsupported schema versions, example profile parsing, CLI scans, deterministic CI-runner findings, and baseline-plus-policy behavior
+
 ## v0.2 ideas
 
 - Expand tested config schemas and platform paths
 - Add baseline fingerprint migration notes if needed
 - Add richer machine-readable policy checks without enforcement
 - Improve documentation for safe enterprise rollout
-- Consider policy schema/versioning once real-world policy examples stabilize
+- Consider policy schema evolution once real-world policy examples stabilize
 
 ## Later, not v0.1
 
