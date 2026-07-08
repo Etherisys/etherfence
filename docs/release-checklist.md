@@ -83,6 +83,46 @@ The workflow uploads:
 - `etherfence-linux-x86_64.tar.gz`
 - `etherfence-windows-x86_64.zip`
 
+## CI artifact smoke test
+
+CI runs only on pushes and pull requests targeting `main`; pushing a tag does
+not trigger an artifact build. Download artifacts from the relevant `main`
+(or release PR) run:
+
+```sh
+gh run list --branch main --workflow ci --limit 5
+gh run download <run-id> --dir dist-ci
+tar -xzf dist-ci/etherfence-linux-x86_64/etherfence-linux-x86_64.tar.gz -C dist-ci
+dist-ci/etherfence-v*-linux-x86_64/etherfence scan --root tests/fixtures/home
+dist-ci/etherfence-v*-linux-x86_64/etherfence scan --root tests/fixtures/windows-home --policy-profile ci-runner --format json
+```
+
+Smoke-test `etherfence-windows-x86_64.zip` on a Windows machine (or document
+that it was validated only by the `windows-latest` CI job).
+
+## Tag and push
+
+After the release PR is merged to `main`, CI is green, and artifacts are
+smoke-tested:
+
+```sh
+git checkout main
+git pull origin main
+git tag -a v0.1.7 -m "EtherFence v0.1.7: scan-only Linux/Windows discovery, path normalization, CI matrix, release packaging"
+git push origin v0.1.7
+```
+
+Then create the GitHub release from the tag and attach the CI-built
+`etherfence-linux-x86_64.tar.gz` and `etherfence-windows-x86_64.zip`:
+
+```sh
+gh release create v0.1.7 \
+  --title "EtherFence v0.1.7" \
+  --notes-file <(sed -n '/^## \[0.1.7\]/,/^## /p' CHANGELOG.md | sed '$d') \
+  dist-ci/etherfence-linux-x86_64/etherfence-linux-x86_64.tar.gz \
+  dist-ci/etherfence-windows-x86_64/etherfence-windows-x86_64.zip
+```
+
 ## Release notes reminders
 
 - Describe Windows support as conservative config discovery, not complete endpoint coverage.

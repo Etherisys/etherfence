@@ -1,3 +1,7 @@
 /target/
 **/*.rs.bk
 .DS_Store
+/dist/
+etherfence-baseline*.json
+etherfence-report*.json
+etherfence-report*.md
