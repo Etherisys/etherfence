@@ -38,6 +38,9 @@ enum Command {
         /// Evaluate scan results against a TOML scan-only policy file.
         #[arg(long)]
         policy: Option<PathBuf>,
+        /// Evaluate scan results against a built-in scan-only policy profile.
+        #[arg(long)]
+        policy_profile: Option<String>,
         /// Write current findings to a JSON baseline file.
         #[arg(long)]
         write_baseline: Option<PathBuf>,
@@ -111,6 +114,11 @@ const BUILT_IN_POLICIES: &[BuiltInPolicy] = &[
         description: "Research-friendly scan-only posture policy allowing browser/search MCP use while still denying broad filesystem and secret exposure.",
         content: include_str!("../../../examples/policies/research-workstation.toml"),
     },
+    BuiltInPolicy {
+        name: "strict",
+        description: "Strict scan-only posture policy for validating narrow local AI-agent posture.",
+        content: include_str!("../../../examples/policies/strict.toml"),
+    },
 ];
 
 fn main() -> Result<()> {
@@ -122,6 +130,7 @@ fn main() -> Result<()> {
             fail_on,
             baseline,
             policy,
+            policy_profile,
             write_baseline,
             fail_on_new,
             root,
@@ -131,6 +140,7 @@ fn main() -> Result<()> {
             fail_on: fail_on.map(Severity::from),
             baseline,
             policy,
+            policy_profile,
             write_baseline,
             fail_on_new: fail_on_new.map(Severity::from),
             root,
@@ -164,6 +174,7 @@ struct ScanOptions {
     fail_on: Option<Severity>,
     baseline: Option<PathBuf>,
     policy: Option<PathBuf>,
+    policy_profile: Option<String>,
     write_baseline: Option<PathBuf>,
     fail_on_new: Option<Severity>,
     root: Option<PathBuf>,
@@ -173,20 +184,35 @@ fn run_scan(options: ScanOptions) -> Result<()> {
     if options.fail_on_new.is_some() && options.baseline.is_none() {
         anyhow::bail!("--fail-on-new requires --baseline");
     }
+    if options.policy.is_some() && options.policy_profile.is_some() {
+        anyhow::bail!("--policy and --policy-profile are mutually exclusive; use --policy <file> for a custom policy file or --policy-profile <name> for a built-in profile");
+    }
 
-    let root = options
-        .root
-        .unwrap_or_else(etherfence_inventory::default_scan_root);
-    let inventory = etherfence_inventory::discover(&root);
+    let (scanned_root, inventory) = if let Some(root) = &options.root {
+        (
+            root.display().to_string(),
+            etherfence_inventory::discover(root),
+        )
+    } else {
+        let roots = etherfence_inventory::default_scan_roots();
+        let scanned_root = roots
+            .iter()
+            .map(|root| root.display().to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        (scanned_root, etherfence_inventory::discover_roots(&roots))
+    };
     let mut current_findings = etherfence_detectors::analyze(&inventory);
     let mut policy_meta = None;
 
-    if let Some(path) = &options.policy {
-        let policy = etherfence_policy::load_policy(path)?;
+    if let Some(policy_source) = load_scan_policy(&options)? {
+        let policy = policy_source.policy;
         let evaluation = etherfence_policy::evaluate_policy(&policy, &inventory)?;
         current_findings.extend(evaluation.findings);
         policy_meta = Some(PolicyMetadata {
-            policy_path: path.display().to_string(),
+            policy_path: policy_source.display_path,
+            policy_source: policy_source.source,
+            policy_profile: policy_source.profile,
             policy_schema_version: evaluation.policy_schema_version,
             policy_name: evaluation.policy_name,
             policy_description: evaluation.policy_description,
@@ -231,7 +257,7 @@ fn run_scan(options: ScanOptions) -> Result<()> {
         tool: "etherfence".to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
         status: "pre-alpha-scan-only".to_string(),
-        scanned_root: root.display().to_string(),
+        scanned_root,
         inventory,
         findings: display_findings,
         summary,
@@ -248,6 +274,48 @@ fn run_scan(options: ScanOptions) -> Result<()> {
         std::process::exit(2);
     }
     Ok(())
+}
+
+struct LoadedScanPolicy {
+    policy: etherfence_policy::PolicyFile,
+    display_path: String,
+    source: String,
+    profile: Option<String>,
+}
+
+fn load_scan_policy(options: &ScanOptions) -> Result<Option<LoadedScanPolicy>> {
+    if let Some(path) = &options.policy {
+        return Ok(Some(LoadedScanPolicy {
+            policy: etherfence_policy::load_policy(path)?,
+            display_path: path.display().to_string(),
+            source: "file".to_string(),
+            profile: None,
+        }));
+    }
+
+    if let Some(profile) = &options.policy_profile {
+        let built_in = find_built_in_policy(profile)?;
+        return Ok(Some(LoadedScanPolicy {
+            policy: etherfence_policy::parse_policy(built_in.content)
+                .with_context(|| format!("parsing built-in policy profile {profile:?}"))?,
+            display_path: format!("builtin:{profile}"),
+            source: "built-in-profile".to_string(),
+            profile: Some(profile.clone()),
+        }));
+    }
+
+    Ok(None)
+}
+
+fn find_built_in_policy(profile: &str) -> Result<&'static BuiltInPolicy> {
+    BUILT_IN_POLICIES
+        .iter()
+        .find(|policy| policy.name == profile)
+        .with_context(|| {
+            format!(
+                "unknown built-in policy profile {profile:?}; run `etherfence policy list` to see available profiles"
+            )
+        })
 }
 
 struct BaselineApplyResult {

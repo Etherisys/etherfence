@@ -56,6 +56,28 @@
 - JSON policy metadata fields for policy schema version and description
 - Tests for supported/unsupported schema versions, example profile parsing, CLI scans, deterministic CI-runner findings, and baseline-plus-policy behavior
 
+## v0.1.6 - direct built-in policy profile selection
+
+- `etherfence scan --policy-profile <profile>` for direct built-in profile scans without passing a file path
+- Supported built-in scan profiles: `developer-laptop`, `ci-runner`, `research-workstation`, and `strict`
+- Clear mutual-exclusion failure when `--policy <file>` and `--policy-profile <name>` are both provided
+- Clear unknown-profile failure that points users to `etherfence policy list`
+- JSON policy metadata identifies built-in profile source when `--policy-profile` is used
+- Existing human and Markdown policy summaries continue to render for file and built-in profile scans
+- Policy findings still participate in `--fail-on`, `--baseline`, and `--fail-on-new` without runtime enforcement
+
+
+## v0.1.7 - Windows/Linux discovery and release packaging
+
+- Conservative OS-aware discovery helpers for Linux `HOME` and Windows `USERPROFILE`, `APPDATA`, and `LOCALAPPDATA` roots
+- Windows-style config path candidates for VS Code, Cursor, Windsurf, Gemini CLI, Claude-style settings, and Codex CLI
+- Stable path separator normalization for evidence and fingerprints across Unix and Windows-style paths
+- Windows fixture coverage under `tests/fixtures/windows-home/` plus explicit Linux fixture coverage
+- CLI tests for Windows fixture scans and built-in policy profile scans against Windows-style fixtures
+- GitHub Actions matrix for `ubuntu-latest` and `windows-latest` running fmt, clippy, test, and build
+- Release artifact packaging: Linux `tar.gz` containing `etherfence`, Windows `zip` containing `etherfence.exe`
+- Documentation for Linux usage, Windows usage, release checks, and v0.1.7 smoke tests
+
 ## v0.2 ideas
 
 - Expand tested config schemas and platform paths

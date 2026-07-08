@@ -206,7 +206,10 @@ fn finding(
         baseline_status: etherfence_core::BaselineStatus::NotApplicable,
         policy_status: PolicyStatus::NotApplicable,
         policy_id: None,
-        evidence,
+        evidence: evidence
+            .into_iter()
+            .map(|value| value.replace('\\', "/"))
+            .collect(),
     };
     finding.refresh_fingerprint();
     finding
@@ -233,6 +236,8 @@ fn broad_filesystem_evidence(server: &McpServer) -> Option<Vec<String>> {
                 || lower == "/home"
                 || lower == "/home/user"
                 || lower.contains("/home/user")
+                || lower == "c:/users/example"
+                || lower.contains("c:/users/example")
                 || lower.contains("--allow-root")
                 || lower.contains("filesystem")
                 || lower.contains("file-system")
@@ -294,7 +299,7 @@ fn values(server: &McpServer) -> Vec<String> {
     if let Some(command) = &server.command {
         values.push(command.clone());
     }
-    values.extend(server.args.clone());
+    values.extend(server.args.iter().map(|value| value.replace('\\', "/")));
     if let Some(url) = &server.url {
         values.push(url.clone());
     }

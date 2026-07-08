@@ -18,6 +18,10 @@ fn strict_policy() -> String {
     policy_path("strict")
 }
 
+fn ci_runner_policy() -> String {
+    policy_path("ci-runner")
+}
+
 fn temp_file(name: &str) -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -50,7 +54,7 @@ fn scan_fixture_json_has_stable_top_level_schema() {
 
     assert_eq!(json["schema_version"], "ef-scan-report/v0.1.1");
     assert_eq!(json["tool"], "etherfence");
-    assert_eq!(json["version"], "0.1.5");
+    assert_eq!(json["version"], "0.1.7");
     assert_eq!(json["status"], "pre-alpha-scan-only");
     assert!(json.get("scanned_root").is_some());
     assert!(json["inventory"].is_array());
@@ -92,6 +96,36 @@ fn scan_fixture_json_has_stable_top_level_schema() {
     assert!(ids.contains(&"EF-MCP-004"));
     assert!(ids.contains(&"EF-SEC-001"));
     assert!(ids.contains(&"EF-TIRITH-002"));
+}
+
+#[test]
+fn scan_windows_fixture_json_discovers_windows_style_configs() {
+    let root = fixture_root("windows-home");
+    let output = run(&["scan", "--root", &root, "--format", "json"]);
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: Value = serde_json::from_slice(&output.stdout).expect("valid JSON output");
+    assert_eq!(json["summary"]["inventory_items"], 6);
+    assert!(json["inventory"].as_array().unwrap().iter().any(|item| {
+        item["agent"] == "vs-code"
+            && item["config_path"] == "~/AppData/Roaming/Code/User/settings.json"
+    }));
+    assert!(json["findings"].as_array().unwrap().iter().any(|finding| {
+        finding["evidence"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|evidence| {
+                evidence
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains("C:/Users/example")
+            })
+    }));
 }
 
 #[test]
@@ -363,6 +397,8 @@ fn policy_json_includes_metadata_and_policy_findings() {
         "strict-local-ai-agent-policy"
     );
     assert_eq!(json["policy"]["require_tirith"], true);
+    assert_eq!(json["policy"]["policy_source"], "file");
+    assert!(json["policy"].get("policy_profile").is_none());
     assert_eq!(json["policy"]["policy_schema_version"], "ef-policy/v0.1");
     assert!(json["policy"]["policy_description"]
         .as_str()
@@ -486,7 +522,12 @@ fn unsupported_policy_schema_fails_with_clear_error() {
 #[test]
 fn built_in_example_policies_parse_and_scan_fixture() {
     let root = fixture_root("home");
-    for profile in ["developer-laptop", "ci-runner", "research-workstation"] {
+    for profile in [
+        "developer-laptop",
+        "ci-runner",
+        "research-workstation",
+        "strict",
+    ] {
         let policy = policy_path(profile);
         let output = run(&[
             "scan", "--root", &root, "--policy", &policy, "--format", "json",
@@ -498,8 +539,191 @@ fn built_in_example_policies_parse_and_scan_fixture() {
         );
         let json: Value = serde_json::from_slice(&output.stdout).expect("valid JSON output");
         assert_eq!(json["policy"]["policy_schema_version"], "ef-policy/v0.1");
-        assert_eq!(json["policy"]["policy_name"], profile);
+        let expected_name = if profile == "strict" {
+            "strict-local-ai-agent-policy"
+        } else {
+            profile
+        };
+        assert_eq!(json["policy"]["policy_name"], expected_name);
     }
+}
+
+#[test]
+fn scan_policy_profile_developer_laptop_works_and_sets_builtin_metadata() {
+    let root = fixture_root("home");
+    let output = run(&[
+        "scan",
+        "--root",
+        &root,
+        "--policy-profile",
+        "developer-laptop",
+        "--format",
+        "json",
+    ]);
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: Value = serde_json::from_slice(&output.stdout).expect("valid JSON output");
+    assert_eq!(json["policy"]["policy_name"], "developer-laptop");
+    assert_eq!(json["policy"]["policy_path"], "builtin:developer-laptop");
+    assert_eq!(json["policy"]["policy_source"], "built-in-profile");
+    assert_eq!(json["policy"]["policy_profile"], "developer-laptop");
+    assert_eq!(json["policy"]["policy_schema_version"], "ef-policy/v0.1");
+}
+
+#[test]
+fn scan_policy_profile_ci_runner_works() {
+    let root = fixture_root("home");
+    let output = run(&[
+        "scan",
+        "--root",
+        &root,
+        "--policy-profile",
+        "ci-runner",
+        "--format",
+        "json",
+    ]);
+
+    assert!(output.status.success());
+    let json: Value = serde_json::from_slice(&output.stdout).expect("valid JSON output");
+    assert_eq!(json["policy"]["policy_name"], "ci-runner");
+    assert!(json["policy"]["violation"].as_u64().unwrap() > 0);
+}
+
+#[test]
+fn scan_policy_profile_ci_runner_works_with_windows_fixture() {
+    let root = fixture_root("windows-home");
+    let output = run(&[
+        "scan",
+        "--root",
+        &root,
+        "--policy-profile",
+        "ci-runner",
+        "--format",
+        "json",
+    ]);
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: Value = serde_json::from_slice(&output.stdout).expect("valid JSON output");
+    assert_eq!(json["policy"]["policy_name"], "ci-runner");
+    assert_eq!(json["policy"]["policy_source"], "built-in-profile");
+    assert!(json["policy"]["violation"].as_u64().unwrap() > 0);
+}
+
+#[test]
+fn scan_policy_profile_unknown_fails_clearly() {
+    let root = fixture_root("home");
+    let output = run(&["scan", "--root", &root, "--policy-profile", "unknown"]);
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("unknown built-in policy profile \"unknown\""),
+        "stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("etherfence policy list"),
+        "stderr: {stderr}"
+    );
+}
+
+#[test]
+fn scan_policy_file_and_policy_profile_are_mutually_exclusive() {
+    let root = fixture_root("home");
+    let policy = ci_runner_policy();
+    let output = run(&[
+        "scan",
+        "--root",
+        &root,
+        "--policy",
+        &policy,
+        "--policy-profile",
+        "ci-runner",
+    ]);
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("mutually exclusive"), "stderr: {stderr}");
+    assert!(stderr.contains("--policy <file>"), "stderr: {stderr}");
+    assert!(
+        stderr.contains("--policy-profile <name>"),
+        "stderr: {stderr}"
+    );
+}
+
+#[test]
+fn policy_profile_ci_runner_fail_on_high_behaves_like_policy_file() {
+    let root = fixture_root("home");
+    let policy = ci_runner_policy();
+    let file_output = run(&[
+        "scan",
+        "--root",
+        &root,
+        "--policy",
+        &policy,
+        "--fail-on",
+        "high",
+    ]);
+    let profile_output = run(&[
+        "scan",
+        "--root",
+        &root,
+        "--policy-profile",
+        "ci-runner",
+        "--fail-on",
+        "high",
+    ]);
+
+    assert_eq!(file_output.status.code(), Some(2));
+    assert_eq!(profile_output.status.code(), Some(2));
+    let stdout = String::from_utf8_lossy(&profile_output.stdout);
+    assert!(stdout.contains("Policy: ci-runner"));
+    assert!(stdout.contains("source=built-in-profile"));
+}
+
+#[test]
+fn policy_profile_ci_runner_baseline_fail_on_new_high_works() {
+    let root = fixture_root("home");
+    let baseline = temp_file("policy-profile-existing");
+    let baseline_s = baseline.to_string_lossy().to_string();
+    assert!(run(&[
+        "scan",
+        "--root",
+        &root,
+        "--policy-profile",
+        "ci-runner",
+        "--write-baseline",
+        &baseline_s,
+    ])
+    .status
+    .success());
+
+    let output = run(&[
+        "scan",
+        "--root",
+        &root,
+        "--policy-profile",
+        "ci-runner",
+        "--baseline",
+        &baseline_s,
+        "--fail-on-new",
+        "high",
+    ]);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("new=0"));
+    assert!(stdout.contains("Policy: ci-runner"));
 }
 
 #[test]
@@ -538,6 +762,7 @@ fn policy_list_and_show_work_for_builtin_profiles() {
     assert!(stdout.contains("developer-laptop"));
     assert!(stdout.contains("ci-runner"));
     assert!(stdout.contains("research-workstation"));
+    assert!(stdout.contains("strict"));
 
     let show = run(&["policy", "show", "developer-laptop"]);
     assert!(show.status.success());

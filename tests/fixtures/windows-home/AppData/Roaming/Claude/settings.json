@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "context7": {
+      "command": "node",
+      "args": ["C:\\Users\\example\\tools\\context7.js"]
+    }
+  }
+}

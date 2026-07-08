@@ -6,7 +6,7 @@ Status: pre-alpha. This document describes the current scan report and baseline 
 
 Current report schema: `ef-scan-report/v0.1.1`
 
-EtherFence v0.1.5 keeps the v0.1.1 report shape and adds explicit policy schema metadata in scan output when `--policy` is used. These additions are backward-compatible for consumers that ignore unknown fields.
+EtherFence v0.1.7 keeps the v0.1.1 report shape and adds explicit policy schema/source metadata in scan output when `--policy` or `--policy-profile` is used. These additions are backward-compatible for consumers that ignore unknown fields.
 
 CLI filtering with `--severity-threshold` changes which findings are included in the emitted report and recomputes `summary` for the displayed findings, but it does not change field names or object layout. Policy findings are ordinary findings for filtering, `--fail-on`, baseline comparison, and `--fail-on-new`.
 
@@ -22,7 +22,7 @@ CLI filtering with `--severity-threshold` changes which findings are included in
 | `inventory` | array | additive | Discovered agent config inventory. |
 | `findings` | array | additive | Displayed findings after severity threshold and optional baseline comparison. |
 | `summary` | object | stable | Counts for displayed findings and inventory items. |
-| `policy` | object/null | optional | Policy evaluation metadata when `--policy` is used. |
+| `policy` | object/null | optional | Policy evaluation metadata when `--policy` or `--policy-profile` is used. |
 | `baseline` | object/null | optional | Baseline comparison metadata when `--baseline` is used. |
 
 ## Finding
@@ -61,7 +61,7 @@ See `docs/policy.md` for complete policy file documentation.
 
 ## Policy metadata in scan output
 
-When `--policy <file>` is used, the report includes:
+When `--policy <file>` or `--policy-profile <name>` is used, the report includes:
 
 | Field | Type | Description |
 | --- | --- | --- |
@@ -75,7 +75,7 @@ When `--policy <file>` is used, the report includes:
 | `violation` | integer | Number of policy-generated violation findings. |
 | `not_applicable` | integer | Number of checks skipped as not applicable. |
 
-Policy-generated IDs in v0.1.5:
+Policy-generated IDs in v0.1.7:
 
 | ID | Meaning |
 | --- | --- |
@@ -114,7 +114,7 @@ Baseline files are written with schema: `ef-baseline/v0.1.3`.
 | `tool` | string | `etherfence`. |
 | `version` | string | EtherFence version that wrote the baseline. |
 | `created_at` | string/null | Optional timestamp; currently omitted/null for deterministic output. |
-| `findings` | array | Current scan findings with fingerprints. If `--policy` is also used, policy findings are included. |
+| `findings` | array | Current scan findings with fingerprints. If `--policy` or `--policy-profile` is also used, policy findings are included. |
 
 ## Stability expectations
 

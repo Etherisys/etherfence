@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "shell-tools": {
+      "command": "powershell.exe",
+      "args": ["-NoProfile", "-File", "C:\\Users\\example\\tools\\mcp.ps1"]
+    }
+  }
+}

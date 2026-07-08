@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "github": {
+      "command": "docker",
+      "args": ["run", "mcp/github"],
+      "env": {
+        "GITHUB_TOKEN": "example"
+      }
+    }
+  }
+}
