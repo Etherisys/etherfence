@@ -188,7 +188,7 @@ fn finding(
     evidence: Vec<String>,
     template: FindingTemplate,
 ) -> Finding {
-    Finding {
+    let mut finding = Finding {
         id: template.id.to_string(),
         title: template.title.to_string(),
         severity: template.severity,
@@ -200,8 +200,12 @@ fn finding(
         impact: template.impact.to_string(),
         recommendation: template.recommendation.to_string(),
         references: Vec::new(),
+        fingerprint: String::new(),
+        baseline_status: etherfence_core::BaselineStatus::NotApplicable,
         evidence,
-    }
+    };
+    finding.refresh_fingerprint();
+    finding
 }
 
 fn server_evidence(server: &McpServer) -> Vec<String> {

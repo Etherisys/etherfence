@@ -4,11 +4,11 @@ EtherFence is an open-source **AI Agent Security Posture & Runtime Control** pro
 
 One-line idea: **Tirith protects terminal commands; EtherFence governs agent access.**
 
-Status: **pre-alpha**. The current v0.1.2 foundation is scan-only posture discovery with remediation guidance, CI posture gates, and review-friendly exports. It is not production-ready.
+Status: **pre-alpha**. The current v0.1.3 foundation is scan-only posture discovery with remediation guidance, CI posture gates, review-friendly exports, and baseline/diff support. It is not production-ready.
 
-## What v0.1.2 does
+## What v0.1.3 does
 
-`etherfence scan` conservatively discovers local AI agent and MCP configuration files and reports posture risks/hints with rationale, impact, and recommendations:
+`etherfence scan` conservatively discovers local AI agent and MCP configuration files and reports posture risks/hints with rationale, impact, recommendations, fingerprints, and optional baseline status:
 
 - MCP server configured
 - broad filesystem path access hints
@@ -62,6 +62,27 @@ Fail CI when high-severity posture hints are present:
 cargo run -p etherfence-cli -- scan --format json --fail-on high
 ```
 
+Create a baseline from current known findings:
+
+```sh
+cargo run -p etherfence-cli -- scan --write-baseline etherfence-baseline.json
+```
+
+Scan with a baseline and show new/existing/resolved status:
+
+```sh
+cargo run -p etherfence-cli -- scan --baseline etherfence-baseline.json
+```
+
+Fail CI only on newly introduced high-severity findings:
+
+```sh
+cargo run -p etherfence-cli -- scan \
+  --baseline etherfence-baseline.json \
+  --fail-on-new high \
+  --format json
+```
+
 For fixture scans during development:
 
 ```sh
@@ -70,7 +91,7 @@ cargo run -p etherfence-cli -- scan --root tests/fixtures/home --format json
 cargo run -p etherfence-cli -- scan --root tests/fixtures/home --format markdown
 ```
 
-## Sample output
+## Sample baseline output
 
 ```text
 EtherFence scan report
@@ -78,16 +99,17 @@ EtherFence scan report
 Schema: ef-scan-report/v0.1.1
 Status: pre-alpha-scan-only
 Summary: 7 inventory item(s), 3 finding(s): high=3, medium=0, low=0, info=0
+Baseline: etherfence-baseline.json (new=3, existing=0, resolved=1)
 
 Findings by severity:
 
 HIGH
-- EF-MCP-001 Broad filesystem access hint: filesystem [Claude Code / ~/.claude.json]
+- EF-MCP-001 Broad filesystem access hint: filesystem [Claude Code / ~/.claude.json] status=new fingerprint=efp1-...
   Rationale: The MCP server configuration contains values that look like broad filesystem roots or filesystem-capable tooling.
   Recommendation: Restrict MCP filesystem servers to explicit project directories such as /path/to/project, avoid home-directory or root-level grants, and separate sensitive repos where possible.
 ```
 
-JSON output uses the documented `ef-scan-report/v0.1.1` shape with `schema_version`, `scanned_root`, `inventory`, `findings`, and `summary`. See `docs/json-schema.md`.
+JSON output uses the documented `ef-scan-report/v0.1.1` shape with `schema_version`, `scanned_root`, `inventory`, `findings`, `summary`, and optional `baseline`. Baseline files use `ef-baseline/v0.1.3`. See `docs/json-schema.md`.
 
 ## Non-goals for v0.1.x
 

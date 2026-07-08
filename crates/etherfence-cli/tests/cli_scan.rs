@@ -1,17 +1,34 @@
 use serde_json::Value;
+use std::path::PathBuf;
 use std::process::Command;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 fn fixture_root(name: &str) -> String {
     format!("{}/../../tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"))
 }
 
+fn temp_file(name: &str) -> PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time")
+        .as_nanos();
+    std::env::temp_dir().join(format!(
+        "etherfence-{name}-{}-{nanos}.json",
+        std::process::id()
+    ))
+}
+
+fn run(args: &[&str]) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_etherfence"))
+        .args(args)
+        .output()
+        .expect("run etherfence scan")
+}
+
 #[test]
 fn scan_fixture_json_has_stable_top_level_schema() {
     let root = fixture_root("home");
-    let output = Command::new(env!("CARGO_BIN_EXE_etherfence"))
-        .args(["scan", "--root", &root, "--format", "json"])
-        .output()
-        .expect("run etherfence scan");
+    let output = run(&["scan", "--root", &root, "--format", "json"]);
 
     assert!(
         output.status.success(),
@@ -22,6 +39,7 @@ fn scan_fixture_json_has_stable_top_level_schema() {
 
     assert_eq!(json["schema_version"], "ef-scan-report/v0.1.1");
     assert_eq!(json["tool"], "etherfence");
+    assert_eq!(json["version"], "0.1.3");
     assert_eq!(json["status"], "pre-alpha-scan-only");
     assert!(json.get("scanned_root").is_some());
     assert!(json["inventory"].is_array());
@@ -44,6 +62,8 @@ fn scan_fixture_json_has_stable_top_level_schema() {
         "impact",
         "recommendation",
         "references",
+        "fingerprint",
+        "baseline_status",
     ] {
         assert!(first.get(key).is_some(), "missing finding key {key}");
     }
@@ -65,10 +85,7 @@ fn scan_fixture_json_has_stable_top_level_schema() {
 #[test]
 fn scan_fixture_human_groups_by_severity_and_guidance() {
     let root = fixture_root("home");
-    let output = Command::new(env!("CARGO_BIN_EXE_etherfence"))
-        .args(["scan", "--root", &root])
-        .output()
-        .expect("run etherfence scan");
+    let output = run(&["scan", "--root", &root]);
 
     assert!(
         output.status.success(),
@@ -81,16 +98,14 @@ fn scan_fixture_human_groups_by_severity_and_guidance() {
     assert!(stdout.contains("HIGH"));
     assert!(stdout.contains("Rationale:"));
     assert!(stdout.contains("Recommendation:"));
+    assert!(stdout.contains("fingerprint=efp1-"));
     assert!(stdout.contains("posture risks/hints, not confirmed exploitability"));
 }
 
 #[test]
 fn severity_threshold_high_displays_only_high_findings() {
     let root = fixture_root("home");
-    let output = Command::new(env!("CARGO_BIN_EXE_etherfence"))
-        .args(["scan", "--root", &root, "--severity-threshold", "high"])
-        .output()
-        .expect("run etherfence scan");
+    let output = run(&["scan", "--root", &root, "--severity-threshold", "high"]);
 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -106,10 +121,7 @@ fn severity_threshold_high_displays_only_high_findings() {
 #[test]
 fn fail_on_high_returns_non_zero_when_high_findings_exist() {
     let root = fixture_root("home");
-    let output = Command::new(env!("CARGO_BIN_EXE_etherfence"))
-        .args(["scan", "--root", &root, "--fail-on", "high"])
-        .output()
-        .expect("run etherfence scan");
+    let output = run(&["scan", "--root", &root, "--fail-on", "high"]);
 
     assert_eq!(output.status.code(), Some(2));
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -119,10 +131,7 @@ fn fail_on_high_returns_non_zero_when_high_findings_exist() {
 #[test]
 fn fail_on_high_returns_zero_when_no_high_findings_exist() {
     let root = fixture_root("safe-home");
-    let output = Command::new(env!("CARGO_BIN_EXE_etherfence"))
-        .args(["scan", "--root", &root, "--fail-on", "high"])
-        .output()
-        .expect("run etherfence scan");
+    let output = run(&["scan", "--root", &root, "--fail-on", "high"]);
 
     assert!(
         output.status.success(),
@@ -136,10 +145,7 @@ fn fail_on_high_returns_zero_when_no_high_findings_exist() {
 #[test]
 fn markdown_output_has_review_headings_and_guidance() {
     let root = fixture_root("home");
-    let output = Command::new(env!("CARGO_BIN_EXE_etherfence"))
-        .args(["scan", "--root", &root, "--format", "markdown"])
-        .output()
-        .expect("run etherfence scan");
+    let output = run(&["scan", "--root", &root, "--format", "markdown"]);
 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -150,7 +156,178 @@ fn markdown_output_has_review_headings_and_guidance() {
     assert!(stdout.contains("## Findings"));
     assert!(stdout.contains("### HIGH"));
     assert!(stdout.contains("#### EF-MCP-001 - Broad filesystem access hint"));
+    assert!(stdout.contains("- Status: `not_applicable`"));
+    assert!(stdout.contains("- Fingerprint: `efp1-"));
     assert!(stdout.contains("- Rationale:"));
     assert!(stdout.contains("- Impact:"));
     assert!(stdout.contains("- Recommendation:"));
+}
+
+#[test]
+fn write_baseline_creates_json_with_fingerprints() {
+    let root = fixture_root("home");
+    let baseline = temp_file("write-baseline");
+    let baseline_s = baseline.to_string_lossy().to_string();
+    let output = run(&["scan", "--root", &root, "--write-baseline", &baseline_s]);
+
+    assert!(output.status.success());
+    let content = std::fs::read(&baseline).expect("baseline file exists");
+    let json: Value = serde_json::from_slice(&content).expect("valid baseline json");
+    assert_eq!(json["schema_version"], "ef-baseline/v0.1.3");
+    assert_eq!(json["tool"], "etherfence");
+    assert!(json["findings"].as_array().unwrap().len() > 10);
+    assert!(json["findings"][0]["fingerprint"]
+        .as_str()
+        .unwrap()
+        .starts_with("efp1-"));
+}
+
+#[test]
+fn baseline_marks_existing_findings() {
+    let root = fixture_root("home");
+    let baseline = temp_file("existing");
+    let baseline_s = baseline.to_string_lossy().to_string();
+    assert!(
+        run(&["scan", "--root", &root, "--write-baseline", &baseline_s])
+            .status
+            .success()
+    );
+
+    let output = run(&[
+        "scan",
+        "--root",
+        &root,
+        "--baseline",
+        &baseline_s,
+        "--format",
+        "json",
+    ]);
+    assert!(output.status.success());
+    let json: Value = serde_json::from_slice(&output.stdout).expect("valid JSON output");
+    assert_eq!(json["baseline"]["new"], 0);
+    assert_eq!(json["baseline"]["resolved"], 0);
+    assert!(json["baseline"]["existing"].as_u64().unwrap() > 10);
+    assert!(json["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|finding| finding["baseline_status"] == "existing"));
+}
+
+#[test]
+fn baseline_detects_new_findings() {
+    let safe_root = fixture_root("safe-home");
+    let risky_root = fixture_root("home");
+    let baseline = temp_file("new");
+    let baseline_s = baseline.to_string_lossy().to_string();
+    assert!(run(&[
+        "scan",
+        "--root",
+        &safe_root,
+        "--write-baseline",
+        &baseline_s
+    ])
+    .status
+    .success());
+
+    let output = run(&[
+        "scan",
+        "--root",
+        &risky_root,
+        "--baseline",
+        &baseline_s,
+        "--format",
+        "json",
+        "--severity-threshold",
+        "high",
+    ]);
+    assert!(output.status.success());
+    let json: Value = serde_json::from_slice(&output.stdout).expect("valid JSON output");
+    assert!(json["baseline"]["new"].as_u64().unwrap() >= 3);
+    assert!(json["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|finding| finding["baseline_status"] == "new"));
+}
+
+#[test]
+fn baseline_reports_resolved_findings() {
+    let risky_root = fixture_root("home");
+    let safe_root = fixture_root("safe-home");
+    let baseline = temp_file("resolved");
+    let baseline_s = baseline.to_string_lossy().to_string();
+    assert!(run(&[
+        "scan",
+        "--root",
+        &risky_root,
+        "--write-baseline",
+        &baseline_s
+    ])
+    .status
+    .success());
+
+    let output = run(&["scan", "--root", &safe_root, "--baseline", &baseline_s]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("resolved="));
+    assert!(stdout.contains("status=resolved"));
+}
+
+#[test]
+fn fail_on_new_high_returns_non_zero_for_new_high_findings() {
+    let safe_root = fixture_root("safe-home");
+    let risky_root = fixture_root("home");
+    let baseline = temp_file("fail-new");
+    let baseline_s = baseline.to_string_lossy().to_string();
+    assert!(run(&[
+        "scan",
+        "--root",
+        &safe_root,
+        "--write-baseline",
+        &baseline_s
+    ])
+    .status
+    .success());
+
+    let output = run(&[
+        "scan",
+        "--root",
+        &risky_root,
+        "--baseline",
+        &baseline_s,
+        "--fail-on-new",
+        "high",
+    ]);
+    assert_eq!(output.status.code(), Some(2));
+}
+
+#[test]
+fn fail_on_new_high_returns_zero_when_high_findings_are_existing() {
+    let root = fixture_root("home");
+    let baseline = temp_file("fail-existing");
+    let baseline_s = baseline.to_string_lossy().to_string();
+    assert!(
+        run(&["scan", "--root", &root, "--write-baseline", &baseline_s])
+            .status
+            .success()
+    );
+
+    let output = run(&[
+        "scan",
+        "--root",
+        &root,
+        "--baseline",
+        &baseline_s,
+        "--fail-on-new",
+        "high",
+    ]);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("new=0"));
+    assert!(stdout.contains("existing="));
 }

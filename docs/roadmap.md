@@ -24,10 +24,19 @@
 - JSON schema documentation for `ef-scan-report/v0.1.1`
 - CLI tests for gate behavior and export formats
 
+## v0.1.3 - baseline and diff mode
+
+- Stable finding fingerprints
+- `--write-baseline` for recording known findings
+- `--baseline` for marking findings as new, existing, or resolved
+- `--fail-on-new` for CI gates that fail only on newly introduced findings
+- Baseline JSON schema documentation
+- CLI tests for baseline write, comparison, resolved findings, and new-finding gates
+
 ## v0.2 ideas
 
 - Expand tested config schemas and platform paths
-- Add baseline/diff mode for posture drift
+- Add baseline fingerprint migration notes if needed
 - Add machine-readable policy checks without enforcement
 - Improve documentation for safe enterprise rollout
 

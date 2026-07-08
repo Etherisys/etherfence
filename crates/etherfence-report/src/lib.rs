@@ -13,7 +13,9 @@ pub fn to_human(report: &ScanReport) -> String {
     out.push_str(&format!("Status: {}\n", report.status));
     out.push_str(&format!("Scanned root: {}\n", report.scanned_root));
     out.push_str(&summary_line(report));
-    out.push_str("\n\n");
+    out.push('\n');
+    append_human_baseline(&mut out, report);
+    out.push('\n');
     append_human_inventory(&mut out, report);
     append_human_findings(&mut out, report);
     out.push_str("\nNote: EtherFence is scan-only pre-alpha posture discovery. It does not block, proxy, hook, or intercept runtime activity. Findings are posture risks/hints, not confirmed exploitability.\n");
@@ -39,6 +41,14 @@ pub fn to_markdown(report: &ScanReport) -> String {
         report.summary.low,
         report.summary.info
     ));
+
+    if let Some(baseline) = &report.baseline {
+        out.push_str("## Baseline Comparison\n\n");
+        out.push_str(&format!("- Baseline: `{}`\n", baseline.baseline_path));
+        out.push_str(&format!("- New findings: {}\n", baseline.new));
+        out.push_str(&format!("- Existing findings: {}\n", baseline.existing));
+        out.push_str(&format!("- Resolved findings: {}\n\n", baseline.resolved));
+    }
 
     out.push_str("## Inventory\n\n");
     if report.inventory.is_empty() {
@@ -71,6 +81,11 @@ pub fn to_markdown(report: &ScanReport) -> String {
             out.push_str(&format!("### {}\n\n", severity.label()));
             for finding in findings {
                 out.push_str(&format!("#### {} - {}\n\n", finding.id, finding.title));
+                out.push_str(&format!(
+                    "- Status: `{}`\n",
+                    finding.baseline_status.label()
+                ));
+                out.push_str(&format!("- Fingerprint: `{}`\n", finding.fingerprint));
                 out.push_str(&format!("- Agent: **{}**\n", finding.agent));
                 out.push_str(&format!("- Target: `{}`\n", finding.target));
                 out.push_str(&format!("- Config: `{}`\n", finding.config_path));
@@ -94,6 +109,15 @@ fn summary_line(report: &ScanReport) -> String {
         report.summary.low,
         report.summary.info
     )
+}
+
+fn append_human_baseline(out: &mut String, report: &ScanReport) {
+    if let Some(baseline) = &report.baseline {
+        out.push_str(&format!(
+            "Baseline: {} (new={}, existing={}, resolved={})\n",
+            baseline.baseline_path, baseline.new, baseline.existing, baseline.resolved
+        ));
+    }
 }
 
 fn append_human_inventory(out: &mut String, report: &ScanReport) {
@@ -132,8 +156,14 @@ fn append_human_findings(out: &mut String, report: &ScanReport) {
             out.push_str(&format!("\n{}\n", severity.label()));
             for finding in findings {
                 out.push_str(&format!(
-                    "- {} {}: {} [{} / {}]\n",
-                    finding.id, finding.title, finding.target, finding.agent, finding.config_path
+                    "- {} {}: {} [{} / {}] status={} fingerprint={}\n",
+                    finding.id,
+                    finding.title,
+                    finding.target,
+                    finding.agent,
+                    finding.config_path,
+                    finding.baseline_status.label(),
+                    finding.fingerprint
                 ));
                 out.push_str(&format!("  Rationale: {}\n", finding.rationale));
                 out.push_str(&format!("  Recommendation: {}\n", finding.recommendation));
@@ -152,12 +182,13 @@ mod tests {
         let report = ScanReport {
             schema_version: "ef-scan-report/v0.1.1".to_string(),
             tool: "etherfence".to_string(),
-            version: "0.1.2".to_string(),
+            version: "0.1.3".to_string(),
             status: "pre-alpha-scan-only".to_string(),
             scanned_root: "/home/user".to_string(),
             inventory: Vec::new(),
             findings: Vec::new(),
             summary: Summary::from_counts(0, &[]),
+            baseline: None,
         };
         let rendered = to_human(&report);
         assert!(rendered.contains("scan-only"));
@@ -169,12 +200,13 @@ mod tests {
         let report = ScanReport {
             schema_version: "ef-scan-report/v0.1.1".to_string(),
             tool: "etherfence".to_string(),
-            version: "0.1.2".to_string(),
+            version: "0.1.3".to_string(),
             status: "pre-alpha-scan-only".to_string(),
             scanned_root: "/home/user".to_string(),
             inventory: Vec::new(),
             findings: Vec::new(),
             summary: Summary::from_counts(0, &[]),
+            baseline: None,
         };
         let rendered = to_markdown(&report);
         assert!(rendered.contains("# EtherFence Scan Report"));
