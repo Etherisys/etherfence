@@ -16,3 +16,7 @@ etherfence-core = { path = "../etherfence-core" }
 etherfence-detectors = { path = "../etherfence-detectors" }
 etherfence-inventory = { path = "../etherfence-inventory" }
 etherfence-report = { path = "../etherfence-report" }
+serde_json.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

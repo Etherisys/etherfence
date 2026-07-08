@@ -8,10 +8,17 @@
 - Conservative inventory for Claude Code, Cursor, VS Code, Windsurf, Gemini CLI, Codex CLI, and Tirith
 - Fixture-backed parsing and initial posture findings
 
+## v0.1.1 - report quality and remediation guidance
+
+- Versioned JSON report shape with `schema_version`, `summary`, `inventory`, and `findings`
+- Stable finding IDs for current MCP, secret, and Tirith posture hints
+- Finding rationale, impact, recommendation, target, and references fields
+- Human report grouped by severity with concise remediation guidance
+- Snapshot-like CLI assertions for JSON schema stability
+
 ## v0.2 ideas
 
 - Expand tested config schemas and platform paths
-- Add severity rationale and remediation text
 - Add baseline/diff mode for posture drift
 - Add machine-readable policy checks without enforcement
 - Improve documentation for safe enterprise rollout

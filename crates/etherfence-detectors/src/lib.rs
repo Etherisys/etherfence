@@ -4,67 +4,22 @@ pub fn analyze(items: &[InventoryItem]) -> Vec<Finding> {
     let mut findings = Vec::new();
     for item in items {
         if item.agent == AgentKind::Tirith {
-            findings.push(finding(
-                Severity::Info,
-                FindingKind::TirithPresence,
-                item,
-                "Tirith presence detected; EtherFence treats Tirith as complementary terminal-command protection.",
-                item.evidence.clone(),
-            ));
+            findings.push(tirith_finding(item));
             continue;
         }
         for server in &item.mcp_servers {
-            findings.push(finding(
-                Severity::Low,
-                FindingKind::McpServerConfigured,
-                item,
-                &format!("MCP server '{}' is configured.", server.name),
-                server_evidence(server),
-            ));
+            findings.push(mcp_configured(item, server));
             if let Some(evidence) = broad_filesystem_evidence(server) {
-                findings.push(finding(
-                    Severity::High,
-                    FindingKind::BroadFilesystemAccess,
-                    item,
-                    &format!(
-                        "MCP server '{}' hints at broad filesystem access.",
-                        server.name
-                    ),
-                    evidence,
-                ));
+                findings.push(broad_filesystem(item, server, evidence));
             }
             if let Some(evidence) = risky_command_evidence(server) {
-                findings.push(finding(
-                    Severity::Medium,
-                    FindingKind::RiskyCommandToolHint,
-                    item,
-                    &format!(
-                        "MCP server '{}' appears shell- or command-capable.",
-                        server.name
-                    ),
-                    evidence,
-                ));
+                findings.push(shell_capable(item, server, evidence));
             }
             if let Some(evidence) = network_evidence(server) {
-                findings.push(finding(
-                    Severity::Medium,
-                    FindingKind::NetworkCapableToolHint,
-                    item,
-                    &format!("MCP server '{}' hints at network capability.", server.name),
-                    evidence,
-                ));
+                findings.push(network_capable(item, server, evidence));
             }
             if !server.env.is_empty() {
-                findings.push(finding(
-                    Severity::Low,
-                    FindingKind::ExposedMcpEnvironment,
-                    item,
-                    &format!(
-                        "MCP server '{}' defines environment variables.",
-                        server.name
-                    ),
-                    server.env.iter().map(|env| env.name.clone()).collect(),
-                ));
+                findings.push(exposed_env(item, server));
             }
             let secret_env: Vec<String> = server
                 .env
@@ -73,35 +28,178 @@ pub fn analyze(items: &[InventoryItem]) -> Vec<Finding> {
                 .map(|env| env.name.clone())
                 .collect();
             if !secret_env.is_empty() {
-                findings.push(finding(
-                    Severity::Medium,
-                    FindingKind::SecretLookingEnvName,
-                    item,
-                    &format!(
-                        "MCP server '{}' uses secret-looking environment variable names.",
-                        server.name
-                    ),
-                    secret_env,
-                ));
+                findings.push(secret_env_name(item, server, secret_env));
             }
         }
     }
     findings
 }
 
-fn finding(
+struct FindingTemplate {
+    id: &'static str,
+    title: &'static str,
     severity: Severity,
     kind: FindingKind,
+    rationale: &'static str,
+    impact: &'static str,
+    recommendation: &'static str,
+}
+
+fn mcp_configured(item: &InventoryItem, server: &McpServer) -> Finding {
+    finding(
+        item,
+        &server.name,
+        server_evidence(server),
+        FindingTemplate {
+            id: "EF-MCP-000",
+            title: "MCP server configured",
+            severity: Severity::Low,
+            kind: FindingKind::McpServerConfigured,
+            rationale: "An MCP server is configured for this agent. MCP servers can extend agent access beyond the base application.",
+            impact: "This is expected in many developer setups, but each server should be reviewed for least privilege and provenance.",
+            recommendation: "Confirm the server is needed, trusted, pinned where practical, and limited to the minimum required permissions.",
+        },
+    )
+}
+
+fn broad_filesystem(item: &InventoryItem, server: &McpServer, evidence: Vec<String>) -> Finding {
+    finding(
+        item,
+        &server.name,
+        evidence,
+        FindingTemplate {
+            id: "EF-MCP-001",
+            title: "Broad filesystem access hint",
+            severity: Severity::High,
+            kind: FindingKind::BroadFilesystemAccess,
+            rationale: "The MCP server configuration contains values that look like broad filesystem roots or filesystem-capable tooling.",
+            impact: "A compromised or over-permissioned agent workflow could read or modify more local files than intended.",
+            recommendation: "Restrict MCP filesystem servers to explicit project directories such as /path/to/project, avoid home-directory or root-level grants, and separate sensitive repos where possible.",
+        },
+    )
+}
+
+fn shell_capable(item: &InventoryItem, server: &McpServer, evidence: Vec<String>) -> Finding {
+    finding(
+        item,
+        &server.name,
+        evidence,
+        FindingTemplate {
+            id: "EF-MCP-002",
+            title: "Shell-capable MCP hint",
+            severity: Severity::Medium,
+            kind: FindingKind::RiskyCommandToolHint,
+            rationale: "The MCP server name, command, or arguments include shell/command-execution hints.",
+            impact: "Command-capable tools can materially change the host if misused by a prompt injection, confused deputy flow, or untrusted server.",
+            recommendation: "Review whether shell capability is necessary. Prefer narrower MCP servers, require human approval for risky actions, and use complementary terminal controls such as Tirith.",
+        },
+    )
+}
+
+fn network_capable(item: &InventoryItem, server: &McpServer, evidence: Vec<String>) -> Finding {
+    finding(
+        item,
+        &server.name,
+        evidence,
+        FindingTemplate {
+            id: "EF-MCP-003",
+            title: "Network-capable MCP hint",
+            severity: Severity::Medium,
+            kind: FindingKind::NetworkCapableToolHint,
+            rationale: "The MCP server configuration suggests browser, search, HTTP, or other network-capable behavior.",
+            impact: "Network-capable tools may exfiltrate context or fetch untrusted content that can influence an agent.",
+            recommendation: "Limit network-capable MCP use to trusted workflows, avoid passing secrets into those servers, and monitor or review outbound-capable tooling.",
+        },
+    )
+}
+
+fn exposed_env(item: &InventoryItem, server: &McpServer) -> Finding {
+    finding(
+        item,
+        &server.name,
+        server.env.iter().map(|env| env.name.clone()).collect(),
+        FindingTemplate {
+            id: "EF-MCP-004",
+            title: "MCP environment variables exposed",
+            severity: Severity::Low,
+            kind: FindingKind::ExposedMcpEnvironment,
+            rationale: "The MCP server receives environment variables from its agent configuration.",
+            impact: "Environment variables increase the data available to the MCP process and may include operational context or credentials.",
+            recommendation: "Keep MCP environment values minimal, prefer scoped tokens, and avoid sharing variables that are not required by the server.",
+        },
+    )
+}
+
+fn secret_env_name(item: &InventoryItem, server: &McpServer, evidence: Vec<String>) -> Finding {
+    finding(
+        item,
+        &server.name,
+        evidence,
+        FindingTemplate {
+            id: "EF-SEC-001",
+            title: "Secret-looking MCP environment variable name",
+            severity: Severity::Medium,
+            kind: FindingKind::SecretLookingEnvName,
+            rationale: "One or more MCP environment variable names look like they may carry secrets or API credentials.",
+            impact: "If the MCP server is over-broad, compromised, or logs its environment, these credentials could be exposed.",
+            recommendation: "Use least-privilege tokens, rotate credentials periodically, avoid long-lived personal tokens, and confirm the server does not log environment values.",
+        },
+    )
+}
+
+fn tirith_finding(item: &InventoryItem) -> Finding {
+    let is_binary = item.config_path == "PATH:tirith";
+    let (id, title, kind, rationale, recommendation) = if is_binary {
+        (
+            "EF-TIRITH-001",
+            "Tirith binary detected",
+            FindingKind::TirithBinaryDetected,
+            "The Tirith binary appears to be available on PATH.",
+            "Treat Tirith as complementary terminal-command protection; verify it is configured for the workflows that need command controls.",
+        )
+    } else {
+        (
+            "EF-TIRITH-002",
+            "Tirith config detected",
+            FindingKind::TirithConfigDetected,
+            "A Tirith configuration or lockfile marker was found.",
+            "Review the Tirith configuration separately. EtherFence does not duplicate Tirith terminal-command detection.",
+        )
+    };
+    finding(
+        item,
+        "tirith",
+        item.evidence.clone(),
+        FindingTemplate {
+            id,
+            title,
+            severity: Severity::Info,
+            kind,
+            rationale,
+            impact: "This is informational and indicates complementary coverage may exist for terminal command controls.",
+            recommendation,
+        },
+    )
+}
+
+fn finding(
     item: &InventoryItem,
-    message: &str,
+    target: &str,
     evidence: Vec<String>,
+    template: FindingTemplate,
 ) -> Finding {
     Finding {
-        severity,
-        kind,
+        id: template.id.to_string(),
+        title: template.title.to_string(),
+        severity: template.severity,
+        kind: template.kind,
         agent: item.agent,
+        target: target.to_string(),
         config_path: item.config_path.clone(),
-        message: message.to_string(),
+        rationale: template.rationale.to_string(),
+        impact: template.impact.to_string(),
+        recommendation: template.recommendation.to_string(),
+        references: Vec::new(),
         evidence,
     }
 }
@@ -217,7 +315,7 @@ mod tests {
     use etherfence_core::{EnvVar, McpServer};
 
     #[test]
-    fn flags_secret_env_and_filesystem_hint() {
+    fn flags_secret_env_and_filesystem_hint_with_guidance() {
         let item = InventoryItem {
             agent: AgentKind::ClaudeCode,
             config_path: "~/.claude.json".to_string(),
@@ -237,11 +335,38 @@ mod tests {
             evidence: Vec::new(),
         };
         let findings = analyze(&[item]);
-        assert!(findings
+        let fs = findings
             .iter()
-            .any(|f| f.kind == FindingKind::BroadFilesystemAccess));
-        assert!(findings
+            .find(|f| f.id == "EF-MCP-001")
+            .expect("filesystem finding");
+        assert_eq!(fs.title, "Broad filesystem access hint");
+        assert!(fs.rationale.contains("filesystem"));
+        assert!(fs.recommendation.contains("Restrict"));
+
+        let secret = findings
             .iter()
-            .any(|f| f.kind == FindingKind::SecretLookingEnvName));
+            .find(|f| f.id == "EF-SEC-001")
+            .expect("secret env finding");
+        assert_eq!(secret.target, "filesystem");
+        assert!(secret.impact.contains("credentials"));
+    }
+
+    #[test]
+    fn distinguishes_tirith_binary_and_config_findings() {
+        let config = InventoryItem {
+            agent: AgentKind::Tirith,
+            config_path: "~/.tirith/config.toml".to_string(),
+            mcp_servers: Vec::new(),
+            evidence: vec!["Tirith file present".to_string()],
+        };
+        let binary = InventoryItem {
+            agent: AgentKind::Tirith,
+            config_path: "PATH:tirith".to_string(),
+            mcp_servers: Vec::new(),
+            evidence: vec!["tirith binary found on PATH".to_string()],
+        };
+        let findings = analyze(&[config, binary]);
+        assert!(findings.iter().any(|f| f.id == "EF-TIRITH-002"));
+        assert!(findings.iter().any(|f| f.id == "EF-TIRITH-001"));
     }
 }

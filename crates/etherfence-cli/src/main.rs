@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
-use etherfence_core::ScanReport;
+use etherfence_core::{ScanReport, Summary};
 use std::path::PathBuf;
 
 #[derive(Debug, Parser)]
@@ -44,13 +44,16 @@ fn run_scan(format: OutputFormat, root: Option<PathBuf>) -> Result<()> {
     let root = root.unwrap_or_else(etherfence_inventory::default_scan_root);
     let inventory = etherfence_inventory::discover(&root);
     let findings = etherfence_detectors::analyze(&inventory);
+    let summary = Summary::from_counts(inventory.len(), &findings);
     let report = ScanReport {
+        schema_version: "ef-scan-report/v0.1.1".to_string(),
         tool: "etherfence".to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
         status: "pre-alpha-scan-only".to_string(),
         scanned_root: root.display().to_string(),
         inventory,
         findings,
+        summary,
     };
     let output = match format {
         OutputFormat::Human => etherfence_report::to_human(&report),
