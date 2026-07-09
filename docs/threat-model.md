@@ -65,3 +65,11 @@ component. Its trust boundary assumptions:
   and an optional maintainer-run real-server smoke test. They improve
   confidence that the proxy can sit in front of real stdio MCP servers, but
   they are not a comprehensive MCP conformance suite.
+- v0.2.6 hardened request tracking: the proxy tracks `tools/list` requests by
+  `(method, id)` with reference-counted cleanup, so duplicate in-flight ids are
+  handled deterministically and tracking entries cannot leak. Notifications and
+  responses with unknown/missing/no-id pass through unchanged, server errors
+  clear tracking, and tracked-id responses that are not genuine tool lists are
+  forwarded unchanged with their entry cleared rather than re-shaped. Tracking
+  remains scoped to `tools/list`; the proxy still does not reorder, buffer, or
+  correlate responses beyond id matching, and remains experimental/pre-alpha.

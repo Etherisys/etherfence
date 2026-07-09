@@ -584,6 +584,112 @@ fn optional_real_mcp_stdio_smoke_test() {
     let _ = std::fs::remove_file(&run.audit_log);
 }
 
+#[test]
+fn proxy_emits_tracking_removed_audit_after_tools_list() {
+    let policy = write_temp_policy("tracking-removed", TEST_POLICY);
+    let run = run_proxy_with_input(
+        "tracking-removed",
+        &policy,
+        &[r#"{"jsonrpc":"2.0","id":10,"method":"tools/list","params":{}}"#],
+    );
+    assert!(
+        run.output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&run.output.stderr)
+    );
+
+    let audit = std::fs::read_to_string(&run.audit_log).expect("audit log");
+    let records: Vec<Value> = audit
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("audit line is JSON"))
+        .collect();
+    assert!(
+        records.iter().any(|r| r["event"] == "tools_list_filtered"),
+        "expected tools_list_filtered record"
+    );
+    let removed = records
+        .iter()
+        .find(|r| r["event"] == "tools_list_tracking_removed")
+        .expect("expected tools_list_tracking_removed record after tracked response");
+    assert_eq!(removed["method"], "tools/list");
+    assert!(removed["request_id"].is_null());
+    assert!(removed["reason"].as_str().unwrap().contains("cleared"));
+
+    let _ = std::fs::remove_file(&policy);
+    let _ = std::fs::remove_file(&run.server_log);
+    let _ = std::fs::remove_file(&run.audit_log);
+}
+
+#[test]
+fn proxy_filters_duplicate_in_flight_tools_list_ids() {
+    let policy = write_temp_policy("dup-ids", TEST_POLICY);
+    // Two tools/list requests reuse the same id before either response is
+    // processed. The proxy reference-counts the tracked entry, so both
+    // server answers must be filtered (the first must not orphan the second)
+    // and, after both are handled, tracking must be empty so a later unrelated
+    // result under the same id passes through unchanged (no leak / no reshape).
+    let run = run_proxy_with_input(
+        "dup-ids",
+        &policy,
+        &[
+            r#"{"jsonrpc":"2.0","id":"dup","method":"tools/list","params":{}}"#,
+            r#"{"jsonrpc":"2.0","id":"dup","method":"tools/list","params":{}}"#,
+        ],
+    );
+    assert!(
+        run.output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&run.output.stderr)
+    );
+    let lines = stdout_json_lines(&run.output);
+    let responses: Vec<&Value> = lines
+        .iter()
+        .filter(|line| {
+            line.get("id").and_then(Value::as_str) == Some("dup") && line.get("result").is_some()
+        })
+        .collect();
+    assert_eq!(
+        responses.len(),
+        2,
+        "both duplicate-id responses must appear"
+    );
+    let filtered: Vec<&Value> = responses
+        .iter()
+        .filter(|line| {
+            line.get("result")
+                .and_then(|r| r.get("tools"))
+                .map(|tools| tools.is_array())
+                .unwrap_or(false)
+        })
+        .copied()
+        .collect();
+    assert_eq!(
+        filtered.len(),
+        2,
+        "both duplicate-id tool lists are filtered"
+    );
+    for response in filtered {
+        let tools = response["result"]["tools"].as_array().expect("tools array");
+        let names: Vec<&str> = tools
+            .iter()
+            .map(|tool| tool["name"].as_str().expect("tool name"))
+            .collect();
+        assert!(!names.contains(&"shell.run"));
+        assert!(!names.contains(&"browser.open"));
+    }
+
+    let audit = std::fs::read_to_string(&run.audit_log).expect("audit log");
+    let count = audit
+        .lines()
+        .filter(|line| line.contains("tools_list_filtered"))
+        .count();
+    assert_eq!(count, 2, "two tools_list_filtered audit records");
+
+    let _ = std::fs::remove_file(&policy);
+    let _ = std::fs::remove_file(&run.server_log);
+    let _ = std::fs::remove_file(&run.audit_log);
+}
+
 fn parse_real_mcp_command(value: &str) -> Result<Vec<String>, String> {
     let parsed: Vec<String> = serde_json::from_str(value).map_err(|error| {
         format!(

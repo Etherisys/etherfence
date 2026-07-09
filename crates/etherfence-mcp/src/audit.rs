@@ -7,6 +7,7 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::policy::Decision;
+use crate::policy::McpPolicyFile;
 
 /// One JSONL audit record. Request metadata is redacted before it gets here:
 /// only tool-call argument key names are recorded, never argument values.
@@ -94,6 +95,48 @@ impl AuditRecord {
             allowed_tools,
             decision: Decision::Allow.as_str().to_string(),
             reason: reason.to_string(),
+        }
+    }
+
+    pub fn tools_list_malformed(
+        policy_name: &str,
+        server_name: &str,
+        request_id: Option<Value>,
+        reason: &str,
+    ) -> Self {
+        AuditRecord {
+            ts: rfc3339_utc_now(),
+            event: "tools_list_malformed".to_string(),
+            policy: Some(policy_name.to_string()),
+            server: Some(server_name.to_string()),
+            method: Some("tools/list".to_string()),
+            request_id,
+            tool: None,
+            argument_keys: Vec::new(),
+            original_count: Some(0),
+            filtered_count: Some(0),
+            allowed_tools: Vec::new(),
+            decision: Decision::Allow.as_str().to_string(),
+            reason: reason.to_string(),
+        }
+    }
+
+    pub fn tools_list_tracking_removed(policy_name: &McpPolicyFile, server_name: &str) -> Self {
+        AuditRecord {
+            ts: rfc3339_utc_now(),
+            event: "tools_list_tracking_removed".to_string(),
+            policy: Some(policy_name.name.clone()),
+            server: Some(server_name.to_string()),
+            method: Some("tools/list".to_string()),
+            request_id: None,
+            tool: None,
+            argument_keys: Vec::new(),
+            original_count: None,
+            filtered_count: None,
+            allowed_tools: Vec::new(),
+            decision: Decision::Allow.as_str().to_string(),
+            reason: "tracked tools/list response handled; request tracking entry cleared"
+                .to_string(),
         }
     }
 

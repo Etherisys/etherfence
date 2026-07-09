@@ -9,6 +9,50 @@ one opt-in experimental runtime component: an MCP stdio boundary proxy.
 EtherFence still has no daemon mode, shell hooks, command interception,
 terminal-command scanning, or network interception.
 
+## [0.2.6] - 2026-07-09
+
+### Added
+
+- MCP proxy request-tracking hardening in `crates/etherfence-mcp`: the proxy
+  now tracks each client `tools/list` request by both its JSON-RPC method and
+  id, so `tools/list` responses are only filtered when they actually match a
+  tracked `tools/list` request (other methods sharing the same id style are no
+  longer re-shaped). Tracking entries are reference-counted and removed after
+  the matching response is processed, with a deterministic duplicate in-flight
+  id policy (see "Changed"), so entries cannot leak indefinitely.
+- Explicit, documented behavior for JSON-RPC request/response edge cases:
+  numeric and string `tools/list` ids, `tools/list` notifications without an
+  id (never tracked), server-error responses for tracked `tools/list` ids
+  (pass through and clear tracking), responses whose id matches no tracked
+  request (pass through unchanged), malformed successful `tools/list` results
+  (still advertised as an empty list), and responses without an id (pass
+  through unchanged). All id types (null, number, string, object, array,
+  bool) are handled consistently.
+- New `tools_list_tracking_removed` audit event emitted when a tracked
+  `tools/list` entry is cleared, and a `tools_list_malformed` reason is
+  recorded when a successful `tools/list` result is rejected as malformed.
+
+### Changed
+
+- `inspect_client_line` now returns `tools_list_request: Option<TrackedRequest>`
+  (method + id key) instead of a bare id string, and the proxy engine tracks
+  requests in a `TrackedRequests` set keyed by `(method, id_key)`. A duplicate
+  in-flight `tools/list` id increments a reference count rather than replacing
+  state; the matching response decrements it and clears the entry only when the
+  count reaches zero. This makes cleanup deterministic and prevents the first
+  of two identical-id responses from silently orphaning the second.
+- Unit tests and integration `cli_mcp_proxy` fixtures cover all the edge cases
+  above; the existing `tools/call` deny behavior, batch-array fail-closed
+  denial, per-server policy tests, and compatibility matrix docs validation
+  continue to pass unchanged.
+
+### Notes
+
+- No new enforcement semantics or transports: the proxy remains stdio-only,
+  exact-name-only, experimental, with no daemon, shell hooks, network
+  interception, or terminal-command scanning. v0.2.0/v0.2.1 policy
+  compatibility is preserved, and scan/report behavior is backward compatible.
+
 ## [0.2.5] - 2026-07-09
 
 ### Added
