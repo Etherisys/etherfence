@@ -9,6 +9,17 @@ one opt-in experimental runtime component: an MCP stdio boundary proxy.
 EtherFence still has no daemon mode, shell hooks, command interception,
 terminal-command scanning, or network interception.
 
+## [0.2.8] - 2026-07-09
+
+### Changed
+
+- policy path traversal hardening via lexical normalization
+- expanded filesystem path detection in policy evaluation
+- GitHub release workflow input hardening
+- bounded file reads for policy/MCP policy/config/baseline files
+- true bounded reads using actual read limit, regular-file check, UTF-8 validation
+- Semgrep path traversal triage: current CLI paths are trusted local operator inputs, future API/UI/MCP path inputs must be base-dir constrained
+
 ## [0.2.7] - 2026-07-09
 
 ### Added
