@@ -4,9 +4,9 @@ EtherFence is an open-source **AI Agent Security Posture & Runtime Control** pro
 
 One-line idea: **Tirith protects terminal commands; EtherFence governs agent access.**
 
-Status: **pre-alpha**. The current v0.1.8 foundation is scan-only posture discovery with remediation guidance, CI posture gates, baseline/diff support, versioned TOML policy profiles, built-in policy profiles, direct `scan --policy-profile <name>` selection, conservative Linux/Windows discovery helpers, hardened fixture-backed config parsing, SARIF 2.1.0 export, and Linux/Windows release packaging. It is not production-ready and does not enforce policy at runtime.
+Status: **pre-alpha**. The v0.1.x foundation is scan-only posture discovery with remediation guidance, CI posture gates, baseline/diff support, versioned TOML policy profiles, built-in policy profiles, direct `scan --policy-profile <name>` selection, conservative Linux/Windows discovery helpers, hardened fixture-backed config parsing, SARIF 2.1.0 export, and Linux/Windows release packaging. v0.2.0 keeps all of that unchanged and adds one **experimental** runtime component: a minimal MCP stdio boundary proxy (`etherfence mcp-proxy`). EtherFence is not production-ready.
 
-## What v0.1.8 does
+## What the scanner does (unchanged from v0.1.8)
 
 `etherfence scan` conservatively discovers local AI agent and MCP configuration files and reports posture risks/hints with rationale, impact, recommendations, fingerprints, optional baseline status, and optional policy status:
 
@@ -32,10 +32,54 @@ Initial inventory targets:
 
 The parser intentionally uses conservative path discovery and fixture-backed config parsing. Missing files are skipped gracefully, malformed JSON/TOML config files are reported instead of aborting the scan, and unknown extra config fields are ignored. Fixture coverage exercises common shapes (minimal configs, multiple MCP servers, no MCP servers, malformed files, Linux- and Windows-style paths), but EtherFence does not claim complete support for every agent config format or install location. Findings are posture hints, not proof of exploitability.
 
+## Experimental: MCP boundary proxy (v0.2.0)
+
+`etherfence mcp-proxy` is an **experimental prototype** that starts the v0.2
+runtime-control line. It is a minimal MCP stdio boundary proxy that sits
+between an MCP client and an MCP server, audits MCP tool calls, and
+allows/denies them deterministically using a small TOML policy:
+
+```sh
+etherfence mcp-proxy \
+  --policy /home/user/mcp-boundary.toml \
+  --audit-log /home/user/etherfence-mcp-audit.jsonl \
+  -- npx -y @modelcontextprotocol/server-filesystem /home/user/projects
+```
+
+Proxy policies use schema `ef-mcp-policy/v0.1` (see
+`examples/policies/mcp-minimal-boundary.toml`):
+
+```toml
+schema_version = "ef-mcp-policy/v0.1"
+name = "minimal-mcp-boundary"
+
+[tools]
+allow = ["github.list_repos", "filesystem.read"]
+deny = ["filesystem.read_secret", "shell.run"]
+```
+
+Behavior:
+
+- The real MCP server runs as a child process; JSON-RPC messages are
+  forwarded line-by-line in both directions.
+- `tools/call` requests are checked before forwarding: the deny list wins,
+  allow-listed tools are forwarded, and unlisted tools are denied by default.
+- Denied tool calls receive a safe JSON-RPC error and are never forwarded to
+  the server. All other protocol messages pass through untouched.
+- The proxy **fails closed**: if the policy is missing or invalid, the MCP
+  server is never started.
+- `--audit-log` appends JSONL decision records with timestamp, tool name,
+  decision, and policy reason. Only argument key names are logged — argument
+  values (and therefore secrets) never reach the audit log.
+
+The proxy is stdio-only, exact-match-only, and inspects tool-call requests
+only. It is not production-ready. See `docs/mcp-proxy.md` for details and
+limitations.
+
 
 ## Linux and Windows usage
 
-EtherFence remains conservative and scan-only on both Linux and Windows. It reads known local AI-agent/MCP configuration files and emits posture findings; it does not install services, intercept commands, proxy MCP traffic, hook shells, or intercept network traffic.
+The scanner remains conservative and scan-only on both Linux and Windows. It reads known local AI-agent/MCP configuration files and emits posture findings; it does not install services, intercept commands, hook shells, or intercept network traffic. MCP traffic is only ever proxied when you explicitly run the experimental `etherfence mcp-proxy` command described above.
 
 Linux default discovery uses `HOME` and existing Unix-style config paths such as `~/.claude.json`, `~/.cursor/mcp.json`, `~/.config/Code/User/settings.json`, `~/.gemini/settings.json`, and `~/.codex/config.toml`.
 
@@ -240,13 +284,12 @@ HIGH
 
 JSON output uses the documented `ef-scan-report/v0.1.1` shape with `schema_version`, `scanned_root`, `inventory`, `findings`, `summary`, optional `policy`, and optional `baseline`. Baseline files use `ef-baseline/v0.1.3`. See `docs/json-schema.md`. SARIF output is documented in `docs/sarif.md`.
 
-## Non-goals for v0.1.x
+## Non-goals
 
-EtherFence v0.1.x does **not** implement:
+EtherFence v0.1.x is scan-only. v0.2.0 adds the experimental MCP stdio
+boundary proxy above and nothing else. EtherFence does **not** implement:
 
 - daemon mode
-- runtime blocking
-- MCP proxying
 - network interception
 - shell hooks
 - command interception
@@ -262,18 +305,18 @@ Linux:
 
 ```sh
 cargo build --release -p etherfence-cli
-mkdir -p dist/etherfence-v0.1.8-linux-x86_64
-cp target/release/etherfence dist/etherfence-v0.1.8-linux-x86_64/
-tar -C dist -czf dist/etherfence-linux-x86_64.tar.gz etherfence-v0.1.8-linux-x86_64
+mkdir -p dist/etherfence-v0.2.0-linux-x86_64
+cp target/release/etherfence dist/etherfence-v0.2.0-linux-x86_64/
+tar -C dist -czf dist/etherfence-linux-x86_64.tar.gz etherfence-v0.2.0-linux-x86_64
 ```
 
 Windows PowerShell:
 
 ```powershell
 cargo build --release -p etherfence-cli
-New-Item -ItemType Directory -Force -Path dist/etherfence-v0.1.8-windows-x86_64 | Out-Null
-Copy-Item target/release/etherfence.exe dist/etherfence-v0.1.8-windows-x86_64/
-Compress-Archive -Path dist/etherfence-v0.1.8-windows-x86_64 -DestinationPath dist/etherfence-windows-x86_64.zip -Force
+New-Item -ItemType Directory -Force -Path dist/etherfence-v0.2.0-windows-x86_64 | Out-Null
+Copy-Item target/release/etherfence.exe dist/etherfence-v0.2.0-windows-x86_64/
+Compress-Archive -Path dist/etherfence-v0.2.0-windows-x86_64 -DestinationPath dist/etherfence-windows-x86_64.zip -Force
 ```
 
 GitHub Actions builds and uploads matching Linux `tar.gz` and Windows `zip` artifacts for CI runs.

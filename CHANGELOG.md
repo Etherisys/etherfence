@@ -2,9 +2,73 @@
 
 All notable changes to EtherFence are documented in this file.
 
-EtherFence is pre-alpha and scan-only. Nothing in v0.1.x performs runtime
-blocking, MCP proxying, daemon mode, shell hooks, command interception,
+EtherFence is pre-alpha. The v0.1.x line is scan-only; nothing in v0.1.x
+performs runtime blocking, MCP proxying, daemon mode, shell hooks, command
+interception, terminal-command scanning, or network interception. v0.2.0
+adds one opt-in experimental runtime component: an MCP stdio boundary proxy.
+EtherFence still has no daemon mode, shell hooks, command interception,
 terminal-command scanning, or network interception.
+
+## [0.2.0] - 2026-07-09
+
+### Added
+
+- Experimental `etherfence mcp-proxy --policy <file> [--audit-log <file>] --
+  <server-command> [args...]` command: a minimal MCP stdio boundary proxy
+  that starts the real MCP server as a child process and forwards
+  newline-delimited JSON-RPC messages between the MCP client and server.
+- New `etherfence-mcp` crate with the proxy engine, policy loading, and
+  audit logging.
+- `ef-mcp-policy/v0.1` TOML proxy policy with exact-match tool-name
+  `[tools] allow` / `[tools] deny` lists. Decisions are deterministic:
+  deny list wins over allow list, allowed tools are forwarded, and unlisted
+  tools are denied by default. Example policy at
+  `examples/policies/mcp-minimal-boundary.toml`; documented in
+  `docs/mcp-proxy.md`.
+- Fail-closed policy handling: a missing, unreadable, invalid, or
+  unsupported-schema policy stops the proxy with exit code 2 before the MCP
+  server is ever started, and is recorded as a `policy_error` audit event.
+- Denied `tools/call` requests are answered with a safe JSON-RPC error
+  (code `-32000`) and are never forwarded to the server; denied
+  notifications are dropped and audited. Tool calls with a missing or
+  non-string tool name are denied (fail closed).
+- JSON-RPC batch arrays from the client are denied fail closed instead of
+  being unpacked: the proxy answers with a single null-id JSON-RPC error,
+  audits a `batch_denied` event, and never forwards the batch, so a batch
+  cannot smuggle a denied tool call past per-message inspection.
+- JSONL audit logging via `--audit-log <file>`: each tool-call decision
+  records an RFC 3339 UTC timestamp, policy name, method, request id, tool
+  name, decision (`allow`/`deny`/`policy_error`), policy reason, and the
+  sorted tool-call argument key names. Argument values are never logged, so
+  secret values do not leak into the audit log. Audit failures are fail
+  closed: an unopenable audit log stops the proxy before the server starts,
+  and a failed audit write stops forwarding.
+- Tests: unit tests for policy parsing/matching and allow/deny decisions,
+  audit redaction tests, and CLI integration tests against a fake stdio MCP
+  server fixture proving allowed calls are forwarded, denied calls are not,
+  invalid policies fail closed without starting the server, and the audit
+  log contains no secret-like argument values.
+
+### Changed
+
+- Version bumped to 0.2.0. All v0.1.8 scan/report behavior (`scan`,
+  `policy`, output formats, CI gates, baselines, scan policies) is
+  unchanged and backward compatible; scan reports now carry version
+  `0.2.0`.
+
+### Known limitations
+
+- The MCP proxy is an experimental prototype, not production-ready.
+- stdio transport with newline-delimited JSON-RPC framing only; HTTP/SSE
+  transports are not supported.
+- Exact tool-name matching only; no wildcards or per-server scoping.
+- Only `tools/call` requests are inspected; tool results, resources,
+  prompts, and `tools/list` responses pass through unmodified, so denied
+  tools may still appear in tool listings.
+- JSON-RPC batch arrays are denied fail closed rather than unpacked.
+- No daemon mode, shell hooks, command interception, terminal-command
+  scanning, or network interception; Tirith remains complementary
+  terminal-command protection.
 
 ## [0.1.8] - 2026-07-08
 
