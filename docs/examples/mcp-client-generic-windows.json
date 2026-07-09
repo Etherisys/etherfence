@@ -1,0 +1,21 @@
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "C:\\Program Files\\EtherFence\\etherfence.exe",
+      "args": [
+        "mcp-proxy",
+        "--policy",
+        "C:\\Users\\example\\.config\\etherfence\\mcp-filesystem-readonly.toml",
+        "--server-name",
+        "filesystem",
+        "--audit-log",
+        "C:\\Users\\example\\AppData\\Local\\EtherFence\\mcp-audit.jsonl",
+        "--",
+        "C:\\Program Files\\nodejs\\npx.cmd",
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "C:\\Users\\example\\projects"
+      ]
+    }
+  }
+}

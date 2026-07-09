@@ -113,6 +113,22 @@
 - Tests for legacy and per-server policy parsing, precedence, `tools/list` filtering/default deny, unexpected shapes, per-server decisions, and audit metadata
 - Scan behavior remains backward compatible; proxy remains stdio-only and experimental
 
+## v0.2.2 - MCP stdio compatibility tests and client examples
+
+- Deterministic MCP stdio compatibility harness using the checked-in fake MCP
+  server fixture: initialize, initialized notification, tools/list,
+  allowed/denied tools/call, server error passthrough, malformed tools/list,
+  and fail-closed batch denial
+- Optional maintainer-run real stdio MCP smoke test gated by
+  `ETHERFENCE_REAL_MCP_CMD`, skipped by default in CI
+- Client configuration templates under `docs/examples/` plus
+  `docs/mcp-clients.md` for generic, Claude-style, Cursor-style, and
+  VS Code-style wrapping of MCP servers with `etherfence mcp-proxy`
+- New example MCP proxy policies for filesystem read-only and GitHub read-only
+  exact-name templates
+- Scan behavior and v0.2.0/v0.2.1 MCP policy compatibility remain backward
+  compatible; proxy remains stdio-only and experimental
+
 ## v0.2.x ideas
 
 - Expand tested config schemas and platform paths

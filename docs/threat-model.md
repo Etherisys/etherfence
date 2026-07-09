@@ -61,3 +61,7 @@ component. Its trust boundary assumptions:
   framing edge cases (for example multi-line or non-standard framing
   variants, or servers whose JSON parsers resolve duplicate keys differently
   from the proxy). It must not be treated as a security guarantee.
+- v0.2.2 compatibility tests cover deterministic stdio request/response flows
+  and an optional maintainer-run real-server smoke test. They improve
+  confidence that the proxy can sit in front of real stdio MCP servers, but
+  they are not a comprehensive MCP conformance suite.

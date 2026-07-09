@@ -1,4 +1,4 @@
-# EtherFence v0.2.1 Release Checklist
+# EtherFence v0.2.2 Release Checklist
 
 Status: pre-alpha. Scan commands are scan-only; v0.2.x additionally ships the
 experimental `etherfence mcp-proxy` stdio boundary proxy prototype. This
@@ -38,9 +38,9 @@ On Linux:
 
 ```sh
 cargo build --release -p etherfence-cli
-mkdir -p dist/etherfence-v0.2.1-linux-x86_64
-cp target/release/etherfence dist/etherfence-v0.2.1-linux-x86_64/
-tar -C dist -czf dist/etherfence-linux-x86_64.tar.gz etherfence-v0.2.1-linux-x86_64
+mkdir -p dist/etherfence-v0.2.2-linux-x86_64
+cp target/release/etherfence dist/etherfence-v0.2.2-linux-x86_64/
+tar -C dist -czf dist/etherfence-linux-x86_64.tar.gz etherfence-v0.2.2-linux-x86_64
 ```
 
 Smoke check:
@@ -49,6 +49,7 @@ Smoke check:
 ./target/release/etherfence scan --root tests/fixtures/home
 ./target/release/etherfence scan --root tests/fixtures/windows-home --policy-profile ci-runner --format json
 ./target/release/etherfence mcp-proxy --policy /nonexistent.toml -- true; test $? -eq 2
+cargo test -p etherfence-cli optional_real_mcp_stdio_smoke_test -- --nocapture
 ```
 
 ## Windows release build
@@ -57,9 +58,9 @@ On Windows PowerShell:
 
 ```powershell
 cargo build --release -p etherfence-cli
-New-Item -ItemType Directory -Force -Path dist/etherfence-v0.2.1-windows-x86_64 | Out-Null
-Copy-Item target/release/etherfence.exe dist/etherfence-v0.2.1-windows-x86_64/
-Compress-Archive -Path dist/etherfence-v0.2.1-windows-x86_64 -DestinationPath dist/etherfence-windows-x86_64.zip -Force
+New-Item -ItemType Directory -Force -Path dist/etherfence-v0.2.2-windows-x86_64 | Out-Null
+Copy-Item target/release/etherfence.exe dist/etherfence-v0.2.2-windows-x86_64/
+Compress-Archive -Path dist/etherfence-v0.2.2-windows-x86_64 -DestinationPath dist/etherfence-windows-x86_64.zip -Force
 ```
 
 Smoke check:
@@ -114,17 +115,17 @@ smoke-tested:
 ```sh
 git checkout main
 git pull origin main
-git tag -a v0.2.1 -m "EtherFence v0.2.1: MCP tools/list filtering and server-scoped policy"
-git push origin v0.2.1
+git tag -a v0.2.2 -m "EtherFence v0.2.2: MCP stdio compatibility tests and client examples"
+git push origin v0.2.2
 ```
 
 Then create the GitHub release from the tag and attach the CI-built
 `etherfence-linux-x86_64.tar.gz` and `etherfence-windows-x86_64.zip`:
 
 ```sh
-gh release create v0.2.1 \
-  --title "EtherFence v0.2.1" \
-  --notes-file <(sed -n '/^## \[0.2.1\]/,/^## /p' CHANGELOG.md | sed '$d') \
+gh release create v0.2.2 \
+  --title "EtherFence v0.2.2" \
+  --notes-file <(sed -n '/^## \[0.2.2\]/,/^## /p' CHANGELOG.md | sed '$d') \
   dist-ci/etherfence-linux-x86_64/etherfence-linux-x86_64.tar.gz \
   dist-ci/etherfence-windows-x86_64/etherfence-windows-x86_64.zip
 ```

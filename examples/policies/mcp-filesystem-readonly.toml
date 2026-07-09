@@ -1,0 +1,31 @@
+# Example EtherFence MCP proxy policy for a filesystem MCP server.
+# Template only: adjust exact tool names to the server version you run.
+schema_version = "ef-mcp-policy/v0.1"
+name = "mcp-filesystem-readonly"
+
+# Global rules apply to every --server-name scope.
+# Matching is exact: no wildcards, prefixes, or regular expressions.
+[tools]
+allow = []
+deny = [
+  "filesystem.write",
+  "filesystem.delete",
+  "filesystem.move",
+  "filesystem.create_directory",
+]
+
+# Server-scoped rules apply only when the proxy is run with:
+#   --server-name filesystem
+[servers.filesystem.tools]
+allow = [
+  "filesystem.read",
+  "filesystem.list",
+  "filesystem.stat",
+  "filesystem.search",
+]
+deny = [
+  "filesystem.write",
+  "filesystem.delete",
+  "filesystem.move",
+  "filesystem.create_directory",
+]

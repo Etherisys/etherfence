@@ -9,6 +9,47 @@ one opt-in experimental runtime component: an MCP stdio boundary proxy.
 EtherFence still has no daemon mode, shell hooks, command interception,
 terminal-command scanning, or network interception.
 
+## [0.2.2] - 2026-07-09
+
+### Added
+
+- Deterministic MCP stdio compatibility harness using the checked-in
+  `fake-mcp-server` test fixture. The harness exercises initialize,
+  initialized notification passthrough, `tools/list`, allowed `tools/call`,
+  denied `tools/call`, server error response passthrough, malformed
+  successful `tools/list` handling, and JSON-RPC batch fail-closed denial.
+- Optional real-server smoke test gated by `ETHERFENCE_REAL_MCP_CMD`. The env
+  var must be a JSON argv array rather than a shell command, and the test
+  skips cleanly when the env var is not set.
+- Client configuration documentation in `docs/mcp-clients.md` plus checked JSON
+  templates under `docs/examples/` for generic, Claude-style, Cursor-style,
+  and VS Code-style MCP client wrapping.
+- Example exact-name MCP proxy policies:
+  `examples/policies/mcp-filesystem-readonly.toml` and
+  `examples/policies/mcp-github-readonly.toml`.
+- Tests validating the checked client JSON examples and MCP proxy policy
+  examples.
+
+### Changed
+
+- Version bumped to 0.2.2. All scan/report behavior remains backward
+  compatible; scan reports now carry version `0.2.2`.
+- README, MCP proxy docs, architecture, threat model, roadmap, and release
+  checklist now document compatibility testing and client configuration
+  examples.
+
+### Known limitations
+
+- The MCP proxy remains an experimental stdio-only prototype, not
+  production-ready runtime enforcement.
+- The compatibility harness improves confidence for common stdio JSON-RPC MCP
+  flows but is not a comprehensive MCP conformance suite.
+- Exact tool-name matching only; no wildcard, prefix, regex, argument-aware, or
+  schema-aware rules.
+- No daemon mode, HTTP/SSE transport, network interception, shell hooks,
+  command interception, terminal-command scanning, or Tirith behavior
+  duplication.
+
 ## [0.2.1] - 2026-07-09
 
 ### Added

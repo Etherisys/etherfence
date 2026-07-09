@@ -1,6 +1,6 @@
 # EtherFence Architecture
 
-EtherFence v0.2.1 is a small Rust workspace with scan-only posture discovery
+EtherFence v0.2.2 is a small Rust workspace with scan-only posture discovery
 plus an experimental MCP stdio boundary proxy.
 
 ## Crates
@@ -32,6 +32,9 @@ plus an experimental MCP stdio boundary proxy.
 6. Client `tools/list` request ids are tracked; matching successful server responses have `result.tools` filtered with the same policy so denied/default-denied tools are not advertised. Unexpected successful `tools/list` shapes are rewritten to advertise an empty tools list.
 7. Unrelated protocol messages pass through untouched.
 8. Tool-call and tool-list filter decisions are optionally appended to a JSONL audit log with timestamp, server name, decision, reason, argument key names only for calls, and count/name metadata only for list filtering.
+9. Compatibility tests use a checked-in deterministic stdio MCP fixture plus
+   an optional `ETHERFENCE_REAL_MCP_CMD` real-server smoke test that is skipped
+   by default.
 
 See `docs/mcp-proxy.md` for details and limitations.
 

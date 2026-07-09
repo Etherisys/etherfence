@@ -81,7 +81,11 @@ allow = ["filesystem.read"]
 deny = ["filesystem.read_secret", "filesystem.write"]
 ```
 
-An example lives at `examples/policies/mcp-minimal-boundary.toml`.
+Examples live at:
+
+- `examples/policies/mcp-minimal-boundary.toml`
+- `examples/policies/mcp-filesystem-readonly.toml`
+- `examples/policies/mcp-github-readonly.toml`
 
 Decision rules, in exact order:
 
@@ -188,6 +192,49 @@ Audit failures are fail closed: if the audit log file cannot be opened at
 startup, the proxy exits before starting the MCP server; if writing an audit
 record fails while the proxy is running, the proxy stops forwarding and exits
 with an error instead of continuing unaudited.
+
+## Compatibility test harness
+
+v0.2.2 adds a deterministic MCP stdio compatibility harness in
+`crates/etherfence-cli/tests/cli_mcp_proxy.rs` backed by the checked-in
+`fake-mcp-server` test binary. Normal CI remains self-contained: it does not
+require internet access, npm, npx, uvx, Docker, or external MCP packages.
+
+The harness sends a realistic client-like sequence through
+`etherfence mcp-proxy`:
+
+1. `initialize`
+2. `notifications/initialized`
+3. `tools/list`
+4. an allowed `tools/call`
+5. a denied `tools/call`
+6. an allowed `tools/call` that returns a server error
+7. a JSON-RPC batch array, which remains denied fail closed
+
+The tests verify request/response id preservation, `tools/list` filtering,
+server error passthrough, fail-safe malformed `tools/list` handling, and that
+denied tool calls and batch arrays are not forwarded to the server fixture.
+
+Maintainers can optionally smoke-test any locally installed real stdio MCP
+server by setting `ETHERFENCE_REAL_MCP_CMD` to a JSON argv array. It is not a
+shell command and is intentionally not parsed by a shell:
+
+```sh
+ETHERFENCE_REAL_MCP_CMD='["/absolute/path/to/server","--arg","value"]' \
+  cargo test -p etherfence-cli optional_real_mcp_stdio_smoke_test -- --nocapture
+```
+
+If `ETHERFENCE_REAL_MCP_CMD` is absent, the optional test skips with a clear
+message. This keeps CI deterministic while allowing maintainers to validate
+that EtherFence can sit between a client-like test harness and a real stdio
+MCP server.
+
+## Client configuration examples
+
+See `docs/mcp-clients.md` and the checked JSON templates under
+`docs/examples/` for generic, Claude-style, Cursor-style, and VS Code-style
+client configuration examples. They all use placeholders and must be adjusted
+for local paths, server commands, and exact tool names.
 
 ## Limitations
 
