@@ -16,6 +16,22 @@ pub const ALWAYS_ALLOWED_METHODS: &[&str] = &["initialize", "notifications/initi
 /// and `tools/call` are allowed; everything else is denied by default.
 pub const DEFAULT_ALLOWED_METHODS: &[&str] = &["tools/list", "tools/call"];
 
+/// Direction of an MCP/JSON-RPC request through the stdio proxy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MethodDirection {
+    ClientToServer,
+    ServerToClient,
+}
+
+impl MethodDirection {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            MethodDirection::ClientToServer => "client_to_server",
+            MethodDirection::ServerToClient => "server_to_client",
+        }
+    }
+}
+
 /// Minimal MCP boundary proxy policy: exact-match tool-name allow/deny lists
 /// plus optional method-level allow/deny lists.
 #[derive(Debug, Clone, Deserialize)]
@@ -157,10 +173,20 @@ pub fn decide_tool_call(
     }
 }
 
-/// Whether a method is always allowed (protocol-required) and should never be
-/// subject to method policy checks.
+/// Whether a client→server method is always allowed (protocol-required) and
+/// should never be subject to method policy checks.
 pub fn is_always_allowed_method(method: &str) -> bool {
     ALWAYS_ALLOWED_METHODS.contains(&method)
+}
+
+fn is_always_allowed_for_direction(direction: MethodDirection, method: &str) -> bool {
+    match direction {
+        MethodDirection::ClientToServer => is_always_allowed_method(method),
+        // MCP ping can be initiated by either peer as a liveness probe. Other
+        // server→client methods, including roots/list, sampling/createMessage,
+        // and elicitation/create, must be explicitly allowed by policy.
+        MethodDirection::ServerToClient => method == "ping",
+    }
 }
 
 /// Determine whether a JSON-RPC method is allowed by the method policy.
@@ -179,10 +205,22 @@ pub fn is_always_allowed_method(method: &str) -> bool {
 /// 8. If a `[methods]` section exists but the method is not listed → deny
 ///    (default deny for unknown methods).
 pub fn decide_method(policy: &McpPolicyFile, server_name: &str, method: &str) -> PolicyDecision {
-    if is_always_allowed_method(method) {
+    decide_method_for_direction(policy, server_name, MethodDirection::ClientToServer, method)
+}
+
+pub fn decide_method_for_direction(
+    policy: &McpPolicyFile,
+    server_name: &str,
+    direction: MethodDirection,
+    method: &str,
+) -> PolicyDecision {
+    if is_always_allowed_for_direction(direction, method) {
         return PolicyDecision {
             decision: Decision::Allow,
-            reason: "method is always allowed (protocol-required)".to_string(),
+            reason: format!(
+                "method is always allowed for {} (protocol-required)",
+                direction.as_str()
+            ),
         };
     }
 

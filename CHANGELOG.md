@@ -9,6 +9,58 @@ one opt-in experimental runtime component: an MCP stdio boundary proxy.
 EtherFence still has no daemon mode, shell hooks, command interception,
 terminal-command scanning, or network interception.
 
+## [0.3.1] - 2026-07-09
+
+### Added
+
+- Server→client MCP/JSON-RPC request inspection in `etherfence mcp-proxy` for
+  server-initiated client-feature methods such as `sampling/createMessage`,
+  `roots/list`, and `elicitation/create`. A server output object with a
+  `method` field is now checked before forwarding to the client.
+- Direction metadata on audit records (`client_to_server` or
+  `server_to_client`) so method decisions and fail-closed batch denials clearly
+  identify which side initiated the message.
+- Tests covering allowed and denied server→client methods, denied
+  `sampling/createMessage` not reaching the client, JSON-RPC denial responses
+  sent back toward the server for id-bearing requests, notification drops,
+  audit redaction for params and complex ids, preserved client→server behavior,
+  preserved `tools/list` filtering, and server→client batch fail-closed
+  behavior.
+
+### Changed
+
+- Denied server→client requests are not forwarded to the client. If the denied
+  message has a non-null `id`, the proxy writes a safe JSON-RPC error response
+  back toward the MCP server; denied notifications without an `id` are dropped
+  and audited.
+- `mcp-sampling-denied.toml` now documents that `sampling/createMessage` is
+  blocked in either direction by v0.3.1 server→client method enforcement.
+- Version bumped to 0.3.1. Existing client→server method policy, `tools/call`
+  policy, tracked `tools/list` response filtering, audit redaction, and
+  fail-closed posture are preserved.
+
+### Security notes
+
+- Server→client method checks reuse the existing exact-match `[methods]` policy
+  model and keep schema `ef-mcp-policy/v0.1`; no regex, prefix, glob, daemon
+  mode, API server, network interception, shell hooks, terminal-command
+  scanning, or endpoint-agent behavior was added.
+- Audit continues to log only safe metadata: method name, direction, decision,
+  reason, request id type, and top-level param key names. Prompt text, message
+  bodies, resource/file contents, secrets, tokens, and full params are not
+  logged.
+- Server→client JSON-RPC batch arrays are denied wholesale (fail closed) rather
+  than unpacked.
+
+### Migration / compatibility
+
+- Policy schema remains `ef-mcp-policy/v0.1`; no policy file migration is
+  required. Deployments that want to allow server-initiated client-feature
+  methods must list those exact method names in `[methods].allow` or use the
+  existing `"*"` wildcard intentionally.
+- Client→server v0.3.0 behavior is unchanged. The new behavior only closes the
+  previously documented server→client method-policy gap in the stdio proxy.
+
 ## [0.3.0] - 2026-07-09
 
 ### Added

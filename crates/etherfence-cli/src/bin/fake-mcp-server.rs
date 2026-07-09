@@ -60,6 +60,12 @@ fn main() {
         let Some(id) = message.get("id").filter(|id| !id.is_null()) else {
             continue;
         };
+        if message.get("method").is_none() {
+            // The proxy can send JSON-RPC error responses back to this fake
+            // server when it denies server→client requests. Log those inbound
+            // responses above, but do not answer responses with more responses.
+            continue;
+        }
         let response = match message.get("method").and_then(Value::as_str) {
             Some("initialize") => json!({
                 "jsonrpc": "2.0",
@@ -114,6 +120,26 @@ fn main() {
                 "id": id,
                 "result": {"tools": "not-an-array"},
             }),
+            Some("fixture/server_sampling") => json!({
+                "jsonrpc": "2.0",
+                "id": "server-sampling-1",
+                "method": "sampling/createMessage",
+                "params": {"messages": [{"role": "user", "content": "secret prompt text from server"}]},
+            }),
+            Some("fixture/server_roots") => json!({
+                "jsonrpc": "2.0",
+                "id": "server-roots-1",
+                "method": "roots/list",
+                "params": {"cursor": "secret cursor"},
+            }),
+            Some("fixture/server_elicitation_notification") => json!({
+                "jsonrpc": "2.0",
+                "method": "elicitation/create",
+                "params": {"message": "secret notification body"},
+            }),
+            Some("fixture/server_batch") => json!([
+                {"jsonrpc": "2.0", "id": "server-batch-1", "method": "roots/list", "params": {}}
+            ]),
 
             Some("tools/call")
                 if message.pointer("/params/name").and_then(Value::as_str)

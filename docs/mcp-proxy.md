@@ -106,10 +106,12 @@ Decision rules for tool names, in exact order:
 4. Tool name in global `[tools].allow` -> **allow**.
 5. Anything else -> **deny** (default deny).
 
-### Method-level policy (v0.3.0)
+### Method-level policy (v0.3.0 client→server, v0.3.1 server→client)
 
-v0.3.0 adds optional `[methods]` and `[servers.<name>.methods]` sections
-that control which JSON-RPC methods the proxy forwards to the server:
+v0.3.0 added optional `[methods]` and `[servers.<name>.methods]` sections
+for client→server JSON-RPC requests. v0.3.1 uses the same exact-match
+policy model for server→client request/notification objects with a `method`
+field, before they reach the client:
 
 ```toml
 schema_version = "ef-mcp-policy/v0.1"
@@ -125,8 +127,12 @@ allow = ["filesystem.read"]
 
 Method decision rules, in exact order:
 
-1. Method is `initialize`, `notifications/initialized`, or `ping` ->
-   **always allow** (protocol-required; bypasses all method policy).
+1. Client→server method is `initialize`, `notifications/initialized`, or
+   `ping` -> **always allow** (protocol-required for client→server
+   initialization/liveness; bypasses client→server method policy). For
+   server→client traffic, only `ping` is always allowed; server-initiated
+   client feature methods such as `sampling/createMessage`, `roots/list`, and
+   `elicitation/create` must be explicitly allowed or they are denied.
 2. Method in global `[methods].deny` -> **deny**.
 3. Method in `[servers.<server-name>.methods].deny` -> **deny**.
 4. Method in `[servers.<server-name>.methods].allow` -> **allow**.
@@ -151,13 +157,15 @@ the `deny` list. Use this with caution.
 Per-server method scoping follows the same precedence as tool rules:
 global deny, server deny, server allow, global allow, then default deny.
 
-**Scope limitation:** Method policy applies to client→server JSON-RPC
-requests only. Server→client requests such as `sampling/createMessage`
-and `roots/list` (which in the MCP protocol are initiated by the server,
-not the client) are not intercepted by method policy in this release. A
-`[methods].deny` entry for `sampling/createMessage` will deny it only
-when it appears as a client→server request, not when the server initiates
-it. Server→client method policy is a future scope.
+**Direction semantics:** Method policy now applies in both MCP directions, but
+the protocol behavior differs by direction. Client→server denials are returned
+as JSON-RPC errors to the client and are never forwarded to the server.
+Server→client denials are never forwarded to the client; when the denied
+server→client message has a non-null `id`, the proxy writes a JSON-RPC error
+response back toward the server, and when it is a notification without an `id`,
+the proxy drops it and audits the denial. This is intended for server-initiated
+client-feature methods such as `sampling/createMessage`, `roots/list`, and
+`elicitation/create`.
 
 Fail-closed cases:
 
@@ -167,6 +175,8 @@ Fail-closed cases:
 - A `tools/call` request whose tool name is missing or not a string -> denied.
 - A successful `tools/list` response with an unexpected shape -> rewritten to
   advertise an empty `tools` array for that response.
+- Client→server or server→client JSON-RPC batch arrays -> denied wholesale
+  (fail closed); the proxy does not unpack mixed batches.
 
 ## `tools/list` filtering
 
@@ -180,7 +190,7 @@ filtered with the same policy decision rules used for `tools/call`:
 - allowed entries remain otherwise unchanged, preserving their normal MCP tool
   structure for the client.
 
-Unrelated server-to-client messages are not modified. Server errors for a
+Server responses without a `method` field are not method-checked. Server errors for a
 tracked `tools/list` request pass through unchanged. If a tracked successful
 `tools/list` response has a missing/non-object `result`, missing `tools`, or a
 non-array `tools`, the proxy fails safely for that response by returning a
@@ -284,6 +294,7 @@ Fields:
 - `request_id`: JSON-RPC request id when present (simple types: number,
   string, bool, null are logged as-is; complex types: object and array
   ids are redacted — only the type is recorded in `request_id_type`)
+- `direction`: `client_to_server` or `server_to_client` when applicable
 - `request_id_type`: JSON type of the request id (`number`, `string`,
   `bool`, `object`, `array`, `null`, or `missing`) (v0.3.0)
 - `tool`: tool name for tool-call decisions when it could be extracted
@@ -401,19 +412,18 @@ for local paths, server commands, and exact tool names.
 - Per-server scoping is selected explicitly with `--server-name`; the proxy
   does not auto-discover or authenticate MCP server identity.
 - The proxy inspects every client→server JSON-RPC request method and
-  enforces method-level + tool-level policy. It does not inspect
-  server→client requests (e.g. sampling/createMessage, roots/list when
-  server-initiated) — method policy applies to client→server direction
-  only. Server→client method policy is a future scope.
+  server→client JSON-RPC request/notification method. Tool-name policy still
+  applies only to client→server `tools/call`, and `tools/list` filtering still
+  applies only to tracked server responses for client `tools/list` requests.
 - It does not inspect tool results, resource contents, prompt responses,
   or sampling responses beyond what is needed for `tools/list` response
   filtering.
 - No filesystem path-scoped argument policy in this release; argument
   values are never inspected or logged.
-- JSON-RPC batch arrays are not unpacked. A batch line from the client is
-  denied fail closed — answered with a single null-id JSON-RPC error, audited
-  as `batch_denied`, and never forwarded — even if every call inside it names
-  an allow-listed tool.
+- JSON-RPC batch arrays are not unpacked. A batch line in either inspected
+  direction is denied fail closed — answered with a single null-id JSON-RPC
+  error toward the sender, audited as `batch_denied`, and never forwarded —
+  even if every call inside it names an allow-listed method/tool.
 - Invalid client JSON input lines are **dropped** before forwarding (they are
   never sent to the server); valid JSON-RPC requests, responses, and
   notifications are forwarded unchanged. Invalid server JSON lines are passed

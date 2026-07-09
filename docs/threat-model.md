@@ -99,10 +99,11 @@ component. Its trust boundary assumptions:
   preserved. This is a behavioral hardening from v0.2.x: non-tools
   client→server methods that previously passed through uninspected are
   now denied by default. Deployments needing prior pass-through behavior
-  must add an explicit `[methods]` allow list. Method policy applies to
-  client→server requests only; server→client requests such as
-  sampling/createMessage are not intercepted in this release. A new
-  `method_decision` audit event records server name, method, decision,
+  must add an explicit `[methods]` allow list. v0.3.1 extends the same exact-match method policy to server→client
+  request/notification objects with a `method` field, covering server-initiated
+  client features such as sampling/createMessage, roots/list, and
+  elicitation/create before they reach the client. A `method_decision` audit
+  event records server name, direction, method, decision,
   reason, request id type, and safe param key names only — no param
   values, prompt text, resource content, message bodies, or secrets are
   logged. The proxy remains stdio-only, exact-match,

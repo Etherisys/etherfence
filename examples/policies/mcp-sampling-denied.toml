@@ -1,17 +1,12 @@
-# Example EtherFence MCP proxy policy: client-side sampling denied.
+# Example EtherFence MCP proxy policy: sampling denied in either MCP direction.
 #
-# NOTE: In the MCP protocol, sampling/createMessage is a server→client
-# request (the server asks the client to generate a message). This proxy
-# inspects client→server requests only. A `[methods].deny` entry for
-# sampling/createMessage will deny it only if a client sends it as a
-# request to the server — it does NOT prevent the server from initiating
-# sampling/createMessage toward the client.
-#
-# This example is useful for deployments where the client should never
-# send sampling/createMessage to the server (unusual but valid), or as
-# a template that documents the limitation. To fully prevent server-
-# initiated sampling, server→client method policy is needed (future
-# scope).
+# In the MCP protocol, sampling/createMessage is normally a server→client
+# request (the server asks the client to generate a message). EtherFence
+# v0.3.1 inspects server→client request/notification objects before they
+# reach the client, so this deny rule blocks server-initiated sampling as
+# well as any unusual client→server sampling request. The proxy still logs
+# only method metadata and top-level param key names — never prompt text or
+# message bodies.
 schema_version = "ef-mcp-policy/v0.1"
 name = "mcp-client-sampling-denied"
 
