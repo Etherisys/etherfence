@@ -9,6 +9,72 @@ one opt-in experimental runtime component: an MCP stdio boundary proxy.
 EtherFence still has no daemon mode, shell hooks, command interception,
 terminal-command scanning, or network interception.
 
+## [0.2.7] - 2026-07-09
+
+### Added
+
+- Explicit MCP proxy lifecycle and failure-mode hardening in
+  `crates/etherfence-mcp` (stdio-only, experimental/pre-alpha):
+  - Child server process is guaranteed to be reaped on proxy exit: the proxy
+    now kills the child on any abnormal exit path and waits for it, so a failed
+    `mcp-proxy` invocation cannot leave a zombie or orphaned server process.
+  - Child server early exit is detected on the server→client pump: when the
+    child closes its stdout, the proxy stops forwarding, closes the client's
+    stdin, and surfaces the child's exit status as the proxy exit code.
+  - Server stderr is detached (inherited) so a chatty or failing child cannot
+    block or deadlock the proxy's pipes.
+  - Client stdin EOF is handled cleanly: the proxy closes the server's stdin so
+    the child can exit, joins the server pump, and returns the child's status.
+  - Broken pipe to the server (write after the child exited) is treated as a
+    clean shutdown, not a panic.
+  - Broken pipe to the client (write after the client closed stdout) is treated
+    as a clean shutdown, not a panic.
+  - Invalid/non-JSON client lines are validated before forwarding: a line that
+    cannot be parsed as JSON is **not** sent to the server and is dropped (the
+    server would reject it anyway; forwarding it could mask protocol errors and
+    wastes a round trip). A JSON-RPC notification/response that is not a request
+    is still forwarded unchanged (the proxy never alters server-originated or
+    client notification traffic).
+  - Invalid/non-JSON server lines are handled safely: they are passed through to
+    the client unchanged (the client's own parser rejects them), so a malformed
+    server line can never cause the proxy to advertise or fabricate a tool list.
+  - Audit logging is documented as **best-effort**: the proxy records decisions
+    and metadata but treats an audit write failure as non-fatal on the
+    inspect/forward path. The security-critical enforcement decisions
+    (deny / default-deny / batch denial) are not gated on audit success — a
+    failed audit write never weakens a deny. A deny response is still returned
+    to the client even when its audit record cannot be written; the error is
+    logged to stderr and the proxy continues. `tools_list_filtering` audit is
+    likewise best-effort; a failure to record it does not reverse the filtering
+    already applied to the response.
+  - Documented exit codes:
+    - `2`: invalid/unloadable policy (fail closed, server never started)
+    - `3`: child server spawn failure (fail closed)
+    - `4`: internal proxy error (I/O on client/server pipes, audit open failure)
+    - child server exit code: propagated when the child exits first
+    - `0`: normal client EOF shutdown
+  - New unit tests for invalid client/server JSON handling and audit-write
+    failure behavior, and new integration tests for child early exit, server
+    stdout closure, and client EOF.
+  - Keeps `tools/call` deny behavior, `tools/list` filtering, v0.2.6 request
+    tracking tests, and JSON-RPC batch fail-closed behavior unchanged.
+
+### Changed
+
+- `run_proxy` now returns `Result<i32, ProxyError>` carrying an explicit exit
+  code; the CLI maps `ProxyError` variants to documented exit codes and always
+  reaps the child.
+
+### Limitations
+
+- The proxy remains stdio-only, exact-name matching, policy-compatible with
+  `ef-mcp-policy/v0.1`, and experimental/pre-alpha. There is still no audit
+  write to durable storage beyond the `--audit-log` file, no audit rotation,
+  and no fsync beyond the per-write flush.
+- A child that ignores a closed stdin and keeps its stdout open will keep the
+  proxy's server pump alive until the proxy itself is killed; this matches
+  normal stdio MCP server behavior and is documented, not changed.
+
 ## [0.2.6] - 2026-07-09
 
 ### Added

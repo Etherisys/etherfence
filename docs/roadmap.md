@@ -168,6 +168,33 @@
   - No new enforcement semantics or transports; proxy remains stdio-only,
     exact-name-only, experimental
 
+## v0.2.7 - MCP proxy lifecycle and failure-mode hardening
+
+- Hardened the stdio MCP proxy's child-process lifecycle and failure modes
+  (no new enforcement features or transports):
+  - Child server is reaped on every exit path (normal client EOF, child early
+    exit, or proxy error) — no zombie or orphaned server process
+  - Child early exit / server stdout closure is detected and the child's exit
+    code is propagated
+  - Client EOF closes the server's stdin so the child can exit, then the proxy
+    joins the server pump and reaps the child
+  - Broken pipe to the server (write after child exited) is a clean shutdown,
+    not a panic
+  - Broken pipe to the client (write after client closed stdout) is a clean
+    shutdown, not a panic
+  - Invalid/non-JSON client lines are dropped before forwarding (never reach
+    the server); valid JSON-RPC traffic passes through unchanged
+  - Invalid/non-JSON server lines are passed through so the client's own parser
+    rejects them; the proxy never fabricates or advertises a tool list
+  - Audit logging documented as best-effort: a failed audit write never weakens
+    a deny or reverses a `tools/list` filter already applied
+  - Documented exit codes (0 clean EOF, 2 invalid policy, 3 spawn failure,
+    4 internal/audit-open error, child code on early exit)
+  - New unit + integration tests for child early exit, server stdout closure,
+    client EOF, invalid client/server JSON, and audit-open failure
+  - Proxy remains stdio-only, exact-name-only, `ef-mcp-policy/v0.1`-compatible,
+    experimental/pre-alpha
+
 ## v0.2.x ideas
 
 - Expand tested config schemas and platform paths
