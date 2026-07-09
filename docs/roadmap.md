@@ -102,14 +102,24 @@
 - Tests: policy matching, allow/deny decisions, fail-closed behavior, fake stdio MCP server integration, forwarding assertions, and audit redaction
 - v0.1.x scan/report behavior unchanged and backward compatible
 
+## v0.2.1 - MCP tools/list filtering and per-server policy scoping
+
+- `etherfence mcp-proxy --server-name <name>` for selecting an optional per-server MCP policy scope; omitted server name defaults to `default`
+- Backward-compatible `ef-mcp-policy/v0.1` schema extension with optional `[servers.<name>.tools] allow` / `deny` sections
+- Deterministic decision precedence: global deny, server-specific deny, server-specific allow, global allow, then default deny
+- `tools/list` response filtering for tracked `tools/list` requests so denied and default-denied tools are not advertised
+- Fail-safe handling for unexpected successful `tools/list` shapes by advertising an empty tool list rather than passing ambiguous tool advertisements through
+- `tools_list_filtered` audit events with server name, original/filtered counts, allowed tool names, and no full tool schemas or argument values
+- Tests for legacy and per-server policy parsing, precedence, `tools/list` filtering/default deny, unexpected shapes, per-server decisions, and audit metadata
+- Scan behavior remains backward compatible; proxy remains stdio-only and experimental
+
 ## v0.2.x ideas
 
 - Expand tested config schemas and platform paths
 - Add baseline fingerprint migration notes if needed
 - Add richer machine-readable policy checks
 - Improve documentation for safe enterprise rollout
-- Consider MCP proxy policy evolution (per-server scoping, patterns) once real-world examples stabilize
-- Optional `tools/list` response filtering so denied tools are not advertised
+- Consider MCP proxy policy evolution (patterns, richer server identity binding) once real-world examples stabilize
 
 ## Later
 

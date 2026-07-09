@@ -1,9 +1,17 @@
 # Example MCP boundary proxy policy for `etherfence mcp-proxy --policy <file>`.
-# Tool names are matched exactly. The deny list wins over the allow list, and
-# any tool name not in the allow list is denied by default.
+# Tool names are matched exactly. Global deny applies first, then the selected
+# --server-name scope (default: "default"), then global allow. Anything not
+# allowed by the selected scope or global allow list is denied by default.
 schema_version = "ef-mcp-policy/v0.1"
 name = "minimal-mcp-boundary"
 
 [tools]
 allow = ["github.list_repos", "filesystem.read"]
 deny = ["filesystem.read_secret", "shell.run"]
+
+# Optional per-server scope selected with `etherfence mcp-proxy --server-name filesystem`.
+# This preserves legacy global-only policies while letting one file carry
+# narrower rules for different MCP servers.
+[servers.filesystem.tools]
+allow = ["filesystem.read"]
+deny = ["filesystem.read_secret", "filesystem.write", "shell.run"]

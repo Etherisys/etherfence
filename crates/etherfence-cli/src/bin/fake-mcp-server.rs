@@ -28,14 +28,34 @@ fn main() {
         let Some(id) = message.get("id").filter(|id| !id.is_null()) else {
             continue;
         };
-        let response = json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "result": {
-                "echo_method": message.get("method"),
-                "echo_tool": message.pointer("/params/name"),
-            },
-        });
+        let response = match message.get("method").and_then(Value::as_str) {
+            Some("tools/list") => json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": {
+                    "tools": [
+                        {"name": "github.list_repos", "description": "List repositories"},
+                        {"name": "filesystem.read", "description": "Read a file"},
+                        {"name": "filesystem.read_secret", "description": "Secret-bearing schema must not be audited"},
+                        {"name": "shell.run", "description": "Run a command"},
+                        {"name": "browser.open", "description": "Open a browser"}
+                    ]
+                },
+            }),
+            Some("tools/list/weird") => json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": {"tools": "not-an-array"},
+            }),
+            _ => json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": {
+                    "echo_method": message.get("method"),
+                    "echo_tool": message.pointer("/params/name"),
+                },
+            }),
+        };
         writeln!(stdout, "{response}").expect("write fake server stdout");
         stdout.flush().expect("flush fake server stdout");
     }

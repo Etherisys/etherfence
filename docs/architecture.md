@@ -1,6 +1,6 @@
 # EtherFence Architecture
 
-EtherFence v0.2.0 is a small Rust workspace with scan-only posture discovery
+EtherFence v0.2.1 is a small Rust workspace with scan-only posture discovery
 plus an experimental MCP stdio boundary proxy.
 
 ## Crates
@@ -24,12 +24,14 @@ plus an experimental MCP stdio boundary proxy.
 
 ## MCP proxy data flow (experimental)
 
-1. CLI runs `etherfence mcp-proxy --policy <file> -- <server-command> [args...]`.
+1. CLI runs `etherfence mcp-proxy --policy <file> [--server-name <name>] -- <server-command> [args...]`.
 2. The proxy loads and validates the `ef-mcp-policy/v0.1` TOML policy. Any load or validation failure fails closed: the MCP server child process is never started.
-3. The proxy spawns the MCP server child process and pumps newline-delimited JSON-RPC lines in both directions.
-4. `tools/call` requests from the client are checked against the policy: deny list wins, allow list admits, everything else is denied by default. Allowed calls are forwarded unchanged; denied calls receive a JSON-RPC error from the proxy and never reach the server.
-5. All other protocol messages pass through untouched.
-6. Each tool-call decision is optionally appended to a JSONL audit log with timestamp, tool name, decision, reason, and argument key names only (never argument values).
+3. The proxy selects the configured server scope (`--server-name`, default `default`) and spawns the MCP server child process.
+4. It pumps newline-delimited JSON-RPC lines in both directions.
+5. `tools/call` requests from the client are checked against the policy: global deny, server deny, server allow, global allow, then default deny. Allowed calls are forwarded unchanged; denied calls receive a JSON-RPC error from the proxy and never reach the server.
+6. Client `tools/list` request ids are tracked; matching successful server responses have `result.tools` filtered with the same policy so denied/default-denied tools are not advertised. Unexpected successful `tools/list` shapes are rewritten to advertise an empty tools list.
+7. Unrelated protocol messages pass through untouched.
+8. Tool-call and tool-list filter decisions are optionally appended to a JSONL audit log with timestamp, server name, decision, reason, argument key names only for calls, and count/name metadata only for list filtering.
 
 See `docs/mcp-proxy.md` for details and limitations.
 

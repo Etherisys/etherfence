@@ -37,14 +37,28 @@ struct ProxyRun {
 }
 
 fn run_proxy_with_input(name: &str, policy_path: &PathBuf, input_lines: &[&str]) -> ProxyRun {
+    run_proxy_with_input_for_server(name, policy_path, None, input_lines)
+}
+
+fn run_proxy_with_input_for_server(
+    name: &str,
+    policy_path: &PathBuf,
+    server_name: Option<&str>,
+    input_lines: &[&str],
+) -> ProxyRun {
     let server_log = temp_path(&format!("{name}-server-received"), "jsonl");
     let audit_log = temp_path(&format!("{name}-audit"), "jsonl");
-    let mut child = Command::new(env!("CARGO_BIN_EXE_etherfence"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_etherfence"));
+    command
         .arg("mcp-proxy")
         .arg("--policy")
         .arg(policy_path)
         .arg("--audit-log")
-        .arg(&audit_log)
+        .arg(&audit_log);
+    if let Some(server_name) = server_name {
+        command.arg("--server-name").arg(server_name);
+    }
+    let mut child = command
         .arg("--")
         .arg(env!("CARGO_BIN_EXE_fake-mcp-server"))
         .env("FAKE_MCP_SERVER_LOG", &server_log)
@@ -169,6 +183,99 @@ fn proxy_audit_log_records_decisions_without_secret_values() {
     assert!(audit.contains("api_token"));
     assert!(!audit.contains("sk-super-secret-value-12345"));
     assert!(!audit.contains("/home/user/notes.txt"));
+
+    let _ = std::fs::remove_file(&policy);
+    let _ = std::fs::remove_file(&run.server_log);
+    let _ = std::fs::remove_file(&run.audit_log);
+}
+
+#[test]
+fn proxy_filters_tools_list_and_audits_metadata_without_schemas() {
+    let policy = write_temp_policy("list-filter", TEST_POLICY);
+    let run = run_proxy_with_input(
+        "list-filter",
+        &policy,
+        &[r#"{"jsonrpc":"2.0","id":10,"method":"tools/list","params":{}}"#],
+    );
+    assert!(
+        run.output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&run.output.stderr)
+    );
+
+    let lines = stdout_json_lines(&run.output);
+    let response = response_with_id(&lines, 10);
+    let tools = response["result"]["tools"].as_array().expect("tools array");
+    let names: Vec<&str> = tools
+        .iter()
+        .map(|tool| tool["name"].as_str().expect("tool name"))
+        .collect();
+    assert_eq!(names, vec!["github.list_repos", "filesystem.read"]);
+    assert!(!response.to_string().contains("shell.run"));
+    assert!(!response.to_string().contains("browser.open"));
+
+    let audit = std::fs::read_to_string(&run.audit_log).expect("audit log");
+    let record: Value = serde_json::from_str(audit.lines().next().expect("one audit record"))
+        .expect("audit line is JSON");
+    assert_eq!(record["event"], "tools_list_filtered");
+    assert_eq!(record["server"], "default");
+    assert_eq!(record["original_count"], 5);
+    assert_eq!(record["filtered_count"], 2);
+    assert_eq!(
+        record["allowed_tools"],
+        serde_json::json!(["filesystem.read", "github.list_repos"])
+    );
+    assert!(!audit.contains("Secret-bearing schema"));
+    assert!(!audit.contains("Run a command"));
+
+    let _ = std::fs::remove_file(&policy);
+    let _ = std::fs::remove_file(&run.server_log);
+    let _ = std::fs::remove_file(&run.audit_log);
+}
+
+#[test]
+fn proxy_per_server_policy_changes_tools_list_and_call_decisions() {
+    let scoped_policy = r#"
+schema_version = "ef-mcp-policy/v0.1"
+name = "scoped-mcp-boundary"
+
+[tools]
+allow = ["github.list_repos"]
+
+[servers.filesystem.tools]
+allow = ["filesystem.read"]
+deny = ["github.list_repos"]
+"#;
+    let policy = write_temp_policy("server-scope", scoped_policy);
+    let run = run_proxy_with_input_for_server(
+        "server-scope",
+        &policy,
+        Some("filesystem"),
+        &[
+            r#"{"jsonrpc":"2.0","id":11,"method":"tools/list","params":{}}"#,
+            r#"{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"github.list_repos","arguments":{}}}"#,
+            r#"{"jsonrpc":"2.0","id":13,"method":"tools/call","params":{"name":"filesystem.read","arguments":{}}}"#,
+        ],
+    );
+    assert!(run.output.status.success());
+    let lines = stdout_json_lines(&run.output);
+    let list = response_with_id(&lines, 11);
+    let tools = list["result"]["tools"].as_array().expect("tools array");
+    let names: Vec<&str> = tools
+        .iter()
+        .map(|tool| tool["name"].as_str().expect("tool name"))
+        .collect();
+    assert_eq!(names, vec!["filesystem.read"]);
+    assert_eq!(response_with_id(&lines, 12)["error"]["code"], -32000);
+    assert_eq!(
+        response_with_id(&lines, 13)["result"]["echo_tool"],
+        "filesystem.read"
+    );
+
+    let audit = std::fs::read_to_string(&run.audit_log).expect("audit log");
+    assert!(audit.contains("\"server\":\"filesystem\""));
+    assert!(audit.contains("server-specific policy deny list"));
+    assert!(audit.contains("server-specific policy allow list"));
 
     let _ = std::fs::remove_file(&policy);
     let _ = std::fs::remove_file(&run.server_log);

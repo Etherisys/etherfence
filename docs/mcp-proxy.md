@@ -2,8 +2,9 @@
 
 `etherfence mcp-proxy` is the first prototype in the EtherFence v0.2.x
 runtime-control line. It is a minimal MCP **stdio** boundary proxy that sits
-between an MCP client and an MCP server, audits MCP tool calls, and
-allows/denies them deterministically using a small TOML policy.
+between an MCP client and an MCP server, audits MCP tool calls, filters tool
+advertisements, and allows/denies tool calls deterministically using a small
+TOML policy.
 
 Status: **experimental prototype**. It is not production-ready, it is not a
 daemon or endpoint agent, and it does not replace the v0.1.x scan-only
@@ -12,8 +13,11 @@ posture commands, which are unchanged.
 ## Usage
 
 ```sh
-etherfence mcp-proxy --policy <file> [--audit-log <file>] -- <server-command> [args...]
+etherfence mcp-proxy --policy <file> [--audit-log <file>] [--server-name <name>] -- <server-command> [args...]
 ```
+
+`--server-name` selects an optional per-server policy scope. If omitted, the
+server name is `default`.
 
 The proxy:
 
@@ -28,8 +32,9 @@ The proxy:
 4. Inspects `tools/call` requests before forwarding. Allowed calls are
    forwarded unchanged; denied calls are answered with a safe JSON-RPC error
    and are **not** forwarded to the server.
-5. Leaves every other protocol message (`initialize`, `tools/list`,
-   responses, notifications, and so on) untouched.
+5. Tracks client `tools/list` requests and filters the matching server
+   responses so denied and default-denied tools are not advertised.
+6. Leaves unrelated protocol messages untouched.
 
 Example, wrapping a filesystem MCP server:
 
@@ -37,6 +42,7 @@ Example, wrapping a filesystem MCP server:
 etherfence mcp-proxy \
   --policy /home/user/mcp-boundary.toml \
   --audit-log /home/user/etherfence-mcp-audit.jsonl \
+  --server-name filesystem \
   -- npx -y @modelcontextprotocol/server-filesystem /home/user/projects
 ```
 
@@ -48,7 +54,8 @@ waits for the server to exit, and exits with the server's exit code.
 
 ## Policy
 
-Policies use schema `ef-mcp-policy/v0.1`:
+Policies use schema `ef-mcp-policy/v0.1`. Legacy v0.2.0 global-only policies
+remain valid:
 
 ```toml
 schema_version = "ef-mcp-policy/v0.1"
@@ -59,23 +66,62 @@ allow = ["github.list_repos", "filesystem.read"]
 deny = ["filesystem.read_secret", "shell.run"]
 ```
 
+v0.2.1 adds optional per-server sections keyed by `--server-name`:
+
+```toml
+schema_version = "ef-mcp-policy/v0.1"
+name = "mcp-boundary"
+
+[tools]
+allow = ["github.list_repos"]
+deny = ["shell.run"]
+
+[servers.filesystem.tools]
+allow = ["filesystem.read"]
+deny = ["filesystem.read_secret", "filesystem.write"]
+```
+
 An example lives at `examples/policies/mcp-minimal-boundary.toml`.
 
-Decision rules, in order, all deterministic:
+Decision rules, in exact order:
 
-1. Tool name in `deny` → **deny** (deny wins over allow).
-2. Tool name in `allow` → **allow**.
-3. Anything else → **deny** (default deny).
+1. Tool name in global `[tools].deny` -> **deny**.
+2. Tool name in `[servers.<server-name>.tools].deny` -> **deny**.
+3. Tool name in `[servers.<server-name>.tools].allow` -> **allow**.
+4. Tool name in global `[tools].allow` -> **allow**.
+5. Anything else -> **deny** (default deny).
 
-Tool names are matched exactly. There are no globs, prefixes, or regular
-expressions in `ef-mcp-policy/v0.1`.
+Deny therefore always overrides allow. Tool names are matched exactly. There
+are no globs, prefixes, or regular expressions in `ef-mcp-policy/v0.1`.
 
 Fail-closed cases:
 
-- Missing, unreadable, or syntactically invalid policy file → the proxy exits
+- Missing, unreadable, or syntactically invalid policy file -> the proxy exits
   before starting the server (decision `policy_error`).
-- Unsupported `schema_version` or empty `name` → same fail-closed exit.
-- A `tools/call` request whose tool name is missing or not a string → denied.
+- Unsupported `schema_version` or empty `name` -> same fail-closed exit.
+- A `tools/call` request whose tool name is missing or not a string -> denied.
+- A successful `tools/list` response with an unexpected shape -> rewritten to
+  advertise an empty `tools` array for that response.
+
+## `tools/list` filtering
+
+The proxy records the id of each forwarded client `tools/list` request. When a
+server response with the same id returns successfully, `result.tools` is
+filtered with the same policy decision rules used for `tools/call`:
+
+- denied tools are removed;
+- default-denied/unlisted tools are removed;
+- entries without a string `name` are removed;
+- allowed entries remain otherwise unchanged, preserving their normal MCP tool
+  structure for the client.
+
+Unrelated server-to-client messages are not modified. Server errors for a
+tracked `tools/list` request pass through unchanged. If a tracked successful
+`tools/list` response has a missing/non-object `result`, missing `tools`, or a
+non-array `tools`, the proxy fails safely for that response by returning a
+valid response shape that advertises no tools (`"tools": []`) and writes a
+`tools_list_filtered` audit event. This avoids passing an unsafe or ambiguous
+tool advertisement through the boundary.
 
 ## Denied tool calls
 
@@ -90,7 +136,7 @@ Denied requests receive a JSON-RPC error and never reach the server:
     "message": "EtherFence MCP proxy denied this tool call by policy",
     "data": {
       "tool": "shell.run",
-      "reason": "tool name is in the policy deny list"
+      "reason": "tool name is in the global policy deny list"
     }
   }
 }
@@ -102,26 +148,41 @@ audited.
 
 ## Audit log
 
-`--audit-log <file>` appends one JSON object per line (JSONL). Example:
+`--audit-log <file>` appends one JSON object per line (JSONL). Tool-call
+example:
 
 ```json
-{"ts":"2026-07-09T02:04:56Z","event":"tool_call_decision","policy":"minimal-mcp-boundary","method":"tools/call","request_id":3,"tool":"shell.run","argument_keys":["api_token","command"],"decision":"deny","reason":"tool name is in the policy deny list"}
+{"ts":"2026-07-09T02:04:56Z","event":"tool_call_decision","policy":"minimal-mcp-boundary","server":"filesystem","method":"tools/call","request_id":3,"tool":"shell.run","argument_keys":["api_token","command"],"original_count":null,"filtered_count":null,"allowed_tools":[],"decision":"deny","reason":"tool name is in the global policy deny list"}
+```
+
+Tool-list filtering example:
+
+```json
+{"ts":"2026-07-09T02:05:01Z","event":"tools_list_filtered","policy":"minimal-mcp-boundary","server":"filesystem","method":"tools/list","request_id":10,"tool":null,"argument_keys":[],"original_count":5,"filtered_count":1,"allowed_tools":["filesystem.read"],"decision":"allow","reason":"filtered tools/list response using MCP proxy policy; denied and default-denied tools were removed"}
 ```
 
 Fields:
 
 - `ts`: RFC 3339 UTC timestamp
-- `event`: `tool_call_decision`, `batch_denied`, or `policy_load_error`
+- `event`: `tool_call_decision`, `tools_list_filtered`, `batch_denied`, or
+  `policy_load_error`
 - `policy`: policy `name` (absent for policy load errors)
-- `method`: JSON-RPC method (`tools/call`)
+- `server`: selected server name when applicable
+- `method`: JSON-RPC method (`tools/call` or `tools/list`)
 - `request_id`: JSON-RPC request id when present
-- `tool`: tool name when it could be extracted
+- `tool`: tool name for tool-call decisions when it could be extracted
 - `argument_keys`: sorted tool-call argument **key names only**
+- `original_count`: original advertised tool count for `tools_list_filtered`
+- `filtered_count`: remaining advertised tool count for `tools_list_filtered`
+- `allowed_tools`: allowed tool names retained in a filtered `tools/list`
+  response
 - `decision`: `allow`, `deny`, or `policy_error`
-- `reason`: the policy reason for the decision
+- `reason`: the policy or fail-safe reason for the decision
 
-Argument values are never written to the audit log, so secret values passed
-as tool arguments do not leak into it. Only argument key names are recorded.
+Argument values are never written to the audit log, so secret values passed as
+tool arguments do not leak into it. Full tool schemas/descriptions are not
+written for `tools_list_filtered`; only counts and allowed tool names are
+recorded.
 
 Audit failures are fail closed: if the audit log file cannot be opened at
 startup, the proxy exits before starting the MCP server; if writing an audit
@@ -132,10 +193,13 @@ with an error instead of continuing unaudited.
 
 - stdio transport only; HTTP/SSE MCP transports are not supported.
 - Newline-delimited JSON-RPC framing only; each message must be one line.
-- Exact tool-name matching only; no wildcard or per-server scoping.
-- The proxy inspects `tools/call` requests. It does not inspect tool results,
-  resources, prompts, or sampling traffic, and it does not rewrite
-  `tools/list` responses, so denied tools may still be listed to the client.
+- Exact tool-name matching only; no wildcard, prefix, regex, argument-aware, or
+  schema-aware rules.
+- Per-server scoping is selected explicitly with `--server-name`; the proxy
+  does not auto-discover or authenticate MCP server identity.
+- The proxy inspects `tools/call` requests and filters tracked `tools/list`
+  responses. It does not inspect tool results, resources, prompts, or sampling
+  traffic.
 - JSON-RPC batch arrays are not unpacked. A batch line from the client is
   denied fail closed — answered with a single null-id JSON-RPC error, audited
   as `batch_denied`, and never forwarded — even if every call inside it names
@@ -143,4 +207,5 @@ with an error instead of continuing unaudited.
 - Non-JSON input lines are forwarded unchanged for the server to reject,
   matching plain JSON-RPC behavior.
 - One client, one server, one process; no daemon mode, shell hooks, command
-  interception, or network interception — those remain out of scope.
+  interception, terminal-command scanning, or network interception — those
+  remain out of scope.
