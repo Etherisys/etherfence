@@ -66,6 +66,9 @@ enum Command {
         /// Append JSONL audit records for tool-call decisions to this file.
         #[arg(long)]
         audit_log: Option<PathBuf>,
+        /// Logical MCP server policy scope. Defaults to `default`.
+        #[arg(long, default_value = "default")]
+        server_name: String,
         /// MCP server command and arguments, after `--`.
         #[arg(last = true, required = true)]
         server_command: Vec<String>,
@@ -164,14 +167,16 @@ fn main() -> Result<()> {
         Command::McpProxy {
             policy,
             audit_log,
+            server_name,
             server_command,
-        } => run_mcp_proxy(&policy, audit_log.as_deref(), &server_command),
+        } => run_mcp_proxy(&policy, audit_log.as_deref(), &server_name, &server_command),
     }
 }
 
 fn run_mcp_proxy(
     policy_path: &Path,
     audit_log_path: Option<&Path>,
+    server_name: &str,
     server_command: &[String],
 ) -> Result<()> {
     let mut audit_log = audit_log_path
@@ -195,6 +200,7 @@ fn run_mcp_proxy(
         std::io::stdout(),
         server_command,
         &policy,
+        server_name,
         audit_log,
     )?;
     if exit_code != 0 {

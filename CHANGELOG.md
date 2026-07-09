@@ -4,10 +4,58 @@ All notable changes to EtherFence are documented in this file.
 
 EtherFence is pre-alpha. The v0.1.x line is scan-only; nothing in v0.1.x
 performs runtime blocking, MCP proxying, daemon mode, shell hooks, command
-interception, terminal-command scanning, or network interception. v0.2.0
-adds one opt-in experimental runtime component: an MCP stdio boundary proxy.
+interception, terminal-command scanning, or network interception. v0.2.x adds
+one opt-in experimental runtime component: an MCP stdio boundary proxy.
 EtherFence still has no daemon mode, shell hooks, command interception,
 terminal-command scanning, or network interception.
+
+## [0.2.1] - 2026-07-09
+
+### Added
+
+- `etherfence mcp-proxy --server-name <name>` for selecting an optional
+  per-server MCP policy scope. If omitted, the server name defaults to
+  `default`.
+- Backward-compatible `ef-mcp-policy/v0.1` schema extension with optional
+  `[servers.<name>.tools] allow` / `deny` sections alongside legacy global
+  `[tools]` rules.
+- Deterministic MCP proxy decision precedence: global deny, server-specific
+  deny, server-specific allow, global allow, then default deny. Deny still
+  overrides allow.
+- `tools/list` response filtering for tracked client `tools/list` requests:
+  denied, default-denied, and malformed unnamed tool entries are removed so
+  unavailable tools are not advertised to the client.
+- Fail-safe handling for unexpected successful `tools/list` response shapes:
+  the proxy rewrites the response to advertise an empty `tools` array instead
+  of passing ambiguous tool advertisements through.
+- New `tools_list_filtered` JSONL audit event with server name,
+  original/filtered counts, allowed tool names, and reason. Full tool schemas,
+  descriptions, and argument values are not logged.
+- Tests for legacy global-only policy parsing, per-server policy parsing,
+  precedence, `tools/list` deny/default-deny filtering, unexpected list shapes,
+  per-server decision changes, and audit metadata redaction.
+
+### Changed
+
+- Version bumped to 0.2.1. All scan/report behavior remains backward
+  compatible; scan reports now carry version `0.2.1`.
+- `examples/policies/mcp-minimal-boundary.toml`, README, MCP proxy docs,
+  threat model, architecture, and roadmap now document per-server policy
+  scoping and `tools/list` filtering.
+
+### Known limitations
+
+- The MCP proxy remains an experimental prototype, not production-ready.
+- stdio transport with newline-delimited JSON-RPC framing only; HTTP/SSE
+  transports are not supported.
+- Exact tool-name matching only; no wildcard, prefix, regex, argument-aware,
+  or schema-aware rules.
+- Per-server scoping is operator-selected with `--server-name`; the proxy does
+  not auto-discover or authenticate server identity.
+- Only `tools/call` requests and tracked `tools/list` responses are handled;
+  tool results, resources, prompts, sampling traffic, daemon mode, shell hooks,
+  command interception, terminal-command scanning, and network interception
+  remain out of scope.
 
 ## [0.2.0] - 2026-07-09
 

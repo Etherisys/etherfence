@@ -1,7 +1,7 @@
 # EtherFence Threat Model
 
 Status: pre-alpha draft, originally for v0.1.0 scan-only posture discovery,
-with a v0.2.0 addendum for the experimental MCP boundary proxy.
+with v0.2.x addenda for the experimental MCP boundary proxy.
 
 ## Assets
 
@@ -29,7 +29,7 @@ with a v0.2.0 addendum for the experimental MCP boundary proxy.
 
 The scanner reports conservative hints from known config paths and fixture-backed formats. It may miss custom locations, unsupported schemas, dynamically generated settings, and runtime-only capabilities. A finding indicates review priority, not confirmed compromise.
 
-## v0.2.0 addendum: experimental MCP boundary proxy
+## v0.2.x addendum: experimental MCP boundary proxy
 
 `etherfence mcp-proxy` introduces one opt-in, per-invocation runtime
 component. Its trust boundary assumptions:
@@ -37,14 +37,21 @@ component. Its trust boundary assumptions:
 - The proxy only governs the single MCP server it launches over stdio. Any
   MCP server the client talks to directly, or over HTTP/SSE, is outside the
   boundary.
-- Enforcement is on `tools/call` request tool names only. Tool results,
-  resources, prompts, and `tools/list` traffic pass through unmodified, so a
-  cooperative-but-misbehaving server is not constrained beyond which tool
-  calls reach it.
+- Enforcement is on `tools/call` request tool names plus `tools/list`
+  advertisement filtering. Tool results, resources, prompts, and sampling
+  traffic still pass through unmodified, so a cooperative-but-misbehaving
+  server is not constrained beyond which tool calls reach it and which tools
+  are advertised through tracked `tools/list` responses.
+- v0.2.1 policy scoping is selected explicitly with `--server-name` (default:
+  `default`). The proxy does not auto-discover or authenticate server
+  identity; the operator must bind the right policy scope to the wrapped MCP
+  server command.
 - The policy fails closed: if it cannot be loaded and validated, the MCP
   server is never started.
 - The audit log records decisions and argument key names only; argument
-  values are excluded so secrets do not leak into the log.
+  values are excluded so secrets do not leak into the log. `tools/list`
+  filtering records counts and allowed tool names only, not full tool schemas
+  or descriptions.
 - JSON-RPC batch arrays from the client are denied fail closed rather than
   unpacked, so a batch cannot smuggle a denied tool call past per-message
   inspection.

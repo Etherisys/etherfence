@@ -15,10 +15,14 @@ pub struct AuditRecord {
     pub ts: String,
     pub event: String,
     pub policy: Option<String>,
+    pub server: Option<String>,
     pub method: Option<String>,
     pub request_id: Option<Value>,
     pub tool: Option<String>,
     pub argument_keys: Vec<String>,
+    pub original_count: Option<usize>,
+    pub filtered_count: Option<usize>,
+    pub allowed_tools: Vec<String>,
     pub decision: String,
     pub reason: String,
 }
@@ -26,7 +30,7 @@ pub struct AuditRecord {
 impl AuditRecord {
     pub fn tool_call(
         policy_name: &str,
-        method: &str,
+        server_name: &str,
         request_id: Option<Value>,
         tool: Option<&str>,
         argument_keys: Vec<String>,
@@ -37,25 +41,58 @@ impl AuditRecord {
             ts: rfc3339_utc_now(),
             event: "tool_call_decision".to_string(),
             policy: Some(policy_name.to_string()),
-            method: Some(method.to_string()),
+            server: Some(server_name.to_string()),
+            method: Some("tools/call".to_string()),
             request_id,
             tool: tool.map(str::to_string),
             argument_keys,
+            original_count: None,
+            filtered_count: None,
+            allowed_tools: Vec::new(),
             decision: decision.as_str().to_string(),
             reason: reason.to_string(),
         }
     }
 
-    pub fn batch_denied(policy_name: &str, reason: &str) -> Self {
+    pub fn batch_denied(policy_name: &str, server_name: &str, reason: &str) -> Self {
         AuditRecord {
             ts: rfc3339_utc_now(),
             event: "batch_denied".to_string(),
             policy: Some(policy_name.to_string()),
+            server: Some(server_name.to_string()),
             method: None,
             request_id: None,
             tool: None,
             argument_keys: Vec::new(),
+            original_count: None,
+            filtered_count: None,
+            allowed_tools: Vec::new(),
             decision: Decision::Deny.as_str().to_string(),
+            reason: reason.to_string(),
+        }
+    }
+
+    pub fn tools_list_filtered(
+        policy_name: &str,
+        server_name: &str,
+        request_id: Option<Value>,
+        original_count: usize,
+        allowed_tools: Vec<String>,
+        reason: &str,
+    ) -> Self {
+        AuditRecord {
+            ts: rfc3339_utc_now(),
+            event: "tools_list_filtered".to_string(),
+            policy: Some(policy_name.to_string()),
+            server: Some(server_name.to_string()),
+            method: Some("tools/list".to_string()),
+            request_id,
+            tool: None,
+            argument_keys: Vec::new(),
+            original_count: Some(original_count),
+            filtered_count: Some(allowed_tools.len()),
+            allowed_tools,
+            decision: Decision::Allow.as_str().to_string(),
             reason: reason.to_string(),
         }
     }
@@ -65,10 +102,14 @@ impl AuditRecord {
             ts: rfc3339_utc_now(),
             event: "policy_load_error".to_string(),
             policy: None,
+            server: None,
             method: None,
             request_id: None,
             tool: None,
             argument_keys: Vec::new(),
+            original_count: None,
+            filtered_count: None,
+            allowed_tools: Vec::new(),
             decision: Decision::PolicyError.as_str().to_string(),
             reason: reason.to_string(),
         }
@@ -187,7 +228,7 @@ mod tests {
     fn audit_record_serializes_without_argument_values() {
         let record = AuditRecord::tool_call(
             "minimal-mcp-boundary",
-            "tools/call",
+            "default",
             Some(json!(7)),
             Some("filesystem.read"),
             vec!["api_token".to_string(), "path".to_string()],
