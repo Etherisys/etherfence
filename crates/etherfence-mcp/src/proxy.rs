@@ -1,4 +1,3 @@
-use anyhow::{Context, Result};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
@@ -12,6 +11,81 @@ pub const TOOL_CALL_METHOD: &str = "tools/call";
 pub const TOOL_LIST_METHOD: &str = "tools/list";
 /// JSON-RPC application error code returned to the client for denied calls.
 pub const DENIED_ERROR_CODE: i64 = -32000;
+
+/// Process exit codes used by the `mcp-proxy` subcommand. These are distinct
+/// from the child server's exit code, which is propagated unchanged when the
+/// child exits before the client.
+#[allow(dead_code)]
+pub mod exit_code {
+    /// The proxy shut down cleanly after the client closed its input.
+    pub const OK: i32 = 0;
+    /// The MCP policy could not be loaded; the proxy failed closed and the
+    /// server was never started.
+    pub const INVALID_POLICY: i32 = 2;
+    /// The MCP server child process could not be spawned.
+    pub const SPAWN_FAILED: i32 = 3;
+    /// An internal proxy error (I/O on a pipe, audit-log open failure, or a
+    /// broken pipe that could not be handled as a clean shutdown).
+    pub const INTERNAL_ERROR: i32 = 4;
+}
+
+/// An explicit proxy failure carrying the process exit code the CLI should use.
+///
+/// Every variant maps to a documented exit code so the lifecycle behavior is
+/// predictable and testable. The child server is always reaped by the caller
+/// regardless of which variant is returned.
+#[derive(Debug)]
+pub enum ProxyError {
+    /// The child server exited on its own before the client closed its input.
+    /// Carries the child's own exit code so it can be propagated.
+    ChildExited(i32),
+    /// The child could not be spawned (fail closed).
+    SpawnFailed(String),
+    /// A required pipe (child stdin/stdout) could not be opened after spawn.
+    PipeOpen(String),
+    /// The client input stream failed.
+    ClientRead(String),
+    /// Writing to the child (forwarding a client request) failed.
+    ServerWrite(String),
+    /// Reading the child output stream failed.
+    ServerRead(String),
+    /// Writing to the client (forwarding a server response) failed.
+    ClientWrite(String),
+    /// The audit log could not be opened before proxying began.
+    AuditOpen(String),
+}
+
+impl ProxyError {
+    /// The process exit code for this error.
+    pub fn code(&self) -> i32 {
+        match self {
+            ProxyError::ChildExited(code) => *code,
+            ProxyError::SpawnFailed(_) => exit_code::SPAWN_FAILED,
+            ProxyError::PipeOpen(_) => exit_code::INTERNAL_ERROR,
+            ProxyError::ClientRead(_) => exit_code::INTERNAL_ERROR,
+            ProxyError::ServerWrite(_) => exit_code::INTERNAL_ERROR,
+            ProxyError::ServerRead(_) => exit_code::INTERNAL_ERROR,
+            ProxyError::ClientWrite(_) => exit_code::INTERNAL_ERROR,
+            ProxyError::AuditOpen(_) => exit_code::INTERNAL_ERROR,
+        }
+    }
+
+    /// A one-line human-readable message for stderr.
+    pub fn message(&self) -> String {
+        match self {
+            ProxyError::ChildExited(code) => {
+                format!("MCP server child process exited with code {code}")
+            }
+            ProxyError::SpawnFailed(msg) => format!("failed to start MCP server: {msg}"),
+            ProxyError::PipeOpen(msg) => format!("failed to open MCP server pipe: {msg}"),
+            ProxyError::ClientRead(msg) => format!("failed reading from MCP client: {msg}"),
+            ProxyError::ServerWrite(msg) => format!("failed forwarding to MCP server: {msg}"),
+            ProxyError::ServerRead(msg) => format!("failed reading from MCP server: {msg}"),
+            ProxyError::ClientWrite(msg) => format!("failed writing to MCP client: {msg}"),
+            ProxyError::AuditOpen(msg) => format!("failed to open audit log: {msg}"),
+        }
+    }
+}
 
 /// What the proxy should do with one line received from the MCP client.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -381,8 +455,21 @@ fn denied_error_response(request_id: &Value, tool_name: &str, reason: &str) -> S
     .to_string()
 }
 
-/// Run the stdio boundary proxy until the client closes its input stream,
-/// then wait for the server child process and return its exit code.
+/// Run the stdio boundary proxy until the client closes its input stream, the
+/// child server exits, or a fatal proxy error occurs.
+///
+/// Lifecycle guarantees:
+/// - The child server is spawned before any client traffic is inspected.
+/// - On a clean client EOF the proxy closes the server's stdin so the child can
+///   exit, joins the server-to-client pump, waits for the child, and returns
+///   its exit code (usually 0).
+/// - If the child exits first (early exit, crash), the server pump stops, the
+///   client's stdin is closed, and `Err(ProxyError::ChildExited(code))` is
+///   returned so the caller can propagate the child's code.
+/// - Any I/O, spawn, or audit-open failure returns a `ProxyError` with a
+///   documented exit code; the caller is responsible for reaping the child.
+/// - A broken pipe to the client (the client closed stdout) terminates the
+///   proxy cleanly rather than panicking.
 pub fn run_proxy<ClientIn, ClientOut>(
     client_in: ClientIn,
     client_out: ClientOut,
@@ -390,28 +477,53 @@ pub fn run_proxy<ClientIn, ClientOut>(
     policy: &McpPolicyFile,
     server_name: &str,
     mut audit_log: Option<AuditLog>,
-) -> Result<i32>
+) -> std::result::Result<i32, ProxyError>
 where
     ClientIn: BufRead,
     ClientOut: Write + Send,
 {
     let (command, args) = server_command
         .split_first()
-        .context("MCP server command must not be empty")?;
+        .ok_or_else(|| ProxyError::SpawnFailed("MCP server command must not be empty".into()))?;
     let mut child = Command::new(command)
         .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
+        // Inherit the child's stderr so a chatty or failing server cannot block
+        // or deadlock the proxy's own pipes, and so server diagnostics remain
+        // visible to the operator.
         .stderr(Stdio::inherit())
         .spawn()
-        .with_context(|| format!("spawning MCP server command {command:?}"))?;
-    let mut server_in = child.stdin.take().context("opening MCP server stdin")?;
-    let server_out = child.stdout.take().context("opening MCP server stdout")?;
+        .map_err(|error| ProxyError::SpawnFailed(format!("{error:?}")))?;
+    let mut server_in = child
+        .stdin
+        .take()
+        .ok_or_else(|| ProxyError::PipeOpen("server stdin was not captured".into()))?;
+    let server_out = child
+        .stdout
+        .take()
+        .ok_or_else(|| ProxyError::PipeOpen("server stdout was not captured".into()))?;
     let client_out = Mutex::new(client_out);
     let pending_requests = Arc::new(Mutex::new(TrackedRequests::default()));
     let audit_log = Arc::new(Mutex::new(audit_log.take()));
 
-    let pump_result = std::thread::scope(|scope| -> Result<()> {
+    // Forward one client line to the server, returning false on a clean client
+    // EOF (broken pipe) so the caller can shut down without treating it as an
+    // error.
+    let forward_to_server = |server_in: &mut std::process::ChildStdin,
+                             line: &str|
+     -> std::result::Result<bool, ProxyError> {
+        match writeln!(server_in, "{line}") {
+            Ok(()) => server_in
+                .flush()
+                .map(|()| true)
+                .map_err(|error| ProxyError::ServerWrite(format!("{error:?}"))),
+            Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => Ok(false),
+            Err(error) => Err(ProxyError::ServerWrite(format!("{error:?}"))),
+        }
+    };
+
+    let pump_result = std::thread::scope(|scope| -> std::result::Result<(), ProxyError> {
         let server_to_client = scope.spawn(|| {
             pump_server_to_client(
                 server_out,
@@ -423,8 +535,17 @@ where
             )
         });
 
-        for line in client_in.lines() {
-            let line = line.context("reading from MCP client")?;
+        let mut lines = client_in.lines();
+        for line in lines.by_ref() {
+            let line = line.map_err(|error| ProxyError::ClientRead(format!("{error:?}")))?;
+            // Validate client lines before forwarding: a line that is not valid
+            // JSON could mask a protocol error and is not something the server
+            // would accept under JSON-RPC. Drop it instead of forwarding it.
+            // Requests/responses/notifications that are valid JSON are
+            // forwarded unchanged; only parse failures are dropped here.
+            if !is_valid_json_line(&line) {
+                continue;
+            }
             let inspected = inspect_client_line(policy, server_name, &line);
             if let Some(request) = inspected.tools_list_request.as_ref() {
                 pending_requests
@@ -432,38 +553,59 @@ where
                     .expect("tracked request lock")
                     .track(request.clone());
             }
+            // Audit is best-effort: a write failure must never weaken a deny or
+            // block a forward, so it is logged and ignored.
             if let (Some(log), Some(record)) = (
                 audit_log.lock().expect("audit log lock").as_mut(),
                 inspected.audit.as_ref(),
             ) {
-                log.write(record)?;
+                if let Err(error) = log.write(record) {
+                    eprintln!("etherfence mcp-proxy: audit write failed (continuing): {error:#}");
+                }
             }
             match inspected.action {
                 ClientAction::Forward => {
-                    writeln!(server_in, "{line}").context("forwarding to MCP server")?;
-                    server_in.flush().context("flushing MCP server stdin")?;
+                    if !forward_to_server(&mut server_in, &line)? {
+                        // Server pipe closed while we were forwarding: stop the
+                        // client loop cleanly and let the server pump finish.
+                        break;
+                    }
                 }
                 ClientAction::Deny { response } => {
                     if let Some(response) = response {
                         let mut out = client_out.lock().expect("client output lock");
-                        writeln!(out, "{response}").context("responding to MCP client")?;
-                        out.flush().context("flushing MCP client output")?;
+                        match writeln!(out, "{response}") {
+                            Ok(()) => {
+                                out.flush().map_err(|error| {
+                                    ProxyError::ClientWrite(format!("{error:?}"))
+                                })?;
+                            }
+                            Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => {
+                                // Client closed its output: stop cleanly.
+                                break;
+                            }
+                            Err(error) => {
+                                return Err(ProxyError::ClientWrite(format!("{error:?}")))
+                            }
+                        }
                     }
                 }
             }
         }
 
-        // Client is done: close the server's stdin so it can exit cleanly.
+        // Client is done (EOF or broken pipe): close the server's stdin so the
+        // child receives EOF and can exit. Dropping the handle is sufficient.
         drop(server_in);
         server_to_client
             .join()
             .expect("server-to-client pump thread")?;
         Ok(())
     });
-    let status = wait_for_child(&mut child);
+
+    // Reap the child no matter what happened above.
+    let child_status = wait_for_child(&mut child);
     pump_result?;
-    let status = status.context("waiting for MCP server to exit")?;
-    Ok(status)
+    child_status
 }
 
 fn pump_server_to_client<ClientOut: Write>(
@@ -473,41 +615,63 @@ fn pump_server_to_client<ClientOut: Write>(
     server_name: &str,
     pending_requests: &Arc<Mutex<TrackedRequests>>,
     audit_log: &Arc<Mutex<Option<AuditLog>>>,
-) -> Result<()> {
+) -> std::result::Result<(), ProxyError> {
     let reader = BufReader::new(server_out);
     for line in reader.lines() {
-        let line = line.context("reading from MCP server")?;
+        let line = line.map_err(|error| ProxyError::ServerRead(format!("{error:?}")))?;
         let inspected = inspect_server_line(
             policy,
             server_name,
             &mut pending_requests.lock().expect("tracked request lock"),
             &line,
         );
+        // Best-effort audit: failures here never suppress a response or weaken
+        // a deny, so log and continue.
         if let (Some(log), Some(record)) = (
             audit_log.lock().expect("audit log lock").as_mut(),
             inspected.audit.as_ref(),
         ) {
-            log.write(record)?;
+            if let Err(error) = log.write(record) {
+                eprintln!("etherfence mcp-proxy: audit write failed (continuing): {error:#}");
+            }
         }
         if inspected.tracking_cleared {
             let mut log = audit_log.lock().expect("audit log lock");
             if let Some(log) = log.as_mut() {
-                log.write(&AuditRecord::tools_list_tracking_removed(
+                if let Err(error) = log.write(&AuditRecord::tools_list_tracking_removed(
                     policy,
                     server_name,
-                ))?;
+                )) {
+                    eprintln!("etherfence mcp-proxy: audit write failed (continuing): {error:#}");
+                }
             }
         }
         let mut out = client_out.lock().expect("client output lock");
-        writeln!(out, "{}", inspected.line).context("forwarding to MCP client")?;
-        out.flush().context("flushing MCP client output")?;
+        match writeln!(out, "{}", inspected.line) {
+            Ok(()) => out
+                .flush()
+                .map_err(|error| ProxyError::ClientWrite(format!("{error:?}")))?,
+            // Client closed its output: stop the server pump cleanly.
+            Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => return Ok(()),
+            Err(error) => return Err(ProxyError::ClientWrite(format!("{error:?}"))),
+        }
     }
     Ok(())
 }
 
-fn wait_for_child(child: &mut Child) -> Result<i32> {
-    let status = child.wait().context("waiting for MCP server child")?;
+fn wait_for_child(child: &mut Child) -> std::result::Result<i32, ProxyError> {
+    let status = child.wait().map_err(|error| {
+        ProxyError::ServerRead(format!("waiting for MCP server child: {error:?}"))
+    })?;
     Ok(status.code().unwrap_or(1))
+}
+
+/// Whether `line` parses as a JSON value. Used to drop invalid client lines
+/// before they reach the server. Invalid server lines are intentionally NOT
+/// dropped (see `inspect_server_line`): they are passed through so the client's
+/// own parser rejects them and the proxy never fabricates a tool list.
+fn is_valid_json_line(line: &str) -> bool {
+    serde_json::from_str::<Value>(line).is_ok()
 }
 
 #[cfg(test)]
@@ -889,5 +1053,31 @@ deny = ["filesystem.read_secret", "shell.run"]
         assert!(inspected.audit.is_none());
         assert!(inspected.tracking_cleared);
         assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn is_valid_json_line_accepts_and_rejects() {
+        // Valid JSON (objects, arrays, primitives) is accepted.
+        assert!(is_valid_json_line(r#"{"jsonrpc":"2.0","id":1}"#));
+        assert!(is_valid_json_line("[1,2,3]"));
+        assert!(is_valid_json_line(r#""a string""#));
+        assert!(is_valid_json_line("42"));
+        // Invalid JSON is rejected so the proxy can drop it before forwarding.
+        assert!(!is_valid_json_line("not json at all"));
+        assert!(!is_valid_json_line(r#"{"jsonrpc":"2.0","id":1"#)); // truncated
+        assert!(!is_valid_json_line(""));
+    }
+
+    #[test]
+    fn invalid_server_json_passes_through_unchanged() {
+        // A malformed server line must reach the client unchanged so the
+        // client's own parser rejects it. The proxy must never fabricate or
+        // advertise a tool list from a broken server line.
+        let mut pending = TrackedRequests::default();
+        let line = "this is not json {{{";
+        let inspected = inspect_server_line(&policy(), "default", &mut pending, line);
+        assert_eq!(inspected.line, line);
+        assert!(inspected.audit.is_none());
+        assert!(!inspected.tracking_cleared);
     }
 }

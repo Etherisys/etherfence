@@ -10,6 +10,36 @@ use std::fs::OpenOptions;
 use std::io::{BufRead, Write};
 
 fn main() {
+    let mode = std::env::var("FAKE_MCP_SERVER_MODE").unwrap_or_default();
+    match mode.as_str() {
+        "immediate-exit" => {
+            // Simulate a child MCP server that exits before producing any
+            // output and without reading its stdin. The proxy must detect the
+            // closed stdout and exit with the child's code.
+            std::process::exit(0);
+        }
+        "read-one-then-drop" => {
+            // Read a single line (so the client's first write succeeds), then
+            // close stdout and exit without responding. Used to exercise the
+            // proxy's behavior when the child drops mid-handshake.
+            let stdin = std::io::stdin().lock();
+            let mut lines = stdin.lines();
+            if let Some(line) = lines.next() {
+                let line = line.expect("read fake server stdin");
+                if let Some(log) = std::env::var_os("FAKE_MCP_SERVER_LOG") {
+                    let mut log = OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(log)
+                        .expect("open fake server receive log");
+                    writeln!(log, "{line}").expect("write fake server receive log");
+                }
+            }
+            std::process::exit(0);
+        }
+        _ => {}
+    }
+
     let mut received_log = std::env::var_os("FAKE_MCP_SERVER_LOG").map(|path| {
         OpenOptions::new()
             .create(true)

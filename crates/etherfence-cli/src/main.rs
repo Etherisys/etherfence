@@ -179,30 +179,52 @@ fn run_mcp_proxy(
     server_name: &str,
     server_command: &[String],
 ) -> Result<()> {
-    let mut audit_log = audit_log_path
-        .map(etherfence_mcp::AuditLog::open)
-        .transpose()?;
+    let mut audit_log = match audit_log_path.map(etherfence_mcp::AuditLog::open) {
+        Some(result) => match result {
+            Ok(log) => Some(log),
+            Err(error) => {
+                // Audit open failure is fatal up front: the operator asked for
+                // an audit log and we cannot honor it. Fail closed before the
+                // server starts.
+                eprintln!("etherfence mcp-proxy: {error:#}");
+                std::process::exit(etherfence_mcp::exit_code::INTERNAL_ERROR);
+            }
+        },
+        None => None,
+    };
     let policy = match etherfence_mcp::load_mcp_policy(policy_path) {
         Ok(policy) => policy,
         Err(error) => {
             // Fail closed: record the policy error and never start the server.
             if let Some(log) = audit_log.as_mut() {
-                log.write(&etherfence_mcp::AuditRecord::policy_error(&format!(
-                    "{error:#}"
-                )))?;
+                if let Err(audit_error) = log.write(&etherfence_mcp::AuditRecord::policy_error(
+                    &format!("{error:#}"),
+                )) {
+                    eprintln!(
+                        "etherfence mcp-proxy: audit write failed (continuing): {audit_error:#}"
+                    );
+                }
             }
             eprintln!("etherfence mcp-proxy: fail closed, MCP server not started: {error:#}");
-            std::process::exit(2);
+            std::process::exit(etherfence_mcp::exit_code::INVALID_POLICY);
         }
     };
-    let exit_code = etherfence_mcp::run_proxy(
+    let exit_code = match etherfence_mcp::run_proxy(
         std::io::stdin().lock(),
         std::io::stdout(),
         server_command,
         &policy,
         server_name,
         audit_log,
-    )?;
+    ) {
+        Ok(code) => code,
+        Err(proxy_error) => {
+            // The child has already been reaped inside run_proxy. Surface the
+            // documented exit code and message.
+            eprintln!("etherfence mcp-proxy: {}", proxy_error.message());
+            proxy_error.code()
+        }
+    };
     if exit_code != 0 {
         std::process::exit(exit_code);
     }

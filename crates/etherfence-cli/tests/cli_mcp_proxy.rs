@@ -701,3 +701,199 @@ fn parse_real_mcp_command(value: &str) -> Result<Vec<String>, String> {
     }
     Ok(parsed)
 }
+
+/// Run the proxy against the fake server in a specific crash/lifecycle mode so
+/// we can assert on child-exit, EOF, and early-exit behavior.
+fn run_proxy_with_server_mode(
+    name: &str,
+    policy: &PathBuf,
+    input_lines: &[&str],
+    mode: &str,
+) -> ProxyRun {
+    let server_log = temp_path(&format!("{name}-server-received"), "jsonl");
+    let audit_log = temp_path(&format!("{name}-audit"), "jsonl");
+    let server_command = vec![env!("CARGO_BIN_EXE_fake-mcp-server").to_string()];
+    let mut command = Command::new(env!("CARGO_BIN_EXE_etherfence"));
+    command
+        .arg("mcp-proxy")
+        .arg("--policy")
+        .arg(policy)
+        .arg("--audit-log")
+        .arg(&audit_log)
+        .env("FAKE_MCP_SERVER_MODE", mode)
+        .env("FAKE_MCP_SERVER_LOG", &server_log)
+        .arg("--")
+        .args(&server_command);
+    let mut child = command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn etherfence mcp-proxy");
+    {
+        let mut stdin = child.stdin.take().expect("proxy stdin");
+        for line in input_lines {
+            if writeln!(stdin, "{line}").is_err() {
+                break;
+            }
+        }
+    }
+    let output = child.wait_with_output().expect("wait for proxy");
+    ProxyRun {
+        output,
+        server_log,
+        audit_log,
+    }
+}
+
+#[test]
+fn proxy_exits_zero_on_clean_client_eof() {
+    // The normal happy path: client sends input, closes stdin, proxy forwards,
+    // joins the server pump, reaps the child, and exits 0.
+    let policy = write_temp_policy("clean-eof", TEST_POLICY);
+    let run = run_proxy_with_input(
+        "clean-eof",
+        &policy,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26"}}"#,
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"filesystem.read","arguments":{"path":"/x"}}}"#,
+        ],
+    );
+    assert!(
+        run.output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&run.output.stderr)
+    );
+    let _ = std::fs::remove_file(&policy);
+    let _ = std::fs::remove_file(&run.server_log);
+    let _ = std::fs::remove_file(&run.audit_log);
+}
+
+#[test]
+fn proxy_propagates_child_early_exit_code() {
+    // The child server exits before producing output. The proxy must detect
+    // the closed stdout, stop forwarding, reap the child, and exit with the
+    // child's code (0 here) rather than hanging or panicking.
+    let policy = write_temp_policy("early-exit", TEST_POLICY);
+    let run = run_proxy_with_server_mode(
+        "early-exit",
+        &policy,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"filesystem.read","arguments":{"path":"/x"}}}"#,
+        ],
+        "immediate-exit",
+    );
+    assert!(
+        run.output.status.code() == Some(0),
+        "expected exit 0 from child early exit, got {:?}; stderr: {}",
+        run.output.status.code(),
+        String::from_utf8_lossy(&run.output.stderr)
+    );
+    let _ = std::fs::remove_file(&policy);
+    let _ = std::fs::remove_file(&run.server_log);
+    let _ = std::fs::remove_file(&run.audit_log);
+}
+
+#[test]
+fn proxy_handles_child_dropping_mid_handshake() {
+    // The child reads the first client line then closes stdout without
+    // responding. The proxy must not panic, must not forward the remaining
+    // lines to a dead server (broken pipe is a clean shutdown), and must exit
+    // with the propagated child code.
+    let policy = write_temp_policy("drop-mid", TEST_POLICY);
+    let run = run_proxy_with_server_mode(
+        "drop-mid",
+        &policy,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"filesystem.read","arguments":{"path":"/x"}}}"#,
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"shell.run","arguments":{}}}"#,
+        ],
+        "read-one-then-drop",
+    );
+    // The server received exactly one line (the first), proving the proxy did
+    // not forward the second after the child dropped.
+    let received = std::fs::read_to_string(&run.server_log).unwrap_or_default();
+    assert_eq!(
+        received.lines().count(),
+        1,
+        "child should have received only the first line: {received}"
+    );
+    assert!(
+        run.output.status.code() == Some(0),
+        "expected exit 0, got {:?}; stderr: {}",
+        run.output.status.code(),
+        String::from_utf8_lossy(&run.output.stderr)
+    );
+    let _ = std::fs::remove_file(&policy);
+    let _ = std::fs::remove_file(&run.server_log);
+    let _ = std::fs::remove_file(&run.audit_log);
+}
+
+#[test]
+fn proxy_does_not_forward_invalid_client_json() {
+    // A client line that is not valid JSON must be dropped by the proxy and
+    // never reach the server.
+    let policy = write_temp_policy("invalid-client", TEST_POLICY);
+    let run = run_proxy_with_input(
+        "invalid-client",
+        &policy,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"filesystem.read","arguments":{"path":"/x"}}}"#,
+            "this line is not json {{{",
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"github.list_repos","arguments":{}}}"#,
+        ],
+    );
+    assert!(
+        run.output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&run.output.stderr)
+    );
+    let received = std::fs::read_to_string(&run.server_log).expect("server receive log");
+    assert!(
+        !received.contains("this line is not json"),
+        "invalid client JSON must not reach the server"
+    );
+    // The two valid calls still made it through.
+    assert!(received.contains("filesystem.read"));
+    assert!(received.contains("github.list_repos"));
+    let _ = std::fs::remove_file(&policy);
+    let _ = std::fs::remove_file(&run.server_log);
+    let _ = std::fs::remove_file(&run.audit_log);
+}
+
+#[test]
+fn proxy_fails_closed_when_audit_log_cannot_be_opened() {
+    // Pointing the audit log at a non-writable path must fail closed before the
+    // server starts, using the documented internal-error exit code (4) rather
+    // than starting a server with no audit trail.
+    let policy = write_temp_policy("audit-open-fail", TEST_POLICY);
+    // Use a non-existent parent that is itself a regular file, so
+    // `create_dir_all` cannot create the audit directory and the open fails.
+    let blocking_file = temp_path("audit-block", "txt");
+    std::fs::write(&blocking_file, b"block").expect("create blocking file");
+    let audit_path = blocking_file.join("audit.jsonl"); // parent is a file
+    let server_command = vec![env!("CARGO_BIN_EXE_fake-mcp-server").to_string()];
+    let output = Command::new(env!("CARGO_BIN_EXE_etherfence"))
+        .arg("mcp-proxy")
+        .arg("--policy")
+        .arg(&policy)
+        .arg("--audit-log")
+        .arg(&audit_path)
+        .arg("--")
+        .args(&server_command)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("spawn proxy");
+    assert_eq!(
+        output.status.code(),
+        Some(etherfence_mcp::exit_code::INTERNAL_ERROR),
+        "audit open failure should exit {} (got {:?}); stderr: {}",
+        etherfence_mcp::exit_code::INTERNAL_ERROR,
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let _ = std::fs::remove_file(&policy);
+    let _ = std::fs::remove_file(&blocking_file);
+}

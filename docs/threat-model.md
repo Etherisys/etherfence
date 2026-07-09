@@ -73,3 +73,19 @@ component. Its trust boundary assumptions:
   forwarded unchanged with their entry cleared rather than re-shaped. Tracking
   remains scoped to `tools/list`; the proxy still does not reorder, buffer, or
   correlate responses beyond id matching, and remains experimental/pre-alpha.
+- v0.2.7 hardened the MCP proxy lifecycle and failure modes: the child server
+  is reaped on every exit path (no zombie on normal shutdown, child early exit,
+  or proxy error); child early exit / server stdout closure is detected and the
+  child's exit code is propagated; client EOF closes the server's stdin and
+  reaps the child; broken pipes to either side are treated as clean shutdowns
+  rather than panics; invalid client JSON is dropped before forwarding (never
+  reaching the server) while valid JSON-RPC traffic passes through unchanged;
+  invalid server JSON is passed through for the client's own parser to reject,
+  so the proxy can never fabricate or advertise a tool list from a malformed
+  server line; and audit logging is explicitly best-effort — a failed audit
+  write never weakens a deny or reverses a `tools/list` filter already applied.
+  The proxy remains stdio-only, exact-match, policy-compatible with
+  `ef-mcp-policy/v0.1`, and experimental/pre-alpha. It still does not perform
+  audit rotation or durable fsync beyond the per-write flush, and a child that
+  ignores a closed stdin while keeping its stdout open will keep the server
+  pump alive until the proxy is killed (matching normal stdio MCP behavior).

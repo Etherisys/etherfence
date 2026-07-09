@@ -23,10 +23,12 @@ The proxy:
 
 1. Loads the policy file. If the policy cannot be read, parsed, or validated,
    the proxy **fails closed**: it reports the error, optionally writes a
-   `policy_error` audit record, exits with code 2, and never starts the MCP
+   `policy_error` audit record, exits with code `2`, and never starts the MCP
    server.
-2. Starts the real MCP server as a child process with piped stdin/stdout
-   (stderr is passed through).
+2. Starts the real MCP server as a child process with piped stdin/stdout. The
+   child's stderr is **inherited** (it goes straight to the operator's terminal
+   / the proxy's stderr) so a chatty or failing server can never block or
+   deadlock the proxy's own pipes.
 3. Forwards newline-delimited JSON-RPC messages between the client (the
    proxy's own stdin/stdout) and the server.
 4. Inspects `tools/call` requests before forwarding. Allowed calls are
@@ -127,6 +129,52 @@ valid response shape that advertises no tools (`"tools": []`) and writes a
 `tools_list_filtered` audit event. This avoids passing an unsafe or ambiguous
 tool advertisement through the boundary.
 
+## Lifecycle and failure modes
+
+The proxy is hardened for the failure cases an MCP boundary component is most
+likely to hit. All of these are covered by the test harness in
+`crates/etherfence-cli/tests/cli_mcp_proxy.rs`.
+
+- **Child process cleanup.** The child server is reaped on every exit path
+  (clean shutdown, child early exit, or proxy error). On a normal client EOF
+  the proxy closes the server's stdin and `wait()`s for the child, so no zombie
+  is left behind.
+- **Child early exit / server stdout closure.** If the child exits (or closes
+  its stdout) before the client is done, the server→client pump ends, the
+  proxy stops forwarding, and the proxy exits with the child's own exit code.
+- **Client EOF.** Closing the client's stdin is a normal shutdown: the proxy
+  closes the server's stdin, joins the server pump, reaps the child, and exits
+  `0`.
+- **Broken pipe to server.** A write to a child that has already exited is
+  treated as a clean shutdown (the client loop stops), not a panic.
+- **Broken pipe to client.** A write to a client that has closed its stdout is
+  treated as a clean shutdown (the server pump stops), not a panic.
+- **Invalid client JSON.** A client line that is not valid JSON is **dropped
+  before** it is forwarded; it never reaches the server. (Valid JSON-RPC
+  requests, responses, and notifications are still forwarded unchanged — the
+  proxy never alters server-originated or client notification traffic.)
+- **Invalid server JSON.** A server line that is not valid JSON is passed
+  through to the client unchanged, so the client's own parser rejects it. The
+  proxy never fabricates or advertises a tool list from a malformed server
+  line.
+- **Audit write failure (best-effort).** See [Audit log](#audit-log). A failed
+  audit write never weakens a deny: the decision response is still returned to
+  the client and the proxy continues.
+
+### Exit codes
+
+| Code | Meaning |
+|------|---------|
+| `0` | Clean client EOF shutdown; the child server exited normally. |
+| `2` | Invalid/unloadable policy. Fail closed; the server is never started. |
+| `3` | Child server could not be spawned. Fail closed. |
+| `4` | Internal proxy error: a pipe I/O failure, or the audit log could not be opened at startup. |
+| child's code | When the child server exits before the client (early exit / crash), its own exit code is propagated. |
+
+A child that ignores a closed stdin and keeps its stdout open will keep the
+server pump alive until the proxy process itself is killed. That matches normal
+stdio MCP server behavior and is by design, not a defect.
+
 ## Denied tool calls
 
 Denied requests receive a JSON-RPC error and never reach the server:
@@ -188,10 +236,12 @@ tool arguments do not leak into it. Full tool schemas/descriptions are not
 written for `tools_list_filtered`; only counts and allowed tool names are
 recorded.
 
-Audit failures are fail closed: if the audit log file cannot be opened at
-startup, the proxy exits before starting the MCP server; if writing an audit
-record fails while the proxy is running, the proxy stops forwarding and exits
-with an error instead of continuing unaudited.
+Audit failures are best-effort: if the audit log file cannot be opened at
+startup, the proxy exits before starting the MCP server (code `4`); if writing
+an audit record fails while the proxy is running, the error is logged to stderr
+and the proxy continues. A failed audit write never weakens a deny or reverses
+a `tools/list` filter already applied — the security-critical decision is
+returned to the client regardless of audit state.
 
 ## Compatibility test harness
 
@@ -290,8 +340,10 @@ for local paths, server commands, and exact tool names.
   denied fail closed — answered with a single null-id JSON-RPC error, audited
   as `batch_denied`, and never forwarded — even if every call inside it names
   an allow-listed tool.
-- Non-JSON input lines are forwarded unchanged for the server to reject,
-  matching plain JSON-RPC behavior.
+- Invalid client JSON input lines are **dropped** before forwarding (they are
+  never sent to the server); valid JSON-RPC requests, responses, and
+  notifications are forwarded unchanged. Invalid server JSON lines are passed
+  through unchanged for the client's own parser to reject.
 - Tracking is best-effort and scoped to `tools/list`: a client that never sends
   `tools/list`, or that reuses one id for multiple unrelated methods, may see a
   tracked-id response forwarded unchanged with its tracking entry cleared. The
