@@ -125,6 +125,24 @@ fn main() {
                     "error": {"code": -32042, "message": "fixture tool failed", "data": {"fixture": true}},
                 })
             }
+            // v0.3.0: respond to non-tool methods so integration tests can
+            // verify that allowed methods reach the server and denied ones
+            // do not. The response echoes the method so tests can assert
+            // forwarding without needing a real MCP server.
+            Some("resources/list")
+            | Some("resources/read")
+            | Some("prompts/list")
+            | Some("prompts/get")
+            | Some("completion/complete")
+            | Some("roots/list")
+            | Some("sampling/createMessage")
+            | Some("ping") => json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": {
+                    "echo_method": message.get("method"),
+                },
+            }),
             _ => json!({
                 "jsonrpc": "2.0",
                 "id": id,

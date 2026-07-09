@@ -195,6 +195,36 @@
   - Proxy remains stdio-only, exact-name-only, `ef-mcp-policy/v0.1`-compatible,
     experimental/pre-alpha
 
+## v0.3.0 - MCP proxy method-level policy enforcement
+
+- Method-level MCP/JSON-RPC policy enforcement: every client→server
+  JSON-RPC request object is inspected before forwarding
+- Optional `[methods]` and `[servers.<name>.methods]` sections in
+  `ef-mcp-policy/v0.1` with exact-match allow/deny lists and `"*"` wildcard
+- Always-allowed methods (initialize, notifications/initialized, ping)
+  bypass method policy
+- Built-in default when no `[methods]` section is present: allow
+  tools/list and tools/call, deny everything else (preserves v0.2.x)
+- Unknown/unspecified methods default deny
+- `method_decision` audit event with server name, method, decision,
+  reason, request id type, and safe param key names only
+- `request_id_type` and `param_keys` audit fields added
+- New example policies: strict-tools-only, readonly, resources-denied,
+  sampling-denied
+- Schema version unchanged (`ef-mcp-policy/v0.1`); `[methods]` is optional
+  — existing v0.2.x policies remain syntactically valid but see stricter
+  runtime behavior (non-tools methods now denied by default)
+- Behavioral hardening: v0.2.x non-tools client→server methods passed
+  through uninspected; v0.3.0 denies them by default unless explicitly
+  allowed
+- Method policy applies to client→server requests only; server→client
+  requests (e.g. sampling/createMessage) are not intercepted in this
+  release
+- Existing tools/list filtering and tools/call allow/deny behavior
+  preserved unchanged
+- Batch arrays remain denied fail-closed
+- Proxy remains stdio-only, exact-match, experimental/pre-alpha
+
 ## v0.2.x ideas
 
 - Expand tested config schemas and platform paths

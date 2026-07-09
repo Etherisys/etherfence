@@ -1,0 +1,12 @@
+# Example EtherFence MCP proxy policy: strict tools-only.
+# Only tools/list and tools/call are allowed. All other MCP methods
+# (resources, prompts, sampling, completion, roots) are denied by default.
+schema_version = "ef-mcp-policy/v0.1"
+name = "strict-tools-only"
+
+# No [methods] section needed — the built-in default allows only
+# tools/list and tools/call, denying everything else.
+
+[tools]
+allow = ["filesystem.read", "filesystem.list"]
+deny = ["filesystem.write", "filesystem.delete", "shell.run"]

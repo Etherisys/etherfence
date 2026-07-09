@@ -89,6 +89,26 @@ component. Its trust boundary assumptions:
   audit rotation or durable fsync beyond the per-write flush, and a child that
   ignores a closed stdin while keeping its stdout open will keep the server
   pump alive until the proxy is killed (matching normal stdio MCP behavior).
+- v0.3.0 hardened the MCP proxy from tool-call-only enforcement into
+  method-level MCP/JSON-RPC policy enforcement. Every client→server
+  JSON-RPC request object is now inspected before forwarding: the method
+  name is checked against an optional `[methods]` allow/deny policy.
+  Unknown or unspecified methods default deny. Always-allowed methods
+  (initialize, notifications/initialized, ping) bypass method policy.
+  Existing tools/list filtering and tools/call allow/deny behavior is
+  preserved. This is a behavioral hardening from v0.2.x: non-tools
+  client→server methods that previously passed through uninspected are
+  now denied by default. Deployments needing prior pass-through behavior
+  must add an explicit `[methods]` allow list. Method policy applies to
+  client→server requests only; server→client requests such as
+  sampling/createMessage are not intercepted in this release. A new
+  `method_decision` audit event records server name, method, decision,
+  reason, request id type, and safe param key names only — no param
+  values, prompt text, resource content, message bodies, or secrets are
+  logged. The proxy remains stdio-only, exact-match,
+  `ef-mcp-policy/v0.1`-compatible, and experimental/pre-alpha. The
+  `[methods]` section is optional; existing v0.2.x policies remain
+  syntactically valid but will see stricter runtime behavior.
 
 ## Path handling and Semgrep path-traversal triage
 

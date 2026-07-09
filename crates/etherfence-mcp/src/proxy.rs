@@ -4,8 +4,8 @@ use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 
-use crate::audit::{redacted_argument_keys, AuditLog, AuditRecord};
-use crate::policy::{decide_tool_call, Decision, McpPolicyFile};
+use crate::audit::{redacted_argument_keys, redacted_param_keys, AuditLog, AuditRecord};
+use crate::policy::{decide_method, decide_tool_call, Decision, McpPolicyFile};
 
 pub const TOOL_CALL_METHOD: &str = "tools/call";
 pub const TOOL_LIST_METHOD: &str = "tools/list";
@@ -183,12 +183,19 @@ pub struct InspectedServerLine {
 
 /// Inspect one newline-delimited JSON-RPC message from the client.
 ///
-/// Only `tools/call` requests are policy-checked. Every other message —
-/// including non-JSON lines the server will reject itself — is forwarded
-/// unchanged to preserve protocol behavior. Tool calls without a usable
-/// string tool name are denied (fail closed). JSON-RPC batch arrays are
-/// not unpacked: they are denied wholesale (fail closed), because a batch
-/// could smuggle a denied `tools/call` past per-message inspection.
+/// v0.3.0 behavior: every client→server JSON-RPC request object is inspected
+/// before forwarding. The method-level policy is checked first. If the method
+/// is denied, the request is never forwarded. If the method is `tools/call`
+/// and is allowed by method policy, the tool-name policy is then checked as
+/// before. If the method is `tools/list` and is allowed, the request is
+/// tracked for response filtering. Always-allowed methods (initialize,
+/// notifications/initialized, ping) bypass method policy entirely.
+///
+/// JSON-RPC batch arrays are not unpacked: they are denied wholesale (fail
+/// closed), because a batch could smuggle a denied request past per-message
+/// inspection. Non-JSON lines are forwarded unchanged (the server's parser
+/// will reject them) — this preserves existing behavior and is safe because
+/// the server rejects them, not the proxy.
 pub fn inspect_client_line(policy: &McpPolicyFile, server_name: &str, line: &str) -> InspectedLine {
     let Ok(message) = serde_json::from_str::<Value>(line) else {
         return InspectedLine {
@@ -207,10 +214,48 @@ pub fn inspect_client_line(policy: &McpPolicyFile, server_name: &str, line: &str
             tools_list_request: None,
         };
     }
-    if message.get("method").and_then(Value::as_str) == Some(TOOL_LIST_METHOD) {
-        // A tools/list notification (no usable id) is not tracked: there will
-        // never be a response to match it against. Notifications are forwarded
-        // unchanged, exactly like any other message.
+
+    // A message without a "method" field is not a JSON-RPC request/notification
+    // from the client (it might be a stray response or something else). Forward
+    // it unchanged — the proxy only policy-checks client→server requests.
+    let Some(method) = message.get("method").and_then(Value::as_str) else {
+        return InspectedLine {
+            action: ClientAction::Forward,
+            audit: None,
+            tools_list_request: None,
+        };
+    };
+
+    let request_id = message.get("id").cloned();
+    let params = message.get("params");
+    let param_keys = redacted_param_keys(params);
+
+    // --- Method-level policy check ---
+    let method_decision = decide_method(policy, server_name, method);
+    if method_decision.decision != Decision::Allow {
+        let audit = Some(AuditRecord::method_decision(
+            &policy.name,
+            server_name,
+            method,
+            request_id.clone(),
+            param_keys,
+            method_decision.decision,
+            &method_decision.reason,
+        ));
+        let response = request_id
+            .filter(|id| !id.is_null())
+            .map(|id| method_denied_error_response(&id, method, &method_decision.reason));
+        return InspectedLine {
+            action: ClientAction::Deny { response },
+            audit,
+            tools_list_request: None,
+        };
+    }
+
+    // Method is allowed. Now handle method-specific logic.
+
+    // tools/list: track for response filtering (only if it has a usable id).
+    if method == TOOL_LIST_METHOD {
         let tools_list_request =
             message
                 .get("id")
@@ -219,64 +264,87 @@ pub fn inspect_client_line(policy: &McpPolicyFile, server_name: &str, line: &str
                     method: TOOL_LIST_METHOD,
                     id_key,
                 });
+        // Audit the method allow decision.
+        let audit = Some(AuditRecord::method_decision(
+            &policy.name,
+            server_name,
+            method,
+            request_id,
+            param_keys,
+            Decision::Allow,
+            &method_decision.reason,
+        ));
         return InspectedLine {
             action: ClientAction::Forward,
-            audit: None,
+            audit,
             tools_list_request,
         };
     }
-    if message.get("method").and_then(Value::as_str) != Some(TOOL_CALL_METHOD) {
-        return InspectedLine {
-            action: ClientAction::Forward,
-            audit: None,
-            tools_list_request: None,
+
+    // tools/call: proceed to tool-name policy check.
+    if method == TOOL_CALL_METHOD {
+        let tool_name = params
+            .and_then(|params| params.get("name"))
+            .and_then(Value::as_str);
+        let argument_keys =
+            redacted_argument_keys(params.and_then(|params| params.get("arguments")));
+
+        let (tool_for_audit, decision, reason) = match tool_name {
+            Some(name) => {
+                let policy_decision = decide_tool_call(policy, server_name, name);
+                (Some(name), policy_decision.decision, policy_decision.reason)
+            }
+            None => (
+                None,
+                Decision::Deny,
+                "fail closed: tool call has a missing or non-string tool name".to_string(),
+            ),
         };
-    }
 
-    let request_id = message.get("id").cloned();
-    let params = message.get("params");
-    let tool_name = params
-        .and_then(|params| params.get("name"))
-        .and_then(Value::as_str);
-    let argument_keys = redacted_argument_keys(params.and_then(|params| params.get("arguments")));
+        let audit = Some(AuditRecord::tool_call(
+            &policy.name,
+            server_name,
+            request_id.clone(),
+            tool_for_audit,
+            argument_keys,
+            decision,
+            &reason,
+        ));
 
-    let (tool_for_audit, decision, reason) = match tool_name {
-        Some(name) => {
-            let policy_decision = decide_tool_call(policy, server_name, name);
-            (Some(name), policy_decision.decision, policy_decision.reason)
+        match decision {
+            Decision::Allow => InspectedLine {
+                action: ClientAction::Forward,
+                audit,
+                tools_list_request: None,
+            },
+            Decision::Deny | Decision::PolicyError => {
+                let response = request_id.filter(|id| !id.is_null()).map(|id| {
+                    denied_error_response(&id, tool_for_audit.unwrap_or("<unknown>"), &reason)
+                });
+                InspectedLine {
+                    action: ClientAction::Deny { response },
+                    audit,
+                    tools_list_request: None,
+                }
+            }
         }
-        None => (
-            None,
-            Decision::Deny,
-            "fail closed: tool call has a missing or non-string tool name".to_string(),
-        ),
-    };
-
-    let audit = Some(AuditRecord::tool_call(
-        &policy.name,
-        server_name,
-        request_id.clone(),
-        tool_for_audit,
-        argument_keys,
-        decision,
-        &reason,
-    ));
-
-    match decision {
-        Decision::Allow => InspectedLine {
+    } else {
+        // Any other allowed method (resources/list, resources/read, prompts/list,
+        // prompts/get, completion/complete, roots/list, sampling/createMessage,
+        // or custom methods): forward and audit the method allow decision.
+        let audit = Some(AuditRecord::method_decision(
+            &policy.name,
+            server_name,
+            method,
+            request_id,
+            param_keys,
+            Decision::Allow,
+            &method_decision.reason,
+        ));
+        InspectedLine {
             action: ClientAction::Forward,
             audit,
             tools_list_request: None,
-        },
-        Decision::Deny | Decision::PolicyError => {
-            let response = request_id.filter(|id| !id.is_null()).map(|id| {
-                denied_error_response(&id, tool_for_audit.unwrap_or("<unknown>"), &reason)
-            });
-            InspectedLine {
-                action: ClientAction::Deny { response },
-                audit,
-                tools_list_request: None,
-            }
         }
     }
 }
@@ -448,6 +516,26 @@ fn denied_error_response(request_id: &Value, tool_name: &str, reason: &str) -> S
             "message": "EtherFence MCP proxy denied this tool call by policy",
             "data": {
                 "tool": tool_name,
+                "reason": reason,
+            },
+        },
+    })
+    .to_string()
+}
+
+/// JSON-RPC error response for a method denied by method-level policy.
+/// The request id is preserved so the client can match the error to its
+/// request. The method name and reason are included in `data` for
+/// diagnostics.
+fn method_denied_error_response(request_id: &Value, method: &str, reason: &str) -> String {
+    json!({
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "error": {
+            "code": DENIED_ERROR_CODE,
+            "message": "EtherFence MCP proxy denied this method by policy",
+            "data": {
+                "method": method,
                 "reason": reason,
             },
         },
@@ -711,7 +799,11 @@ deny = ["filesystem.read_secret", "shell.run"]
             r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#,
         );
         assert_eq!(inspected.action, ClientAction::Forward);
-        assert!(inspected.audit.is_none());
+        // v0.3.0: method decisions are now audited.
+        let audit = inspected.audit.expect("method audit for initialize");
+        assert_eq!(audit.event, "method_decision");
+        assert_eq!(audit.method.as_deref(), Some("initialize"));
+        assert_eq!(audit.decision, "allow");
     }
 
     #[test]
@@ -833,7 +925,10 @@ deny = ["filesystem.read_secret", "shell.run"]
         let request = inspected.tools_list_request.expect("tracked tools/list");
         assert_eq!(request.method, TOOL_LIST_METHOD);
         assert_eq!(request.id_key, "\"list-1\"");
-        assert!(inspected.audit.is_none());
+        // v0.3.0: method decisions are now audited.
+        let audit = inspected.audit.expect("method audit for tools/list");
+        assert_eq!(audit.event, "method_decision");
+        assert_eq!(audit.decision, "allow");
     }
 
     #[test]
@@ -1079,5 +1174,276 @@ deny = ["filesystem.read_secret", "shell.run"]
         assert_eq!(inspected.line, line);
         assert!(inspected.audit.is_none());
         assert!(!inspected.tracking_cleared);
+    }
+
+    // --- v0.3.0 method-level policy tests ---
+
+    fn method_policy() -> McpPolicyFile {
+        parse_mcp_policy(
+            r#"
+schema_version = "ef-mcp-policy/v0.1"
+name = "method-test"
+
+[methods]
+allow = ["tools/list", "tools/call", "resources/list", "resources/read"]
+deny = ["sampling/createMessage", "prompts/get"]
+
+[tools]
+allow = ["filesystem.read"]
+"#,
+        )
+        .expect("valid method test policy")
+    }
+
+    #[test]
+    fn denied_method_is_not_forwarded() {
+        let inspected = inspect_client_line(
+            &method_policy(),
+            "default",
+            r#"{"jsonrpc":"2.0","id":1,"method":"sampling/createMessage","params":{"messages":[{"role":"user","content":"secret prompt text"}]}}"#,
+        );
+        let ClientAction::Deny { response } = inspected.action else {
+            panic!("expected deny for sampling/createMessage");
+        };
+        let response = response.expect("error response for denied method with id");
+        let json: Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(json["id"], 1);
+        assert_eq!(json["error"]["code"], DENIED_ERROR_CODE);
+        assert_eq!(json["error"]["data"]["method"], "sampling/createMessage");
+        // Sensitive param content must not appear in the response or audit.
+        assert!(!response.contains("secret prompt text"));
+        let audit = inspected.audit.expect("audit record");
+        assert_eq!(audit.event, "method_decision");
+        assert_eq!(audit.decision, "deny");
+        assert_eq!(audit.method.as_deref(), Some("sampling/createMessage"));
+        // Param keys are safe metadata; values are not logged.
+        assert_eq!(audit.param_keys, vec!["messages"]);
+        assert!(!audit.reason.contains("secret"));
+    }
+
+    #[test]
+    fn denied_resources_read_is_not_forwarded_by_default() {
+        let inspected = inspect_client_line(
+            &policy(), // no [methods] section → built-in default
+            "default",
+            r#"{"jsonrpc":"2.0","id":2,"method":"resources/read","params":{"uri":"file:///etc/passwd"}}"#,
+        );
+        assert!(matches!(inspected.action, ClientAction::Deny { .. }));
+        let audit = inspected.audit.expect("audit record");
+        assert_eq!(audit.event, "method_decision");
+        assert_eq!(audit.decision, "deny");
+        assert_eq!(audit.param_keys, vec!["uri"]);
+    }
+
+    #[test]
+    fn allowed_resources_read_is_forwarded() {
+        let inspected = inspect_client_line(
+            &method_policy(),
+            "default",
+            r#"{"jsonrpc":"2.0","id":3,"method":"resources/read","params":{"uri":"file:///safe/path"}}"#,
+        );
+        assert_eq!(inspected.action, ClientAction::Forward);
+        let audit = inspected.audit.expect("audit record");
+        assert_eq!(audit.event, "method_decision");
+        assert_eq!(audit.decision, "allow");
+        assert_eq!(audit.param_keys, vec!["uri"]);
+        assert!(inspected.tools_list_request.is_none());
+    }
+
+    #[test]
+    fn denied_prompts_get_is_not_forwarded() {
+        let inspected = inspect_client_line(
+            &method_policy(),
+            "default",
+            r#"{"jsonrpc":"2.0","id":4,"method":"prompts/get","params":{"name":"system_prompt","arguments":{"user_input":"secret data"}}}"#,
+        );
+        assert!(matches!(inspected.action, ClientAction::Deny { .. }));
+        let audit = inspected.audit.expect("audit record");
+        assert_eq!(audit.decision, "deny");
+        assert_eq!(audit.param_keys, vec!["arguments", "name"]);
+        // Sensitive content must not leak.
+        let response = match inspected.action {
+            ClientAction::Deny { response } => response,
+            _ => unreachable!(),
+        };
+        assert!(response.is_some());
+        assert!(!response.unwrap().contains("secret data"));
+    }
+
+    #[test]
+    fn unknown_method_is_not_forwarded_by_default() {
+        let inspected = inspect_client_line(
+            &policy(),
+            "default",
+            r#"{"jsonrpc":"2.0","id":5,"method":"some/custom/method","params":{"data":"x"}}"#,
+        );
+        assert!(matches!(inspected.action, ClientAction::Deny { .. }));
+        let audit = inspected.audit.expect("audit record");
+        assert_eq!(audit.decision, "deny");
+        assert!(audit.reason.contains("built-in default"));
+    }
+
+    #[test]
+    fn unknown_method_denied_with_explicit_methods_section() {
+        let inspected = inspect_client_line(
+            &method_policy(),
+            "default",
+            r#"{"jsonrpc":"2.0","id":6,"method":"unknown/method","params":{}}"#,
+        );
+        assert!(matches!(inspected.action, ClientAction::Deny { .. }));
+        let audit = inspected.audit.expect("audit record");
+        assert_eq!(audit.decision, "deny");
+        assert!(audit
+            .reason
+            .contains("not in the server-specific or global"));
+    }
+
+    #[test]
+    fn denied_method_notification_without_id_has_no_response() {
+        let inspected = inspect_client_line(
+            &method_policy(),
+            "default",
+            r#"{"jsonrpc":"2.0","method":"sampling/createMessage","params":{}}"#,
+        );
+        assert_eq!(inspected.action, ClientAction::Deny { response: None });
+        let audit = inspected.audit.expect("audit record");
+        assert_eq!(audit.decision, "deny");
+        assert_eq!(audit.request_id_type.as_deref(), Some("missing"));
+    }
+
+    #[test]
+    fn always_allowed_methods_bypass_method_policy() {
+        let strict_policy = parse_mcp_policy(
+            r#"
+schema_version = "ef-mcp-policy/v0.1"
+name = "strict"
+
+[methods]
+allow = []
+deny = ["initialize", "notifications/initialized", "ping"]
+"#,
+        )
+        .unwrap();
+        for (method, line) in [
+            (
+                "initialize",
+                r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#,
+            ),
+            (
+                "notifications/initialized",
+                r#"{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}"#,
+            ),
+            (
+                "ping",
+                r#"{"jsonrpc":"2.0","id":2,"method":"ping","params":{}}"#,
+            ),
+        ] {
+            let inspected = inspect_client_line(&strict_policy, "default", line);
+            assert_eq!(
+                inspected.action,
+                ClientAction::Forward,
+                "always-allowed {method} should forward"
+            );
+            let audit = inspected.audit.expect("audit");
+            assert_eq!(audit.decision, "allow");
+            assert!(audit.reason.contains("always allowed"));
+        }
+    }
+
+    #[test]
+    fn method_denied_response_preserves_request_id() {
+        let inspected = inspect_client_line(
+            &method_policy(),
+            "default",
+            r#"{"jsonrpc":"2.0","id":"my-id-42","method":"prompts/get","params":{}}"#,
+        );
+        let ClientAction::Deny {
+            response: Some(response),
+        } = inspected.action
+        else {
+            panic!("expected deny with response");
+        };
+        let json: Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(json["id"], "my-id-42");
+        assert_eq!(json["error"]["code"], DENIED_ERROR_CODE);
+        assert_eq!(json["error"]["data"]["method"], "prompts/get");
+    }
+
+    #[test]
+    fn tools_list_filtering_still_works_with_method_policy() {
+        let mut pending = tracked("10");
+        let inspected = inspect_server_line(
+            &method_policy(),
+            "default",
+            &mut pending,
+            r#"{"jsonrpc":"2.0","id":10,"result":{"tools":[{"name":"filesystem.read"},{"name":"shell.run"}]}}"#,
+        );
+        let json: Value = serde_json::from_str(&inspected.line).unwrap();
+        let tools = json["result"]["tools"].as_array().unwrap();
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0]["name"], "filesystem.read");
+    }
+
+    #[test]
+    fn tools_call_existing_behavior_still_works_with_method_policy() {
+        let inspected = inspect_client_line(
+            &method_policy(),
+            "default",
+            r#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"filesystem.read","arguments":{"path":"/x"}}}"#,
+        );
+        assert_eq!(inspected.action, ClientAction::Forward);
+        let audit = inspected.audit.expect("audit");
+        assert_eq!(audit.event, "tool_call_decision");
+        assert_eq!(audit.decision, "allow");
+        assert_eq!(audit.tool.as_deref(), Some("filesystem.read"));
+    }
+
+    #[test]
+    fn tools_call_denied_tool_still_denied_with_method_policy() {
+        let inspected = inspect_client_line(
+            &method_policy(),
+            "default",
+            r#"{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"shell.run","arguments":{}}}"#,
+        );
+        assert!(matches!(inspected.action, ClientAction::Deny { .. }));
+        let audit = inspected.audit.expect("audit");
+        assert_eq!(audit.event, "tool_call_decision");
+        assert_eq!(audit.decision, "deny");
+    }
+
+    #[test]
+    fn batch_arrays_remain_denied_with_method_policy() {
+        let inspected = inspect_client_line(
+            &method_policy(),
+            "default",
+            r#"[{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}]"#,
+        );
+        assert!(matches!(inspected.action, ClientAction::Deny { .. }));
+        let audit = inspected.audit.expect("audit");
+        assert_eq!(audit.event, "batch_denied");
+    }
+
+    #[test]
+    fn wildcard_allow_lets_unknown_method_through() {
+        let wildcard_policy = parse_mcp_policy(
+            r#"
+schema_version = "ef-mcp-policy/v0.1"
+name = "wildcard"
+
+[methods]
+allow = ["*"]
+deny = ["sampling/createMessage"]
+"#,
+        )
+        .unwrap();
+        let inspected = inspect_client_line(
+            &wildcard_policy,
+            "default",
+            r#"{"jsonrpc":"2.0","id":9,"method":"custom/method","params":{}}"#,
+        );
+        assert_eq!(inspected.action, ClientAction::Forward);
+        let audit = inspected.audit.expect("audit");
+        assert_eq!(audit.decision, "allow");
+        assert!(audit.reason.contains("wildcard"));
     }
 }

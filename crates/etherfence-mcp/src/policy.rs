@@ -6,13 +6,26 @@ use std::path::Path;
 
 pub const SUPPORTED_MCP_POLICY_SCHEMA_VERSION: &str = "ef-mcp-policy/v0.1";
 
-/// Minimal MCP boundary proxy policy: exact-match tool-name allow/deny lists.
+/// Methods the proxy always allows because they are required for MCP protocol
+/// initialization and liveness. These are never subject to method policy and
+/// are always forwarded to the server.
+pub const ALWAYS_ALLOWED_METHODS: &[&str] = &["initialize", "notifications/initialized", "ping"];
+
+/// The built-in default allowed method list when no `[methods]` section is
+/// present in the policy. This preserves v0.2.x behavior: only `tools/list`
+/// and `tools/call` are allowed; everything else is denied by default.
+pub const DEFAULT_ALLOWED_METHODS: &[&str] = &["tools/list", "tools/call"];
+
+/// Minimal MCP boundary proxy policy: exact-match tool-name allow/deny lists
+/// plus optional method-level allow/deny lists.
 #[derive(Debug, Clone, Deserialize)]
 pub struct McpPolicyFile {
     pub schema_version: String,
     pub name: String,
     #[serde(default)]
     pub tools: ToolRules,
+    #[serde(default)]
+    pub methods: Option<MethodRules>,
     #[serde(default)]
     pub servers: BTreeMap<String, ServerPolicy>,
 }
@@ -21,6 +34,8 @@ pub struct McpPolicyFile {
 pub struct ServerPolicy {
     #[serde(default)]
     pub tools: ToolRules,
+    #[serde(default)]
+    pub methods: Option<MethodRules>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -31,7 +46,25 @@ pub struct ToolRules {
     pub deny: Vec<String>,
 }
 
-/// The decision the proxy made for one MCP tool call.
+/// Method-level allow/deny rules. When present, these control which JSON-RPC
+/// methods the proxy forwards to the server. When absent, the built-in default
+/// allows only `tools/list` and `tools/call`.
+///
+/// The `allow` and `deny` lists use exact string matching. A special entry
+/// `"*"` in the `allow` list means "allow all known and unknown methods"
+/// (explicitly opt-in permissive). The deny list always wins over allow.
+///
+/// Unknown methods (not in any list and not in the built-in defaults) are
+/// denied by default unless explicitly allowed.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct MethodRules {
+    #[serde(default)]
+    pub allow: Vec<String>,
+    #[serde(default)]
+    pub deny: Vec<String>,
+}
+
+/// The decision the proxy made for one MCP tool call or method.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Decision {
     Allow,
@@ -124,6 +157,105 @@ pub fn decide_tool_call(
     }
 }
 
+/// Whether a method is always allowed (protocol-required) and should never be
+/// subject to method policy checks.
+pub fn is_always_allowed_method(method: &str) -> bool {
+    ALWAYS_ALLOWED_METHODS.contains(&method)
+}
+
+/// Determine whether a JSON-RPC method is allowed by the method policy.
+///
+/// Decision order:
+/// 1. Always-allowed methods (initialize, notifications/initialized, ping)
+///    → allow unconditionally.
+/// 2. Method in global `[methods].deny` → deny.
+/// 3. Method in server-specific `[servers.<name>.methods].deny` → deny.
+/// 4. Method in server-specific `[servers.<name>.methods].allow` → allow.
+/// 5. Method in global `[methods].allow` → allow.
+/// 6. If global `[methods].allow` contains `"*"` → allow.
+/// 7. If no `[methods]` section exists at all (global and server), use the
+///    built-in default: allow `tools/list` and `tools/call`, deny everything
+///    else.
+/// 8. If a `[methods]` section exists but the method is not listed → deny
+///    (default deny for unknown methods).
+pub fn decide_method(policy: &McpPolicyFile, server_name: &str, method: &str) -> PolicyDecision {
+    if is_always_allowed_method(method) {
+        return PolicyDecision {
+            decision: Decision::Allow,
+            reason: "method is always allowed (protocol-required)".to_string(),
+        };
+    }
+
+    let global_methods = policy.methods.as_ref();
+    let server_methods = policy
+        .servers
+        .get(server_name)
+        .and_then(|server| server.methods.as_ref());
+
+    // 2. Global deny wins.
+    if global_methods.is_some_and(|m| m.deny.iter().any(|entry| entry == method)) {
+        return PolicyDecision {
+            decision: Decision::Deny,
+            reason: "method is in the global policy deny list".to_string(),
+        };
+    }
+
+    // 3. Server-specific deny.
+    if server_methods.is_some_and(|m| m.deny.iter().any(|entry| entry == method)) {
+        return PolicyDecision {
+            decision: Decision::Deny,
+            reason: format!("method is in the server-specific policy deny list for {server_name}"),
+        };
+    }
+
+    // 4. Server-specific allow.
+    if server_methods.is_some_and(|m| m.allow.iter().any(|entry| entry == method)) {
+        return PolicyDecision {
+            decision: Decision::Allow,
+            reason: format!("method is in the server-specific policy allow list for {server_name}"),
+        };
+    }
+
+    // 5. Global allow.
+    if global_methods.is_some_and(|m| m.allow.iter().any(|entry| entry == method)) {
+        return PolicyDecision {
+            decision: Decision::Allow,
+            reason: "method is in the global policy allow list".to_string(),
+        };
+    }
+
+    // 6. Wildcard allow.
+    if global_methods.is_some_and(|m| m.allow.iter().any(|entry| entry == "*")) {
+        return PolicyDecision {
+            decision: Decision::Allow,
+            reason: "method allowed by global wildcard".to_string(),
+        };
+    }
+
+    // 7. Built-in default when no method policy is configured at all.
+    if global_methods.is_none() && server_methods.is_none() {
+        if DEFAULT_ALLOWED_METHODS.contains(&method) {
+            return PolicyDecision {
+                decision: Decision::Allow,
+                reason: "method allowed by built-in default (no [methods] policy configured)"
+                    .to_string(),
+            };
+        }
+        return PolicyDecision {
+            decision: Decision::Deny,
+            reason: "default deny: method is not in the built-in default allow list and no [methods] policy is configured".to_string(),
+        };
+    }
+
+    // 8. A [methods] section exists but the method is not listed → deny.
+    PolicyDecision {
+        decision: Decision::Deny,
+        reason: format!(
+            "default deny: method is not in the server-specific or global method allow list for {server_name}"
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -145,6 +277,7 @@ deny = ["filesystem.read_secret", "shell.run"]
         assert_eq!(policy.tools.allow.len(), 2);
         assert_eq!(policy.tools.deny.len(), 2);
         assert!(policy.servers.is_empty());
+        assert!(policy.methods.is_none());
     }
 
     #[test]
@@ -165,6 +298,56 @@ deny = ["filesystem.write"]
         let filesystem = policy.servers.get("filesystem").expect("server scope");
         assert_eq!(filesystem.tools.allow, vec!["filesystem.read"]);
         assert_eq!(filesystem.tools.deny, vec!["filesystem.write"]);
+    }
+
+    #[test]
+    fn parses_method_policy() {
+        let content = r#"
+schema_version = "ef-mcp-policy/v0.1"
+name = "method-scoped"
+
+[methods]
+allow = ["tools/list", "tools/call", "resources/list", "resources/read"]
+deny = ["sampling/createMessage"]
+
+[tools]
+allow = ["filesystem.read"]
+"#;
+        let policy = parse_mcp_policy(content).expect("valid method policy");
+        let methods = policy.methods.expect("methods section");
+        assert_eq!(
+            methods.allow,
+            vec![
+                "tools/list",
+                "tools/call",
+                "resources/list",
+                "resources/read"
+            ]
+        );
+        assert_eq!(methods.deny, vec!["sampling/createMessage"]);
+    }
+
+    #[test]
+    fn parses_per_server_method_policy() {
+        let content = r#"
+schema_version = "ef-mcp-policy/v0.1"
+name = "server-method-scoped"
+
+[methods]
+allow = ["tools/list", "tools/call"]
+
+[servers.filesystem.methods]
+allow = ["resources/list", "resources/read"]
+deny = ["prompts/get"]
+
+[servers.filesystem.tools]
+allow = ["filesystem.read"]
+"#;
+        let policy = parse_mcp_policy(content).expect("valid server method policy");
+        let filesystem = policy.servers.get("filesystem").expect("server scope");
+        let methods = filesystem.methods.as_ref().expect("server methods");
+        assert_eq!(methods.allow, vec!["resources/list", "resources/read"]);
+        assert_eq!(methods.deny, vec!["prompts/get"]);
     }
 
     #[test]
@@ -314,6 +497,211 @@ deny = ["read"]
         );
         assert_eq!(
             decide_tool_call(&policy, "default", "filesystem.read2").decision,
+            Decision::Deny
+        );
+    }
+
+    // --- Method policy tests ---
+
+    #[test]
+    fn default_method_policy_allows_tools_list_and_call() {
+        let policy = parse_mcp_policy(VALID_POLICY).unwrap();
+        assert_eq!(
+            decide_method(&policy, "default", "tools/list").decision,
+            Decision::Allow
+        );
+        assert_eq!(
+            decide_method(&policy, "default", "tools/call").decision,
+            Decision::Allow
+        );
+    }
+
+    #[test]
+    fn default_method_policy_denies_resources_read() {
+        let policy = parse_mcp_policy(VALID_POLICY).unwrap();
+        let d = decide_method(&policy, "default", "resources/read");
+        assert_eq!(d.decision, Decision::Deny);
+        assert!(d.reason.contains("built-in default"));
+    }
+
+    #[test]
+    fn default_method_policy_denies_unknown_method() {
+        let policy = parse_mcp_policy(VALID_POLICY).unwrap();
+        let d = decide_method(&policy, "default", "some/custom/method");
+        assert_eq!(d.decision, Decision::Deny);
+        assert!(d.reason.contains("built-in default"));
+    }
+
+    #[test]
+    fn always_allowed_methods_bypass_policy() {
+        let content = r#"
+schema_version = "ef-mcp-policy/v0.1"
+name = "strict-methods"
+
+[methods]
+allow = []
+deny = ["initialize", "notifications/initialized", "ping"]
+"#;
+        let policy = parse_mcp_policy(content).unwrap();
+        for method in ALWAYS_ALLOWED_METHODS {
+            assert_eq!(
+                decide_method(&policy, "default", method).decision,
+                Decision::Allow,
+                "always-allowed method {method} should bypass deny"
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_method_allow_list_lets_resources_read_through() {
+        let content = r#"
+schema_version = "ef-mcp-policy/v0.1"
+name = "resources-allowed"
+
+[methods]
+allow = ["tools/list", "tools/call", "resources/list", "resources/read"]
+
+[tools]
+allow = ["filesystem.read"]
+"#;
+        let policy = parse_mcp_policy(content).unwrap();
+        assert_eq!(
+            decide_method(&policy, "default", "resources/read").decision,
+            Decision::Allow
+        );
+        assert_eq!(
+            decide_method(&policy, "default", "resources/list").decision,
+            Decision::Allow
+        );
+    }
+
+    #[test]
+    fn method_deny_wins_over_allow() {
+        let content = r#"
+schema_version = "ef-mcp-policy/v0.1"
+name = "deny-wins"
+
+[methods]
+allow = ["resources/read"]
+deny = ["resources/read"]
+"#;
+        let policy = parse_mcp_policy(content).unwrap();
+        assert_eq!(
+            decide_method(&policy, "default", "resources/read").decision,
+            Decision::Deny
+        );
+    }
+
+    #[test]
+    fn server_method_deny_wins_over_global_allow() {
+        let content = r#"
+schema_version = "ef-mcp-policy/v0.1"
+name = "server-deny-wins"
+
+[methods]
+allow = ["resources/read"]
+
+[servers.fs.methods]
+deny = ["resources/read"]
+"#;
+        let policy = parse_mcp_policy(content).unwrap();
+        let d = decide_method(&policy, "fs", "resources/read");
+        assert_eq!(d.decision, Decision::Deny);
+        assert!(d.reason.contains("server-specific"));
+    }
+
+    #[test]
+    fn server_method_allow_lets_through_when_global_is_silent() {
+        let content = r#"
+schema_version = "ef-mcp-policy/v0.1"
+name = "server-allow"
+
+[methods]
+allow = ["tools/list", "tools/call"]
+
+[servers.fs.methods]
+allow = ["resources/list", "resources/read"]
+"#;
+        let policy = parse_mcp_policy(content).unwrap();
+        assert_eq!(
+            decide_method(&policy, "fs", "resources/read").decision,
+            Decision::Allow
+        );
+        // Global doesn't allow resources/read, and server scope is "fs" not "default".
+        assert_eq!(
+            decide_method(&policy, "default", "resources/read").decision,
+            Decision::Deny
+        );
+    }
+
+    #[test]
+    fn wildcard_allow_lets_unknown_methods_through() {
+        let content = r#"
+schema_version = "ef-mcp-policy/v0.1"
+name = "wildcard"
+
+[methods]
+allow = ["*"]
+deny = ["sampling/createMessage"]
+"#;
+        let policy = parse_mcp_policy(content).unwrap();
+        assert_eq!(
+            decide_method(&policy, "default", "some/custom/method").decision,
+            Decision::Allow
+        );
+        assert_eq!(
+            decide_method(&policy, "default", "sampling/createMessage").decision,
+            Decision::Deny
+        );
+    }
+
+    #[test]
+    fn explicit_methods_section_denies_unlisted_methods() {
+        let content = r#"
+schema_version = "ef-mcp-policy/v0.1"
+name = "explicit"
+
+[methods]
+allow = ["tools/list", "tools/call"]
+"#;
+        let policy = parse_mcp_policy(content).unwrap();
+        let d = decide_method(&policy, "default", "resources/read");
+        assert_eq!(d.decision, Decision::Deny);
+        assert!(d.reason.contains("not in the server-specific or global"));
+    }
+
+    #[test]
+    fn prompts_get_denied_by_default() {
+        let policy = parse_mcp_policy(VALID_POLICY).unwrap();
+        assert_eq!(
+            decide_method(&policy, "default", "prompts/get").decision,
+            Decision::Deny
+        );
+    }
+
+    #[test]
+    fn sampling_create_message_denied_by_default() {
+        let policy = parse_mcp_policy(VALID_POLICY).unwrap();
+        assert_eq!(
+            decide_method(&policy, "default", "sampling/createMessage").decision,
+            Decision::Deny
+        );
+    }
+
+    #[test]
+    fn completion_complete_denied_by_default() {
+        let policy = parse_mcp_policy(VALID_POLICY).unwrap();
+        assert_eq!(
+            decide_method(&policy, "default", "completion/complete").decision,
+            Decision::Deny
+        );
+    }
+
+    #[test]
+    fn roots_list_denied_by_default() {
+        let policy = parse_mcp_policy(VALID_POLICY).unwrap();
+        assert_eq!(
+            decide_method(&policy, "default", "roots/list").decision,
             Decision::Deny
         );
     }

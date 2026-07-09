@@ -1,0 +1,25 @@
+# Example EtherFence MCP proxy policy: resources denied.
+# Allows tools and prompts but denies all resource access (client→server).
+# Useful for servers that expose sensitive files via resources/*.
+#
+# NOTE: sampling/createMessage is a server→client request in the MCP
+# protocol. This proxy inspects client→server requests only, so it is
+# omitted from this policy. See mcp-sampling-denied.toml for details on
+# the sampling direction limitation.
+schema_version = "ef-mcp-policy/v0.1"
+name = "mcp-resources-denied"
+
+[methods]
+allow = [
+  "tools/list",
+  "tools/call",
+  "prompts/list",
+  "prompts/get",
+  "completion/complete",
+  "roots/list",
+]
+deny = ["resources/list", "resources/read"]
+
+[tools]
+allow = ["github.list_repos", "github.get_repo"]
+deny = ["shell.run"]

@@ -56,9 +56,10 @@ enum Command {
         #[command(subcommand)]
         command: PolicyCommand,
     },
-    /// Experimental: run an MCP stdio boundary proxy that audits and
-    /// allows/denies MCP tool calls using a TOML policy. Fails closed when
-    /// the policy cannot be loaded.
+    /// Experimental: run an MCP stdio boundary proxy that inspects every
+    /// client→server JSON-RPC method, enforces method-level and tool-level
+    /// allow/deny policy, and audits decisions. Fails closed when the policy
+    /// cannot be loaded.
     McpProxy {
         /// TOML MCP proxy policy file (schema ef-mcp-policy/v0.1).
         #[arg(long)]
