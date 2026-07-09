@@ -206,10 +206,18 @@ impl AuditRecord {
     }
 }
 
-/// Split a JSON-RPC request id into its value and a short type tag for audit.
+/// Split a JSON-RPC request id into a safe-to-log value and a type tag.
+///
 /// The type tag is one of: "number", "string", "bool", "object", "array",
-/// "null", or "missing" (when the id field is absent). Values are never logged
-/// beyond the id itself (which is client-visible metadata, not a secret).
+/// "null", or "missing" (when the id field is absent).
+///
+/// Simple id types (number, string, bool, null) are logged as-is because
+/// they are client-visible metadata used for request correlation and are
+/// not sensitive. Complex id types (object, array) are redacted to just
+/// their type tag — the raw object/array content is not logged, to match
+/// the "no sensitive values" audit posture. A malicious or unusual id
+/// object could carry arbitrary data, and logging its raw form would
+/// violate the principle that only safe metadata reaches the audit log.
 fn split_request_id(request_id: Option<Value>) -> (Option<Value>, Option<String>) {
     match request_id {
         None => (None, Some("missing".to_string())),
@@ -217,8 +225,10 @@ fn split_request_id(request_id: Option<Value>) -> (Option<Value>, Option<String>
         Some(v @ Value::Number(_)) => (Some(v), Some("number".to_string())),
         Some(v @ Value::String(_)) => (Some(v), Some("string".to_string())),
         Some(v @ Value::Bool(_)) => (Some(v), Some("bool".to_string())),
-        Some(v @ Value::Object(_)) => (Some(v), Some("object".to_string())),
-        Some(v @ Value::Array(_)) => (Some(v), Some("array".to_string())),
+        // Complex ids are redacted: only the type tag is logged, not the
+        // raw object/array content.
+        Some(Value::Object(_)) => (None, Some("object".to_string())),
+        Some(Value::Array(_)) => (None, Some("array".to_string())),
     }
 }
 
@@ -402,16 +412,18 @@ mod tests {
 
     #[test]
     fn request_id_type_is_correct() {
-        for (id, expected_type) in [
-            (None, "missing"),
-            (Some(Value::Null), "null"),
-            (Some(json!(42)), "number"),
-            (Some(json!("abc")), "string"),
-            (Some(json!(true)), "bool"),
-            (Some(json!({"k": 1})), "object"),
-            (Some(json!([1, 2])), "array"),
+        for (id, expected_value, expected_type) in [
+            (None, None, "missing"),
+            (Some(Value::Null), Some(Value::Null), "null"),
+            (Some(json!(42)), Some(json!(42)), "number"),
+            (Some(json!("abc")), Some(json!("abc")), "string"),
+            (Some(json!(true)), Some(json!(true)), "bool"),
+            // Complex ids are redacted: type is logged but value is not.
+            (Some(json!({"k": 1})), None, "object"),
+            (Some(json!([1, 2])), None, "array"),
         ] {
-            let (_, id_type) = split_request_id(id);
+            let (value, id_type) = split_request_id(id);
+            assert_eq!(value, expected_value);
             assert_eq!(id_type.as_deref(), Some(expected_type));
         }
     }

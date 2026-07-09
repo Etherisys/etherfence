@@ -96,13 +96,19 @@ component. Its trust boundary assumptions:
   Unknown or unspecified methods default deny. Always-allowed methods
   (initialize, notifications/initialized, ping) bypass method policy.
   Existing tools/list filtering and tools/call allow/deny behavior is
-  preserved. A new `method_decision` audit event records server name,
-  method, decision, reason, request id type, and safe param key names
-  only — no param values, prompt text, resource content, message bodies,
-  or secrets are logged. The proxy remains stdio-only, exact-match,
+  preserved. This is a behavioral hardening from v0.2.x: non-tools
+  client→server methods that previously passed through uninspected are
+  now denied by default. Deployments needing prior pass-through behavior
+  must add an explicit `[methods]` allow list. Method policy applies to
+  client→server requests only; server→client requests such as
+  sampling/createMessage are not intercepted in this release. A new
+  `method_decision` audit event records server name, method, decision,
+  reason, request id type, and safe param key names only — no param
+  values, prompt text, resource content, message bodies, or secrets are
+  logged. The proxy remains stdio-only, exact-match,
   `ef-mcp-policy/v0.1`-compatible, and experimental/pre-alpha. The
-  `[methods]` section is optional and backward-compatible: existing
-  v0.2.x policies work unchanged.
+  `[methods]` section is optional; existing v0.2.x policies remain
+  syntactically valid but will see stricter runtime behavior.
 
 ## Path handling and Semgrep path-traversal triage
 

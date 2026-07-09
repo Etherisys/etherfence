@@ -212,7 +212,14 @@
 - New example policies: strict-tools-only, readonly, resources-denied,
   sampling-denied
 - Schema version unchanged (`ef-mcp-policy/v0.1`); `[methods]` is optional
-  and backward-compatible — no migration required
+  — existing v0.2.x policies remain syntactically valid but see stricter
+  runtime behavior (non-tools methods now denied by default)
+- Behavioral hardening: v0.2.x non-tools client→server methods passed
+  through uninspected; v0.3.0 denies them by default unless explicitly
+  allowed
+- Method policy applies to client→server requests only; server→client
+  requests (e.g. sampling/createMessage) are not intercepted in this
+  release
 - Existing tools/list filtering and tools/call allow/deny behavior
   preserved unchanged
 - Batch arrays remain denied fail-closed

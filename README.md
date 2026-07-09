@@ -81,7 +81,10 @@ Behavior:
   allow/deny policy. Unknown methods default deny. Always-allowed
   methods (initialize, notifications/initialized, ping) bypass method
   policy. When no `[methods]` section is present, the built-in default
-  allows only `tools/list` and `tools/call`.
+  allows only `tools/list` and `tools/call` — this is a behavioral
+  hardening from v0.2.x, where non-tools methods passed through
+  uninspected. Deployments needing prior pass-through behavior must add
+  an explicit `[methods]` allow list or use `allow = ["*"]`.
 - `tools/call` requests that pass the method check are then checked
   against the tool-name policy. Precedence is: global deny, server-specific
   deny, server-specific allow, global allow, then default deny.
@@ -102,10 +105,12 @@ Behavior:
   audit log. Tool-list filter events record counts and allowed tool names, not
   full schemas.
 
-The proxy is stdio-only, exact-match-only, and covers method-level +
-tool-level policy plus `tools/list` advertisement filtering. It is not
-production-ready. See `docs/mcp-proxy.md` for details and limitations, and
-`docs/mcp-clients.md`
+The proxy is stdio-only, exact-match-only, and covers client→server
+method-level + tool-level policy plus `tools/list` advertisement
+filtering. It does not inspect server→client requests (e.g.
+sampling/createMessage initiated by the server). It is not
+production-ready. See `docs/mcp-proxy.md` for details and limitations,
+and `docs/mcp-clients.md`
 plus `docs/examples/*.json` for client configuration templates. `docs/mcp-compatibility-matrix.md` records checked compatibility evidence and `docs/mcp-real-server-test-template.md` explains optional maintainer-run real-server smoke tests.
 
 

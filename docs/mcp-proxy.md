@@ -137,9 +137,12 @@ Method decision rules, in exact order:
 8. A `[methods]` section exists but the method is not listed -> **deny**
    (default deny for unknown methods).
 
-When no `[methods]` section is present, the built-in default preserves
-v0.2.x behavior: only `tools/list` and `tools/call` are allowed. This
-means existing v0.2.x policies work unchanged.
+When no `[methods]` section is present, the built-in default allows
+`tools/list` and `tools/call` and denies everything else. This is a
+**behavioral hardening from v0.2.x**: in v0.2.x, non-tools methods passed
+through the proxy uninspected; in v0.3.0 they are denied by default.
+Deployments that need non-tools methods to pass through must add an
+explicit `[methods]` allow list or use `allow = ["*"]` for permissive mode.
 
 The `"*"` wildcard in the `allow` list explicitly opts in to permissive
 mode: all methods (including unknown ones) are allowed except those in
@@ -147,6 +150,14 @@ the `deny` list. Use this with caution.
 
 Per-server method scoping follows the same precedence as tool rules:
 global deny, server deny, server allow, global allow, then default deny.
+
+**Scope limitation:** Method policy applies to client→server JSON-RPC
+requests only. Server→client requests such as `sampling/createMessage`
+and `roots/list` (which in the MCP protocol are initiated by the server,
+not the client) are not intercepted by method policy in this release. A
+`[methods].deny` entry for `sampling/createMessage` will deny it only
+when it appears as a client→server request, not when the server initiates
+it. Server→client method policy is a future scope.
 
 Fail-closed cases:
 
@@ -270,7 +281,9 @@ Fields:
 - `server`: selected server name when applicable
 - `method`: JSON-RPC method (`tools/call`, `tools/list`, or the method
   name for `method_decision` events)
-- `request_id`: JSON-RPC request id when present
+- `request_id`: JSON-RPC request id when present (simple types: number,
+  string, bool, null are logged as-is; complex types: object and array
+  ids are redacted — only the type is recorded in `request_id_type`)
 - `request_id_type`: JSON type of the request id (`number`, `string`,
   `bool`, `object`, `array`, `null`, or `missing`) (v0.3.0)
 - `tool`: tool name for tool-call decisions when it could be extracted
@@ -388,9 +401,13 @@ for local paths, server commands, and exact tool names.
 - Per-server scoping is selected explicitly with `--server-name`; the proxy
   does not auto-discover or authenticate MCP server identity.
 - The proxy inspects every client→server JSON-RPC request method and
-  enforces method-level + tool-level policy. It does not inspect tool
-  results, resource contents, prompt responses, or sampling responses
-  beyond what is needed for `tools/list` response filtering.
+  enforces method-level + tool-level policy. It does not inspect
+  server→client requests (e.g. sampling/createMessage, roots/list when
+  server-initiated) — method policy applies to client→server direction
+  only. Server→client method policy is a future scope.
+- It does not inspect tool results, resource contents, prompt responses,
+  or sampling responses beyond what is needed for `tools/list` response
+  filtering.
 - No filesystem path-scoped argument policy in this release; argument
   values are never inspected or logged.
 - JSON-RPC batch arrays are not unpacked. A batch line from the client is

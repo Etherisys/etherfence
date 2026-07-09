@@ -67,17 +67,36 @@ terminal-command scanning, or network interception.
   mode, API server, network interception, shell hooks, terminal-command
   scanning, or filesystem path-scoped argument policy.
 
-### Policy/schema compatibility
+### Policy/schema compatibility and behavioral migration
 
 - Schema version remains `ef-mcp-policy/v0.1` (no version bump needed).
-  The `[methods]` section is optional: existing v0.2.x policies without it
-  continue to work with identical behavior (built-in default allows
-  `tools/list` and `tools/call`, denies everything else).
-- The `[methods]` section is additive and backward-compatible. No
-  migration is required for existing policies.
+  Existing v0.2.x policy files are syntactically valid and require no
+  changes to parse or load.
+- **Behavioral hardening (not a pure backward-compatible change):** In
+  v0.2.x, the proxy only inspected `tools/call` requests and filtered
+  tracked `tools/list` responses; every other client→server JSON-RPC
+  method (e.g. `resources/read`, `prompts/get`, `completion/complete`)
+  passed through to the server uninspected. In v0.3.0, every
+  client→server JSON-RPC request is method-checked before forwarding.
+  When no `[methods]` section is present, the built-in default allows
+  only `tools/list` and `tools/call` and denies all other methods. This
+  means deployments that relied on non-tools methods passing through
+  uninspected must now add an explicit `[methods]` allow list (or
+  `allow = ["*"]` for permissive mode) to restore prior pass-through
+  behavior. This is an intentional security hardening, not a regression:
+  the v0.2.x pass-through was a documented limitation, not a feature.
+- The `[methods]` section is additive: existing policies that only use
+  `[tools]` and `[servers.<name>.tools]` continue to work with the
+  stricter built-in default. No file edits are required unless the
+  deployment needs non-tools methods to pass through.
 - Per-server method scoping via `[servers.<name>.methods]` follows the
   same precedence as tool rules: global deny, server deny, server allow,
   global allow, then default deny.
+- **Scope limitation:** The proxy inspects client→server requests only.
+  Server→client requests such as `sampling/createMessage` and
+  `roots/list` (which in the MCP protocol are initiated by the server,
+  not the client) are not intercepted by method policy in this release.
+  Method policy applies to client→server requests only.
 
 ## [0.2.8] - 2026-07-09
 
