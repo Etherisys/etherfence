@@ -5,7 +5,10 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 
 use crate::audit::{redacted_argument_keys, redacted_param_keys, AuditLog, AuditRecord};
-use crate::policy::{decide_method, decide_tool_call, Decision, McpPolicyFile};
+use crate::policy::{
+    decide_method, decide_method_for_direction, decide_tool_call, Decision, McpPolicyFile,
+    MethodDirection,
+};
 
 pub const TOOL_CALL_METHOD: &str = "tools/call";
 pub const TOOL_LIST_METHOD: &str = "tools/list";
@@ -97,6 +100,17 @@ pub enum ClientAction {
     Deny { response: Option<String> },
 }
 
+/// What the proxy should do with one line received from the MCP server.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ServerAction {
+    /// Forward `line` to the client unchanged or after safe response filtering.
+    Forward { line: String },
+    /// Do not forward to the client. If the server request carried an id,
+    /// `response_to_server` holds the JSON-RPC error line to send back toward
+    /// the MCP server.
+    Deny { response_to_server: Option<String> },
+}
+
 /// A client request the proxy must track until its response arrives.
 ///
 /// Only messages that need response handling are tracked. Today that is
@@ -174,7 +188,7 @@ pub struct InspectedLine {
 
 #[derive(Debug)]
 pub struct InspectedServerLine {
-    pub line: String,
+    pub action: ServerAction,
     pub audit: Option<AuditRecord>,
     /// Set when this response matched a tracked request and cleared its
     /// tracking entry, so the engine can emit a cleanup audit event.
@@ -359,19 +373,82 @@ pub fn inspect_server_line(
         // Not JSON: forward unchanged. Non-JSON server output is the server's
         // problem to resolve, exactly like any non-JSON client line.
         return InspectedServerLine {
-            line: line.to_string(),
+            action: ServerAction::Forward {
+                line: line.to_string(),
+            },
             audit: None,
             tracking_cleared: false,
         };
     };
 
-    // Responses without an id (notifications, or bare results) cannot be
-    // matched to a tracked request, so they pass through unchanged. This is a
-    // documented safe default: the proxy only re-shapes responses it can tie
-    // back to a tracked tools/list request.
+    if message.is_array() {
+        let reason =
+            "fail closed: server-to-client JSON-RPC batch arrays are not inspected by this proxy";
+        return InspectedServerLine {
+            action: ServerAction::Deny {
+                response_to_server: Some(batch_denied_response(reason)),
+            },
+            audit: Some(AuditRecord::batch_denied_with_direction(
+                &policy.name,
+                server_name,
+                MethodDirection::ServerToClient.as_str(),
+                reason,
+            )),
+            tracking_cleared: false,
+        };
+    }
+
+    // A server output object with a method is a server→client JSON-RPC request
+    // or notification. Inspect it before forwarding so client-feature methods
+    // such as sampling/createMessage, roots/list, and elicitation/create can be
+    // denied before they reach the client.
+    if let Some(method) = message.get("method").and_then(Value::as_str) {
+        let request_id = message.get("id").cloned();
+        let params = message.get("params");
+        let param_keys = redacted_param_keys(params);
+        let method_decision = decide_method_for_direction(
+            policy,
+            server_name,
+            MethodDirection::ServerToClient,
+            method,
+        );
+        let audit = Some(AuditRecord::method_decision_with_direction(
+            &policy.name,
+            server_name,
+            MethodDirection::ServerToClient.as_str(),
+            method,
+            request_id.clone(),
+            param_keys,
+            method_decision.decision,
+            &method_decision.reason,
+        ));
+        if method_decision.decision != Decision::Allow {
+            let response_to_server = request_id
+                .filter(|id| !id.is_null())
+                .map(|id| method_denied_error_response(&id, method, &method_decision.reason));
+            return InspectedServerLine {
+                action: ServerAction::Deny { response_to_server },
+                audit,
+                tracking_cleared: false,
+            };
+        }
+        return InspectedServerLine {
+            action: ServerAction::Forward {
+                line: line.to_string(),
+            },
+            audit,
+            tracking_cleared: false,
+        };
+    }
+
+    // Responses without an id cannot be matched to a tracked request, so they
+    // pass through unchanged. This is a documented safe default: the proxy only
+    // re-shapes responses it can tie back to a tracked tools/list request.
     let Some(id) = message.get("id") else {
         return InspectedServerLine {
-            line: line.to_string(),
+            action: ServerAction::Forward {
+                line: line.to_string(),
+            },
             audit: None,
             tracking_cleared: false,
         };
@@ -379,7 +456,9 @@ pub fn inspect_server_line(
     let Some(id_key) = request_id_key(id) else {
         // A null id (JSON-RPC error/result with id:null) is never tracked.
         return InspectedServerLine {
-            line: line.to_string(),
+            action: ServerAction::Forward {
+                line: line.to_string(),
+            },
             audit: None,
             tracking_cleared: false,
         };
@@ -394,7 +473,9 @@ pub fn inspect_server_line(
     // to reuse the same id style) pass through unchanged.
     if !pending.contains(&request) {
         return InspectedServerLine {
-            line: line.to_string(),
+            action: ServerAction::Forward {
+                line: line.to_string(),
+            },
             audit: None,
             tracking_cleared: false,
         };
@@ -406,7 +487,9 @@ pub fn inspect_server_line(
     if message.get("error").is_some() {
         let tracking_cleared = pending.remove_response(&request);
         return InspectedServerLine {
-            line: line.to_string(),
+            action: ServerAction::Forward {
+                line: line.to_string(),
+            },
             audit: None,
             tracking_cleared,
         };
@@ -425,7 +508,9 @@ pub fn inspect_server_line(
     if !is_tool_list {
         let tracking_cleared = pending.remove_response(&request);
         return InspectedServerLine {
-            line: line.to_string(),
+            action: ServerAction::Forward {
+                line: line.to_string(),
+            },
             audit: None,
             tracking_cleared,
         };
@@ -446,7 +531,9 @@ pub fn inspect_server_line(
         *tools = json!([]);
         let tracking_cleared = pending.remove_response(&request);
         return InspectedServerLine {
-            line: message.to_string(),
+            action: ServerAction::Forward {
+                line: message.to_string(),
+            },
             audit: Some(audit),
             tracking_cleared,
         };
@@ -476,7 +563,9 @@ pub fn inspect_server_line(
     );
     let tracking_cleared = pending.remove_response(&request);
     InspectedServerLine {
-        line: message.to_string(),
+        action: ServerAction::Forward {
+            line: message.to_string(),
+        },
         audit: Some(audit),
         tracking_cleared,
     }
@@ -583,7 +672,7 @@ where
         .stderr(Stdio::inherit())
         .spawn()
         .map_err(|error| ProxyError::SpawnFailed(format!("{error:?}")))?;
-    let mut server_in = child
+    let server_in = child
         .stdin
         .take()
         .ok_or_else(|| ProxyError::PipeOpen("server stdin was not captured".into()))?;
@@ -594,22 +683,7 @@ where
     let client_out = Mutex::new(client_out);
     let pending_requests = Arc::new(Mutex::new(TrackedRequests::default()));
     let audit_log = Arc::new(Mutex::new(audit_log.take()));
-
-    // Forward one client line to the server, returning false on a clean client
-    // EOF (broken pipe) so the caller can shut down without treating it as an
-    // error.
-    let forward_to_server = |server_in: &mut std::process::ChildStdin,
-                             line: &str|
-     -> std::result::Result<bool, ProxyError> {
-        match writeln!(server_in, "{line}") {
-            Ok(()) => server_in
-                .flush()
-                .map(|()| true)
-                .map_err(|error| ProxyError::ServerWrite(format!("{error:?}"))),
-            Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => Ok(false),
-            Err(error) => Err(ProxyError::ServerWrite(format!("{error:?}"))),
-        }
-    };
+    let server_in = Arc::new(Mutex::new(Some(server_in)));
 
     let pump_result = std::thread::scope(|scope| -> std::result::Result<(), ProxyError> {
         let server_to_client = scope.spawn(|| {
@@ -620,6 +694,7 @@ where
                 server_name,
                 &pending_requests,
                 &audit_log,
+                &server_in,
             )
         });
 
@@ -653,7 +728,7 @@ where
             }
             match inspected.action {
                 ClientAction::Forward => {
-                    if !forward_to_server(&mut server_in, &line)? {
+                    if !write_to_server(&server_in, &line)? {
                         // Server pipe closed while we were forwarding: stop the
                         // client loop cleanly and let the server pump finish.
                         break;
@@ -682,8 +757,11 @@ where
         }
 
         // Client is done (EOF or broken pipe): close the server's stdin so the
-        // child receives EOF and can exit. Dropping the handle is sufficient.
-        drop(server_in);
+        // child receives EOF and can exit. The server pump only borrows this
+        // handle briefly when it must answer denied server→client requests, so
+        // setting it to None closes the write end and avoids keeping the child
+        // alive accidentally.
+        *server_in.lock().expect("server input lock") = None;
         server_to_client
             .join()
             .expect("server-to-client pump thread")?;
@@ -703,6 +781,7 @@ fn pump_server_to_client<ClientOut: Write>(
     server_name: &str,
     pending_requests: &Arc<Mutex<TrackedRequests>>,
     audit_log: &Arc<Mutex<Option<AuditLog>>>,
+    server_in: &Arc<Mutex<Option<std::process::ChildStdin>>>,
 ) -> std::result::Result<(), ProxyError> {
     let reader = BufReader::new(server_out);
     for line in reader.lines() {
@@ -734,17 +813,44 @@ fn pump_server_to_client<ClientOut: Write>(
                 }
             }
         }
-        let mut out = client_out.lock().expect("client output lock");
-        match writeln!(out, "{}", inspected.line) {
-            Ok(()) => out
-                .flush()
-                .map_err(|error| ProxyError::ClientWrite(format!("{error:?}")))?,
-            // Client closed its output: stop the server pump cleanly.
-            Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => return Ok(()),
-            Err(error) => return Err(ProxyError::ClientWrite(format!("{error:?}"))),
+        match inspected.action {
+            ServerAction::Forward { line } => {
+                let mut out = client_out.lock().expect("client output lock");
+                match writeln!(out, "{line}") {
+                    Ok(()) => out
+                        .flush()
+                        .map_err(|error| ProxyError::ClientWrite(format!("{error:?}")))?,
+                    // Client closed its output: stop the server pump cleanly.
+                    Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => return Ok(()),
+                    Err(error) => return Err(ProxyError::ClientWrite(format!("{error:?}"))),
+                }
+            }
+            ServerAction::Deny { response_to_server } => {
+                if let Some(response) = response_to_server {
+                    let _ = write_to_server(server_in, &response)?;
+                }
+            }
         }
     }
     Ok(())
+}
+
+fn write_to_server(
+    server_in: &Arc<Mutex<Option<std::process::ChildStdin>>>,
+    line: &str,
+) -> std::result::Result<bool, ProxyError> {
+    let mut guard = server_in.lock().expect("server input lock");
+    let Some(server_in) = guard.as_mut() else {
+        return Ok(false);
+    };
+    match writeln!(server_in, "{line}") {
+        Ok(()) => server_in
+            .flush()
+            .map(|()| true)
+            .map_err(|error| ProxyError::ServerWrite(format!("{error:?}"))),
+        Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => Ok(false),
+        Err(error) => Err(ProxyError::ServerWrite(format!("{error:?}"))),
+    }
 }
 
 fn wait_for_child(child: &mut Child) -> std::result::Result<i32, ProxyError> {
@@ -789,6 +895,13 @@ deny = ["filesystem.read_secret", "shell.run"]
             id_key: id_key.to_string(),
         });
         pending
+    }
+
+    fn forwarded_line(inspected: &InspectedServerLine) -> &str {
+        match &inspected.action {
+            ServerAction::Forward { line } => line,
+            ServerAction::Deny { .. } => panic!("expected forwarded server line"),
+        }
     }
 
     #[test]
@@ -1013,7 +1126,7 @@ deny = ["filesystem.read_secret", "shell.run"]
             &mut pending,
             r#"{"jsonrpc":"2.0","id":7,"result":{"tools":[{"name":"filesystem.read","description":"safe"},{"name":"shell.run","description":"secret schema text"},{"name":"browser.open"}]}}"#,
         );
-        let json: Value = serde_json::from_str(&inspected.line).unwrap();
+        let json: Value = serde_json::from_str(forwarded_line(&inspected)).unwrap();
         let tools = json["result"]["tools"].as_array().unwrap();
         assert_eq!(tools.len(), 1);
         assert_eq!(tools[0]["name"], "filesystem.read");
@@ -1035,7 +1148,7 @@ deny = ["filesystem.read_secret", "shell.run"]
             &mut pending,
             r#"{"jsonrpc":"2.0","id":"list-1","result":{"tools":[{"name":"github.list_repos"},{"name":"shell.run"}]}}"#,
         );
-        let json: Value = serde_json::from_str(&inspected.line).unwrap();
+        let json: Value = serde_json::from_str(forwarded_line(&inspected)).unwrap();
         let tools = json["result"]["tools"].as_array().unwrap();
         assert_eq!(tools.len(), 1);
         assert_eq!(tools[0]["name"], "github.list_repos");
@@ -1051,7 +1164,7 @@ deny = ["filesystem.read_secret", "shell.run"]
             &mut pending,
             r#"{"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"github.list_repos"},{"name":7},{"description":"missing name"}]}}"#,
         );
-        let json: Value = serde_json::from_str(&inspected.line).unwrap();
+        let json: Value = serde_json::from_str(forwarded_line(&inspected)).unwrap();
         let tools = json["result"]["tools"].as_array().unwrap();
         assert_eq!(tools.len(), 1);
         assert_eq!(tools[0]["name"], "github.list_repos");
@@ -1067,7 +1180,7 @@ deny = ["filesystem.read_secret", "shell.run"]
             &mut pending,
             r#"{"jsonrpc":"2.0","id":2,"result":{"tools":"not-array"}}"#,
         );
-        let json: Value = serde_json::from_str(&inspected.line).unwrap();
+        let json: Value = serde_json::from_str(forwarded_line(&inspected)).unwrap();
         assert_eq!(json["result"]["tools"], serde_json::json!([]));
         let audit = inspected.audit.expect("audit record");
         assert_eq!(audit.event, "tools_list_malformed");
@@ -1085,7 +1198,7 @@ deny = ["filesystem.read_secret", "shell.run"]
         let mut pending = tracked("2");
         let line = r#"{"jsonrpc":"2.0","id":2,"result":{"other":"value"}}"#;
         let inspected = inspect_server_line(&policy(), "default", &mut pending, line);
-        assert_eq!(inspected.line, line);
+        assert_eq!(forwarded_line(&inspected), line);
         assert!(inspected.audit.is_none());
         assert!(inspected.tracking_cleared);
         assert!(pending.is_empty());
@@ -1098,7 +1211,7 @@ deny = ["filesystem.read_secret", "shell.run"]
         let mut pending = tracked("7");
         let line = r#"{"jsonrpc":"2.0","id":7,"result":{"other":"value"}}"#;
         let inspected = inspect_server_line(&policy(), "default", &mut pending, line);
-        assert_eq!(inspected.line, line);
+        assert_eq!(forwarded_line(&inspected), line);
         assert!(inspected.audit.is_none());
         assert!(inspected.tracking_cleared);
         assert!(pending.is_empty());
@@ -1110,7 +1223,7 @@ deny = ["filesystem.read_secret", "shell.run"]
         let line = r#"{"jsonrpc":"2.0","id":"err-1","error":{"code":-32603,"message":"boom"}}"#;
         let inspected = inspect_server_line(&policy(), "default", &mut pending, line);
         // Error passes through unchanged.
-        assert_eq!(inspected.line, line);
+        assert_eq!(forwarded_line(&inspected), line);
         assert!(inspected.audit.is_none());
         assert!(inspected.tracking_cleared);
         assert!(pending.is_empty());
@@ -1121,7 +1234,7 @@ deny = ["filesystem.read_secret", "shell.run"]
         let mut pending = TrackedRequests::default();
         let line = r#"{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"shell.run"}]}}"#;
         let inspected = inspect_server_line(&policy(), "default", &mut pending, line);
-        assert_eq!(inspected.line, line);
+        assert_eq!(forwarded_line(&inspected), line);
         assert!(inspected.audit.is_none());
         assert!(!inspected.tracking_cleared);
     }
@@ -1129,9 +1242,9 @@ deny = ["filesystem.read_secret", "shell.run"]
     #[test]
     fn response_without_id_passes_through_unchanged() {
         let mut pending = TrackedRequests::default();
-        let line = r#"{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}"#;
+        let line = r#"{"jsonrpc":"2.0","result":{"status":"ok"}}"#;
         let inspected = inspect_server_line(&policy(), "default", &mut pending, line);
-        assert_eq!(inspected.line, line);
+        assert_eq!(forwarded_line(&inspected), line);
         assert!(inspected.audit.is_none());
         assert!(!inspected.tracking_cleared);
     }
@@ -1144,7 +1257,7 @@ deny = ["filesystem.read_secret", "shell.run"]
         let mut pending = tracked("10");
         let line = r#"{"jsonrpc":"2.0","id":10,"result":{"echo_tool":"filesystem.read"}}"#;
         let inspected = inspect_server_line(&policy(), "default", &mut pending, line);
-        assert_eq!(inspected.line, line);
+        assert_eq!(forwarded_line(&inspected), line);
         assert!(inspected.audit.is_none());
         assert!(inspected.tracking_cleared);
         assert!(pending.is_empty());
@@ -1171,7 +1284,7 @@ deny = ["filesystem.read_secret", "shell.run"]
         let mut pending = TrackedRequests::default();
         let line = "this is not json {{{";
         let inspected = inspect_server_line(&policy(), "default", &mut pending, line);
-        assert_eq!(inspected.line, line);
+        assert_eq!(forwarded_line(&inspected), line);
         assert!(inspected.audit.is_none());
         assert!(!inspected.tracking_cleared);
     }
@@ -1378,7 +1491,7 @@ deny = ["initialize", "notifications/initialized", "ping"]
             &mut pending,
             r#"{"jsonrpc":"2.0","id":10,"result":{"tools":[{"name":"filesystem.read"},{"name":"shell.run"}]}}"#,
         );
-        let json: Value = serde_json::from_str(&inspected.line).unwrap();
+        let json: Value = serde_json::from_str(forwarded_line(&inspected)).unwrap();
         let tools = json["result"]["tools"].as_array().unwrap();
         assert_eq!(tools.len(), 1);
         assert_eq!(tools[0]["name"], "filesystem.read");
@@ -1445,5 +1558,96 @@ deny = ["sampling/createMessage"]
         let audit = inspected.audit.expect("audit");
         assert_eq!(audit.decision, "allow");
         assert!(audit.reason.contains("wildcard"));
+    }
+
+    #[test]
+    fn server_to_client_allowed_method_is_forwarded_and_audited_with_direction() {
+        let allow_policy = parse_mcp_policy(
+            r#"
+schema_version = "ef-mcp-policy/v0.1"
+name = "allow-roots"
+
+[methods]
+allow = ["roots/list"]
+"#,
+        )
+        .unwrap();
+        let inspected = inspect_server_line(
+            &allow_policy,
+            "default",
+            &mut TrackedRequests::default(),
+            r#"{"jsonrpc":"2.0","id":"roots-1","method":"roots/list","params":{"cursor":"secret-cursor"}}"#,
+        );
+        assert!(matches!(inspected.action, ServerAction::Forward { .. }));
+        let audit = inspected.audit.expect("audit");
+        assert_eq!(audit.event, "method_decision");
+        assert_eq!(audit.direction.as_deref(), Some("server_to_client"));
+        assert_eq!(audit.method.as_deref(), Some("roots/list"));
+        assert_eq!(audit.decision, "allow");
+        assert_eq!(audit.param_keys, vec!["cursor"]);
+    }
+
+    #[test]
+    fn server_to_client_denied_method_is_dropped_with_error_to_server() {
+        let inspected = inspect_server_line(
+            &method_policy(),
+            "default",
+            &mut TrackedRequests::default(),
+            r#"{"jsonrpc":"2.0","id":"sample-1","method":"sampling/createMessage","params":{"messages":[{"role":"user","content":"secret prompt"}]}}"#,
+        );
+        let ServerAction::Deny {
+            response_to_server: Some(response),
+        } = inspected.action
+        else {
+            panic!("expected server-to-client denial response to server");
+        };
+        let json: Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(json["id"], "sample-1");
+        assert_eq!(json["error"]["code"], DENIED_ERROR_CODE);
+        assert_eq!(json["error"]["data"]["method"], "sampling/createMessage");
+        assert!(!response.contains("secret prompt"));
+        let audit = inspected.audit.expect("audit");
+        assert_eq!(audit.direction.as_deref(), Some("server_to_client"));
+        assert_eq!(audit.decision, "deny");
+        assert_eq!(audit.param_keys, vec!["messages"]);
+    }
+
+    #[test]
+    fn server_to_client_denied_notification_is_dropped_and_audited() {
+        let inspected = inspect_server_line(
+            &method_policy(),
+            "default",
+            &mut TrackedRequests::default(),
+            r#"{"jsonrpc":"2.0","method":"elicitation/create","params":{"message":"secret body"}}"#,
+        );
+        assert_eq!(
+            inspected.action,
+            ServerAction::Deny {
+                response_to_server: None
+            }
+        );
+        let audit = inspected.audit.expect("audit");
+        assert_eq!(audit.direction.as_deref(), Some("server_to_client"));
+        assert_eq!(audit.request_id_type.as_deref(), Some("missing"));
+        assert_eq!(audit.param_keys, vec!["message"]);
+    }
+
+    #[test]
+    fn server_to_client_batch_arrays_are_denied_fail_closed() {
+        let inspected = inspect_server_line(
+            &method_policy(),
+            "default",
+            &mut TrackedRequests::default(),
+            r#"[{"jsonrpc":"2.0","id":"s1","method":"roots/list","params":{}}]"#,
+        );
+        assert!(matches!(
+            inspected.action,
+            ServerAction::Deny {
+                response_to_server: Some(_)
+            }
+        ));
+        let audit = inspected.audit.expect("audit");
+        assert_eq!(audit.event, "batch_denied");
+        assert_eq!(audit.direction.as_deref(), Some("server_to_client"));
     }
 }

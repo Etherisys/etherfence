@@ -18,6 +18,7 @@ pub struct AuditRecord {
     pub event: String,
     pub policy: Option<String>,
     pub server: Option<String>,
+    pub direction: Option<String>,
     pub method: Option<String>,
     pub request_id: Option<Value>,
     pub request_id_type: Option<String>,
@@ -47,6 +48,7 @@ impl AuditRecord {
             event: "tool_call_decision".to_string(),
             policy: Some(policy_name.to_string()),
             server: Some(server_name.to_string()),
+            direction: Some("client_to_server".to_string()),
             method: Some("tools/call".to_string()),
             request_id,
             request_id_type,
@@ -70,12 +72,36 @@ impl AuditRecord {
         decision: Decision,
         reason: &str,
     ) -> Self {
+        Self::method_decision_with_direction(
+            policy_name,
+            server_name,
+            "client_to_server",
+            method,
+            request_id,
+            param_keys,
+            decision,
+            reason,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn method_decision_with_direction(
+        policy_name: &str,
+        server_name: &str,
+        direction: &str,
+        method: &str,
+        request_id: Option<Value>,
+        param_keys: Vec<String>,
+        decision: Decision,
+        reason: &str,
+    ) -> Self {
         let (request_id, request_id_type) = split_request_id(request_id);
         AuditRecord {
             ts: rfc3339_utc_now(),
             event: "method_decision".to_string(),
             policy: Some(policy_name.to_string()),
             server: Some(server_name.to_string()),
+            direction: Some(direction.to_string()),
             method: Some(method.to_string()),
             request_id,
             request_id_type,
@@ -91,11 +117,21 @@ impl AuditRecord {
     }
 
     pub fn batch_denied(policy_name: &str, server_name: &str, reason: &str) -> Self {
+        Self::batch_denied_with_direction(policy_name, server_name, "client_to_server", reason)
+    }
+
+    pub fn batch_denied_with_direction(
+        policy_name: &str,
+        server_name: &str,
+        direction: &str,
+        reason: &str,
+    ) -> Self {
         AuditRecord {
             ts: rfc3339_utc_now(),
             event: "batch_denied".to_string(),
             policy: Some(policy_name.to_string()),
             server: Some(server_name.to_string()),
+            direction: Some(direction.to_string()),
             method: None,
             request_id: None,
             request_id_type: None,
@@ -124,6 +160,7 @@ impl AuditRecord {
             event: "tools_list_filtered".to_string(),
             policy: Some(policy_name.to_string()),
             server: Some(server_name.to_string()),
+            direction: Some("server_to_client".to_string()),
             method: Some("tools/list".to_string()),
             request_id,
             request_id_type,
@@ -150,6 +187,7 @@ impl AuditRecord {
             event: "tools_list_malformed".to_string(),
             policy: Some(policy_name.to_string()),
             server: Some(server_name.to_string()),
+            direction: Some("server_to_client".to_string()),
             method: Some("tools/list".to_string()),
             request_id,
             request_id_type,
@@ -170,6 +208,7 @@ impl AuditRecord {
             event: "tools_list_tracking_removed".to_string(),
             policy: Some(policy_name.name.clone()),
             server: Some(server_name.to_string()),
+            direction: Some("server_to_client".to_string()),
             method: Some("tools/list".to_string()),
             request_id: None,
             request_id_type: None,
@@ -191,6 +230,7 @@ impl AuditRecord {
             event: "policy_load_error".to_string(),
             policy: None,
             server: None,
+            direction: None,
             method: None,
             request_id: None,
             request_id_type: None,

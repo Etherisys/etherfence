@@ -2,7 +2,7 @@ use serde_json::Value;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const TEST_POLICY: &str = r#"
 schema_version = "ef-mcp-policy/v0.1"
@@ -66,6 +66,47 @@ fn run_proxy_with_input_for_server(
         Some((&server_log, "FAKE_MCP_SERVER_LOG")),
         &audit_log,
     )
+}
+
+fn run_proxy_with_input_delay_before_close(
+    name: &str,
+    policy_path: &PathBuf,
+    input_lines: &[&str],
+    delay: Duration,
+) -> ProxyRun {
+    let server_log = temp_path(&format!("{name}-server-received"), "jsonl");
+    let audit_log = temp_path(&format!("{name}-audit"), "jsonl");
+    let server_command = vec![env!("CARGO_BIN_EXE_fake-mcp-server").to_string()];
+    let mut command = Command::new(env!("CARGO_BIN_EXE_etherfence"));
+    command
+        .arg("mcp-proxy")
+        .arg("--policy")
+        .arg(policy_path)
+        .arg("--audit-log")
+        .arg(&audit_log)
+        .env("FAKE_MCP_SERVER_LOG", &server_log)
+        .arg("--")
+        .args(&server_command);
+    let mut child = command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn etherfence mcp-proxy");
+    {
+        let mut stdin = child.stdin.take().expect("proxy stdin");
+        for line in input_lines {
+            writeln!(stdin, "{line}").expect("write to proxy stdin");
+        }
+        stdin.flush().expect("flush proxy stdin");
+        std::thread::sleep(delay);
+    }
+    let output = child.wait_with_output().expect("wait for proxy");
+    ProxyRun {
+        output,
+        server_log,
+        audit_log,
+    }
 }
 
 fn run_proxy_with_command_for_server(
@@ -539,6 +580,174 @@ fn proxy_handles_malformed_tools_list_fixture_fail_safe() {
 
     let audit = std::fs::read_to_string(&run.audit_log).expect("audit log");
     assert!(audit.contains("fail safe"));
+
+    let _ = std::fs::remove_file(&policy);
+    let _ = std::fs::remove_file(&run.server_log);
+    let _ = std::fs::remove_file(&run.audit_log);
+}
+
+const SERVER_TO_CLIENT_POLICY: &str = r#"
+schema_version = "ef-mcp-policy/v0.1"
+name = "server-to-client-test"
+
+[methods]
+allow = [
+  "initialize",
+  "tools/list",
+  "tools/call",
+  "fixture/server_sampling",
+  "fixture/server_roots",
+  "fixture/server_elicitation_notification",
+  "fixture/server_batch",
+]
+deny = ["sampling/createMessage", "elicitation/create"]
+
+[tools]
+allow = ["filesystem.read"]
+"#;
+
+const SERVER_TO_CLIENT_ALLOW_ROOTS_POLICY: &str = r#"
+schema_version = "ef-mcp-policy/v0.1"
+name = "server-to-client-allow-roots"
+
+[methods]
+allow = [
+  "initialize",
+  "fixture/server_roots",
+  "roots/list",
+]
+deny = ["sampling/createMessage", "elicitation/create"]
+"#;
+
+#[test]
+fn proxy_denies_server_to_client_sampling_before_client_and_answers_server() {
+    let policy = write_temp_policy("server-sampling", SERVER_TO_CLIENT_POLICY);
+    let run = run_proxy_with_input_delay_before_close(
+        "server-sampling",
+        &policy,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"fixture/server_sampling","params":{}}"#,
+            r#"{"jsonrpc":"2.0","id":2,"method":"initialize","params":{"protocolVersion":"2025-03-26"}}"#,
+        ],
+        Duration::from_millis(50),
+    );
+    assert!(
+        run.output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&run.output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&run.output.stdout);
+    assert!(
+        !stdout.contains("sampling/createMessage"),
+        "denied server→client sampling must not reach client stdout: {stdout}"
+    );
+    assert!(!stdout.contains("secret prompt text from server"));
+
+    let received = std::fs::read_to_string(&run.server_log).expect("server log");
+    assert!(received.contains("fixture/server_sampling"));
+    assert!(
+        received.contains("EtherFence MCP proxy denied this method by policy"),
+        "server should receive JSON-RPC denial response: {received}"
+    );
+    assert!(received.contains("server-sampling-1"));
+    assert!(!received.contains("secret prompt text from server"));
+
+    let audit = std::fs::read_to_string(&run.audit_log).expect("audit log");
+    assert!(audit.contains("\"direction\":\"server_to_client\""));
+    assert!(audit.contains("\"sampling/createMessage\""));
+    assert!(audit.contains("\"param_keys\":[\"messages\"]"));
+    assert!(!audit.contains("secret prompt text from server"));
+
+    let _ = std::fs::remove_file(&policy);
+    let _ = std::fs::remove_file(&run.server_log);
+    let _ = std::fs::remove_file(&run.audit_log);
+}
+
+#[test]
+fn proxy_forwards_allowed_server_to_client_roots_request() {
+    let policy = write_temp_policy("server-roots", SERVER_TO_CLIENT_ALLOW_ROOTS_POLICY);
+    let run = run_proxy_with_input(
+        "server-roots",
+        &policy,
+        &[r#"{"jsonrpc":"2.0","id":1,"method":"fixture/server_roots","params":{}}"#],
+    );
+    assert!(
+        run.output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&run.output.stderr)
+    );
+    let lines = stdout_json_lines(&run.output);
+    assert!(
+        lines
+            .iter()
+            .any(|line| line["id"] == "server-roots-1" && line["method"] == "roots/list"),
+        "allowed roots/list request should reach client stdout: {}",
+        String::from_utf8_lossy(&run.output.stdout)
+    );
+
+    let audit = std::fs::read_to_string(&run.audit_log).expect("audit log");
+    assert!(audit.contains("\"direction\":\"server_to_client\""));
+    assert!(audit.contains("\"roots/list\""));
+    assert!(audit.contains("\"allow\""));
+    assert!(!audit.contains("secret cursor"));
+
+    let _ = std::fs::remove_file(&policy);
+    let _ = std::fs::remove_file(&run.server_log);
+    let _ = std::fs::remove_file(&run.audit_log);
+}
+
+#[test]
+fn proxy_drops_denied_server_to_client_notification_and_audits() {
+    let policy = write_temp_policy("server-notification", SERVER_TO_CLIENT_POLICY);
+    let run = run_proxy_with_input(
+        "server-notification",
+        &policy,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"fixture/server_elicitation_notification","params":{}}"#,
+        ],
+    );
+    assert!(
+        run.output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&run.output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&run.output.stdout);
+    assert!(!stdout.contains("elicitation/create"));
+    assert!(!stdout.contains("secret notification body"));
+
+    let received = std::fs::read_to_string(&run.server_log).expect("server log");
+    assert!(!received.contains("EtherFence MCP proxy denied this method by policy"));
+
+    let audit = std::fs::read_to_string(&run.audit_log).expect("audit log");
+    assert!(audit.contains("\"direction\":\"server_to_client\""));
+    assert!(audit.contains("\"elicitation/create\""));
+    assert!(audit.contains("\"request_id_type\":\"missing\""));
+    assert!(audit.contains("\"param_keys\":[\"message\"]"));
+    assert!(!audit.contains("secret notification body"));
+
+    let _ = std::fs::remove_file(&policy);
+    let _ = std::fs::remove_file(&run.server_log);
+    let _ = std::fs::remove_file(&run.audit_log);
+}
+
+#[test]
+fn proxy_denies_server_to_client_batch_fail_closed() {
+    let policy = write_temp_policy("server-batch", SERVER_TO_CLIENT_POLICY);
+    let run = run_proxy_with_input(
+        "server-batch",
+        &policy,
+        &[r#"{"jsonrpc":"2.0","id":1,"method":"fixture/server_batch","params":{}}"#],
+    );
+    assert!(
+        run.output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&run.output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&run.output.stdout);
+    assert!(!stdout.contains("server-batch-1"));
+    let audit = std::fs::read_to_string(&run.audit_log).expect("audit log");
+    assert!(audit.contains("\"event\":\"batch_denied\""));
+    assert!(audit.contains("\"direction\":\"server_to_client\""));
 
     let _ = std::fs::remove_file(&policy);
     let _ = std::fs::remove_file(&run.server_log);

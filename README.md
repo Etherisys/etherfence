@@ -32,13 +32,14 @@ Initial inventory targets:
 
 The parser intentionally uses conservative path discovery and fixture-backed config parsing. Missing files are skipped gracefully, malformed JSON/TOML config files are reported instead of aborting the scan, and unknown extra config fields are ignored. Fixture coverage exercises common shapes (minimal configs, multiple MCP servers, no MCP servers, malformed files, Linux- and Windows-style paths), but EtherFence does not claim complete support for every agent config format or install location. Findings are posture hints, not proof of exploitability.
 
-## Experimental: MCP boundary proxy (v0.2.4/v0.3.0)
+## Experimental: MCP boundary proxy (v0.2.4/v0.3.1)
 
 `etherfence mcp-proxy` is an **experimental prototype** that starts the v0.2
-runtime-control line. v0.3.0 hardens it from tool-call-only enforcement into
-method-level MCP/JSON-RPC policy enforcement. It is a minimal MCP stdio
+runtime-control line. v0.3.0 hardened it from tool-call-only enforcement into
+method-level MCP/JSON-RPC policy enforcement; v0.3.1 extends that
+method-policy check to server→client MCP requests initiated by the server. It is a minimal MCP stdio
 boundary proxy that sits between an MCP client and an MCP server, inspects
-every client→server JSON-RPC method, enforces method-level and tool-level
+client→server JSON-RPC methods and server→client MCP request methods, enforces method-level and tool-level
 allow/deny policy, and audits decisions deterministically using a small TOML
 policy:
 
@@ -85,6 +86,13 @@ Behavior:
   hardening from v0.2.x, where non-tools methods passed through
   uninspected. Deployments needing prior pass-through behavior must add
   an explicit `[methods]` allow list or use `allow = ["*"]`.
+- Server→client JSON-RPC request/notification objects with a `method`
+  field are also inspected before reaching the client (v0.3.1). This
+  covers client-feature requests initiated by the server such as
+  `sampling/createMessage`, `roots/list`, and `elicitation/create`. Denied
+  server→client requests are not forwarded to the client; id-bearing
+  requests receive a JSON-RPC error back toward the server, while denied
+  notifications are dropped and audited.
 - `tools/call` requests that pass the method check are then checked
   against the tool-name policy. Precedence is: global deny, server-specific
   deny, server-specific allow, global allow, then default deny.
@@ -99,17 +107,16 @@ Behavior:
 - The proxy **fails closed**: if the policy is missing or invalid, the MCP
   server is never started.
 - `--audit-log` appends JSONL decision records with timestamp, server name,
-  method, decision, reason, request id type, and policy reason. Only
+  method, direction, decision, reason, request id type, and policy reason. Only
   argument/param key names are logged — argument/param values (and therefore
   secrets, prompt text, resource content, and message bodies) never reach the
   audit log. Tool-list filter events record counts and allowed tool names, not
   full schemas.
 
 The proxy is stdio-only, exact-match-only, and covers client→server
-method-level + tool-level policy plus `tools/list` advertisement
-filtering. It does not inspect server→client requests (e.g.
-sampling/createMessage initiated by the server). It is not
-production-ready. See `docs/mcp-proxy.md` for details and limitations,
+method-level + tool-level policy, server→client method policy for
+server-initiated MCP requests, plus `tools/list` advertisement filtering.
+It is not production-ready. See `docs/mcp-proxy.md` for details and limitations,
 and `docs/mcp-clients.md`
 plus `docs/examples/*.json` for client configuration templates. `docs/mcp-compatibility-matrix.md` records checked compatibility evidence and `docs/mcp-real-server-test-template.md` explains optional maintainer-run real-server smoke tests.
 

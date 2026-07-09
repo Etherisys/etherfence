@@ -217,13 +217,29 @@
 - Behavioral hardening: v0.2.x non-tools client→server methods passed
   through uninspected; v0.3.0 denies them by default unless explicitly
   allowed
-- Method policy applies to client→server requests only; server→client
-  requests (e.g. sampling/createMessage) are not intercepted in this
-  release
 - Existing tools/list filtering and tools/call allow/deny behavior
   preserved unchanged
 - Batch arrays remain denied fail-closed
 - Proxy remains stdio-only, exact-match, experimental/pre-alpha
+
+## v0.3.1 - MCP proxy server→client method policy enforcement
+
+- Server→client JSON-RPC request/notification objects with a `method` field
+  are inspected before forwarding to the client
+- Client-feature methods initiated by the server, including
+  `sampling/createMessage`, `roots/list`, and `elicitation/create`, can be
+  denied with the existing exact-match `[methods]` policy
+- Denied server→client id-bearing requests are dropped before the client and
+  receive a JSON-RPC error response back toward the server
+- Denied server→client notifications without an id are dropped and audited
+- `method_decision` and `batch_denied` audit records include direction
+  metadata (`client_to_server` or `server_to_client`) and continue to log only
+  safe metadata (`param_keys`, request id type, method, decision, reason)
+- Client→server method policy, tools/call policy, tools/list filtering, audit
+  redaction, schema `ef-mcp-policy/v0.1`, and fail-closed batch behavior are
+  preserved
+- No daemon mode, API server, network interception, shell hooks, terminal
+  command scanning, endpoint agent behavior, or non-stdio proxying added
 
 ## v0.2.x ideas
 
