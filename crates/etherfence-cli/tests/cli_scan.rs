@@ -54,7 +54,7 @@ fn scan_fixture_json_has_stable_top_level_schema() {
 
     assert_eq!(json["schema_version"], "ef-scan-report/v0.1.1");
     assert_eq!(json["tool"], "etherfence");
-    assert_eq!(json["version"], "0.2.7");
+    assert_eq!(json["version"], "0.2.8");
     assert_eq!(json["status"], "pre-alpha-scan-only");
     assert!(json.get("scanned_root").is_some());
     assert!(json["inventory"].is_array());
@@ -864,7 +864,7 @@ fn sarif_output_is_valid_and_maps_severity_levels() {
     );
     let driver = &json["runs"][0]["tool"]["driver"];
     assert_eq!(driver["name"], "etherfence");
-    assert_eq!(driver["version"], "0.2.7");
+    assert_eq!(driver["version"], "0.2.8");
 
     let rules = sarif_rules(&json);
     let rule_ids: Vec<&str> = rules
