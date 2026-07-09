@@ -71,6 +71,7 @@ enum OutputFormat {
     Human,
     Json,
     Markdown,
+    Sarif,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -268,6 +269,7 @@ fn run_scan(options: ScanOptions) -> Result<()> {
         OutputFormat::Human => etherfence_report::to_human(&report),
         OutputFormat::Json => etherfence_report::to_json(&report)?,
         OutputFormat::Markdown => etherfence_report::to_markdown(&report),
+        OutputFormat::Sarif => etherfence_report::to_sarif(&report)?,
     };
     println!("{output}");
     if should_fail || should_fail_new {

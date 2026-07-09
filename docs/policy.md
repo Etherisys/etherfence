@@ -76,7 +76,7 @@ Intent: balanced local developer workstation policy.
 - Allows expected MCP servers such as `filesystem`, `github`, and selected context/search servers where reasonable.
 - Denies root and home-directory-wide filesystem exposure.
 - Denies secret-like environment variable names.
-- Recommends Tirith conceptually, but does not require it because warning-only Tirith recommendations are not represented as policy findings in v0.1.7.
+- Recommends Tirith conceptually, but does not require it because warning-only Tirith recommendations are not represented as policy findings in v0.1.8.
 
 Example:
 
@@ -117,7 +117,7 @@ Intent: research-friendly workstation policy.
 
 - Allows browser/search/network-capable MCP servers used for literature and web research workflows.
 - Still denies broad filesystem access and secret-looking environment variable names.
-- Shell-capable MCP tools remain scanner findings and should be reviewed separately; v0.1.7 does not add shell-command scanner logic or enforcement.
+- Shell-capable MCP tools remain scanner findings and should be reviewed separately; v0.1.8 does not add shell-command scanner logic or enforcement.
 
 Example:
 

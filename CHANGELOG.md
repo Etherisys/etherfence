@@ -6,6 +6,46 @@ EtherFence is pre-alpha and scan-only. Nothing in v0.1.x performs runtime
 blocking, MCP proxying, daemon mode, shell hooks, command interception,
 terminal-command scanning, or network interception.
 
+## [0.1.8] - 2026-07-08
+
+### Added
+
+- `etherfence scan --format sarif` emitting SARIF 2.1.0 JSON with the tool
+  name/version, one SARIF rule per EtherFence finding ID, severity mapping
+  (high=`error`, medium=`warning`, low/info=`note`), finding fingerprints as
+  `partialFingerprints`, and baseline/policy status in result properties.
+  SARIF export works with `--policy`, `--policy-profile`, `--baseline`, and
+  `--severity-threshold`. Documented in `docs/sarif.md`.
+- Low-severity `EF-CFG-001` finding (`config-parse-error`) when a discovered
+  agent config file exists but cannot be parsed, so unscannable configs are
+  visible instead of silent.
+- Fixture variants for parser coverage: minimal configs, multiple MCP
+  servers, no MCP servers, malformed JSON/TOML, unknown extra fields, and
+  Linux-/Windows-style paths (`tests/fixtures/minimal-home`,
+  `tests/fixtures/multi-home`, `tests/fixtures/malformed-home`).
+
+### Changed
+
+- Parser hardening: malformed JSON/TOML configs no longer abort inventory;
+  they produce deterministic single-line `parse-error:` evidence. Non-object
+  `mcpServers`, non-table `mcp_servers`, string-typed server entries,
+  non-array `args`, and non-object `env` values degrade gracefully with
+  inventory warnings.
+- MCP extraction consistency: TOML `args` and `env` now stringify/redact
+  numbers and booleans the same way JSON does, and MCP servers are sorted by
+  name for deterministic report output across config formats.
+
+### Known limitations
+
+- Scan-only: findings are posture hints, not proof of exploitability, and no
+  policy is enforced at runtime.
+- Fixture-backed parsing covers common config shapes for the supported
+  agents; EtherFence does not claim complete support for every agent config
+  format or install location.
+- SARIF results reference config paths as artifact URIs relative to the
+  scanned root (for example `~/.claude.json`); consumers that require
+  absolute URIs may need post-processing.
+
 ## [0.1.7] - 2026-07-08
 
 ### Added

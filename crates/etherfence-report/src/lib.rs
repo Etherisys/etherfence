@@ -1,8 +1,135 @@
 use anyhow::Result;
 use etherfence_core::{Finding, ScanReport, Severity};
+use serde_json::{json, Value as JsonValue};
 
 pub fn to_json(report: &ScanReport) -> Result<String> {
     Ok(serde_json::to_string_pretty(report)?)
+}
+
+pub fn to_sarif(report: &ScanReport) -> Result<String> {
+    let sarif = json!({
+        "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+        "version": "2.1.0",
+        "runs": [{
+            "tool": {
+                "driver": {
+                    "name": report.tool,
+                    "version": report.version,
+                    "informationUri": "https://github.com/Etherisys-id/etherfence",
+                    "rules": sarif_rules(&report.findings),
+                }
+            },
+            "results": report.findings.iter().map(sarif_result).collect::<Vec<_>>(),
+            "properties": sarif_run_properties(report)?,
+        }]
+    });
+    Ok(serde_json::to_string_pretty(&sarif)?)
+}
+
+fn sarif_level(severity: Severity) -> &'static str {
+    match severity {
+        Severity::High => "error",
+        Severity::Medium => "warning",
+        Severity::Low | Severity::Info => "note",
+    }
+}
+
+fn sarif_rule_name(finding: &Finding) -> String {
+    finding
+        .kind
+        .key()
+        .split('-')
+        .map(|part| {
+            let mut chars = part.chars();
+            match chars.next() {
+                Some(first) => first.to_ascii_uppercase().to_string() + chars.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect()
+}
+
+/// One SARIF rule per distinct finding ID, in first-seen order.
+fn sarif_rules(findings: &[Finding]) -> Vec<JsonValue> {
+    let mut rules = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for finding in findings {
+        if !seen.insert(finding.id.clone()) {
+            continue;
+        }
+        rules.push(json!({
+            "id": finding.id,
+            "name": sarif_rule_name(finding),
+            "shortDescription": {"text": finding.title},
+            "fullDescription": {"text": finding.rationale},
+            "help": {
+                "text": format!(
+                    "Impact: {} Recommendation: {}",
+                    finding.impact, finding.recommendation
+                )
+            },
+            "defaultConfiguration": {"level": sarif_level(finding.severity)},
+            "properties": {
+                "etherfenceKind": finding.kind.key(),
+                "etherfenceSeverity": finding.severity.label().to_ascii_lowercase(),
+            }
+        }));
+    }
+    rules
+}
+
+fn sarif_result(finding: &Finding) -> JsonValue {
+    let mut properties = json!({
+        "agent": finding.agent.key(),
+        "target": finding.target,
+        "configPath": finding.config_path,
+        "etherfenceSeverity": finding.severity.label().to_ascii_lowercase(),
+        "baselineStatus": finding.baseline_status.label(),
+        "policyStatus": finding.policy_status.label(),
+        "evidence": finding.evidence,
+    });
+    if let Some(policy_id) = &finding.policy_id {
+        properties["policyId"] = json!(policy_id);
+    }
+    json!({
+        "ruleId": finding.id,
+        "level": sarif_level(finding.severity),
+        "message": {
+            "text": format!(
+                "{}: {} Impact: {} Recommendation: {}",
+                finding.title, finding.rationale, finding.impact, finding.recommendation
+            )
+        },
+        "locations": [{
+            "physicalLocation": {
+                "artifactLocation": {"uri": finding.config_path}
+            },
+            "logicalLocations": [{
+                "name": finding.target,
+                "fullyQualifiedName": format!("{}::{}", finding.agent.key(), finding.target),
+            }]
+        }],
+        "partialFingerprints": {
+            "etherfenceFingerprint/v1": finding.fingerprint,
+        },
+        "properties": properties,
+    })
+}
+
+fn sarif_run_properties(report: &ScanReport) -> Result<JsonValue> {
+    let mut properties = json!({
+        "etherfenceSchemaVersion": report.schema_version,
+        "status": report.status,
+        "scannedRoot": report.scanned_root,
+        "summary": serde_json::to_value(&report.summary)?,
+    });
+    if let Some(policy) = &report.policy {
+        properties["policy"] = serde_json::to_value(policy)?;
+    }
+    if let Some(baseline) = &report.baseline {
+        properties["baseline"] = serde_json::to_value(baseline)?;
+    }
+    Ok(properties)
 }
 
 pub fn to_human(report: &ScanReport) -> String {
@@ -262,5 +389,71 @@ mod tests {
         assert!(rendered.contains("# EtherFence Scan Report"));
         assert!(rendered.contains("## Summary"));
         assert!(rendered.contains("## Findings"));
+    }
+
+    #[test]
+    fn sarif_maps_severities_to_levels() {
+        assert_eq!(sarif_level(Severity::High), "error");
+        assert_eq!(sarif_level(Severity::Medium), "warning");
+        assert_eq!(sarif_level(Severity::Low), "note");
+        assert_eq!(sarif_level(Severity::Info), "note");
+    }
+
+    #[test]
+    fn renders_sarif_with_rule_and_result_for_finding() {
+        use etherfence_core::{AgentKind, BaselineStatus, FindingKind, PolicyStatus};
+        let mut finding = Finding {
+            id: "EF-MCP-001".to_string(),
+            title: "Broad filesystem access hint".to_string(),
+            severity: Severity::High,
+            kind: FindingKind::BroadFilesystemAccess,
+            agent: AgentKind::ClaudeCode,
+            target: "filesystem".to_string(),
+            config_path: "~/.claude.json".to_string(),
+            rationale: "rationale text.".to_string(),
+            impact: "impact text.".to_string(),
+            recommendation: "recommendation text.".to_string(),
+            references: Vec::new(),
+            fingerprint: String::new(),
+            baseline_status: BaselineStatus::NotApplicable,
+            policy_status: PolicyStatus::NotApplicable,
+            policy_id: None,
+            evidence: vec!["/home/user".to_string()],
+        };
+        finding.refresh_fingerprint();
+        let report = ScanReport {
+            schema_version: "ef-scan-report/v0.1.1".to_string(),
+            tool: "etherfence".to_string(),
+            version: "0.1.8".to_string(),
+            status: "pre-alpha-scan-only".to_string(),
+            scanned_root: "/home/user".to_string(),
+            inventory: Vec::new(),
+            findings: vec![finding],
+            summary: Summary::from_counts(0, &[]),
+            policy: None,
+            baseline: None,
+        };
+        let rendered = to_sarif(&report).expect("sarif renders");
+        let sarif: JsonValue = serde_json::from_str(&rendered).expect("valid JSON");
+        assert_eq!(sarif["version"], "2.1.0");
+        let run = &sarif["runs"][0];
+        assert_eq!(run["tool"]["driver"]["name"], "etherfence");
+        assert_eq!(run["tool"]["driver"]["version"], "0.1.8");
+        let rule = &run["tool"]["driver"]["rules"][0];
+        assert_eq!(rule["id"], "EF-MCP-001");
+        assert_eq!(rule["name"], "BroadFilesystemAccess");
+        assert_eq!(rule["defaultConfiguration"]["level"], "error");
+        let result = &run["results"][0];
+        assert_eq!(result["ruleId"], "EF-MCP-001");
+        assert_eq!(result["level"], "error");
+        assert_eq!(
+            result["locations"][0]["physicalLocation"]["artifactLocation"]["uri"],
+            "~/.claude.json"
+        );
+        assert!(result["partialFingerprints"]["etherfenceFingerprint/v1"]
+            .as_str()
+            .unwrap()
+            .starts_with("efp1-"));
+        assert_eq!(result["properties"]["baselineStatus"], "not_applicable");
     }
 }

@@ -78,6 +78,17 @@
 - Release artifact packaging: Linux `tar.gz` containing `etherfence`, Windows `zip` containing `etherfence.exe`
 - Documentation for Linux usage, Windows usage, release checks, and v0.1.7 smoke tests
 
+## v0.1.8 - parser hardening and SARIF output
+
+- Fixture variants for supported agents: minimal configs, multiple MCP servers, no MCP servers, malformed JSON/TOML, unknown extra fields, and Linux-/Windows-style paths
+- Graceful handling of malformed configs: parse failures become inventory evidence and a low-severity `EF-CFG-001` finding instead of aborting the scan
+- Structural tolerance: non-object `mcpServers`, non-table `mcp_servers`, string-typed server entries, non-array `args`, and non-object `env` degrade gracefully with deterministic inventory warnings
+- MCP extraction consistency between JSON and TOML: numbers and booleans in `args`/`env` are stringified/redacted the same way, and servers are sorted by name for deterministic output
+- `etherfence scan --format sarif` emitting SARIF 2.1.0 with tool name/version, one rule per finding ID, high=error / medium=warning / low+info=note severity mapping, fingerprints, and baseline/policy status properties
+- SARIF works with `--policy`, `--policy-profile`, `--baseline`, and `--severity-threshold`
+- `docs/sarif.md` documenting the SARIF mapping
+- Tests for new fixture variants, malformed-config graceful failure, SARIF validity, SARIF rule/result mapping for MCP and policy findings, and fingerprint stability across repeated scans
+
 ## v0.2 ideas
 
 - Expand tested config schemas and platform paths

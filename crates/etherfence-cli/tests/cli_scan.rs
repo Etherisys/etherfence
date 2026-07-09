@@ -54,7 +54,7 @@ fn scan_fixture_json_has_stable_top_level_schema() {
 
     assert_eq!(json["schema_version"], "ef-scan-report/v0.1.1");
     assert_eq!(json["tool"], "etherfence");
-    assert_eq!(json["version"], "0.1.7");
+    assert_eq!(json["version"], "0.1.8");
     assert_eq!(json["status"], "pre-alpha-scan-only");
     assert!(json.get("scanned_root").is_some());
     assert!(json["inventory"].is_array());
@@ -752,6 +752,294 @@ fn ci_runner_policy_has_deterministic_policy_findings_on_risky_fixture() {
         json["policy"]["violation"].as_u64().unwrap(),
         ids.len() as u64
     );
+}
+
+#[test]
+fn scan_minimal_fixture_has_inventory_but_no_findings() {
+    let root = fixture_root("minimal-home");
+    let output = run(&["scan", "--root", &root, "--format", "json"]);
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: Value = serde_json::from_slice(&output.stdout).expect("valid JSON output");
+    assert_eq!(json["summary"]["inventory_items"], 5);
+    assert_eq!(json["summary"]["findings_total"], 0);
+    assert!(json["findings"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn scan_multi_fixture_reports_all_servers_deterministically() {
+    let root = fixture_root("multi-home");
+    let output = run(&["scan", "--root", &root, "--format", "json"]);
+
+    assert!(output.status.success());
+    let json: Value = serde_json::from_slice(&output.stdout).expect("valid JSON output");
+    let claude = json["inventory"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["agent"] == "claude-code")
+        .expect("claude inventory item");
+    let names: Vec<&str> = claude["mcp_servers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|server| server["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["fetch", "filesystem", "github"]);
+
+    let ids: Vec<&str> = json["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|finding| finding["id"].as_str())
+        .collect();
+    assert!(ids.contains(&"EF-MCP-001"));
+    assert!(ids.contains(&"EF-SEC-001"));
+    assert!(!ids.contains(&"EF-CFG-001"));
+
+    let second = run(&["scan", "--root", &root, "--format", "json"]);
+    assert_eq!(output.stdout, second.stdout, "scan output is deterministic");
+}
+
+#[test]
+fn scan_malformed_fixture_succeeds_and_reports_parse_findings() {
+    let root = fixture_root("malformed-home");
+    let output = run(&["scan", "--root", &root, "--format", "json"]);
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: Value = serde_json::from_slice(&output.stdout).expect("valid JSON output");
+    assert_eq!(json["summary"]["inventory_items"], 6);
+    let parse_findings: Vec<&Value> = json["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|finding| finding["id"] == "EF-CFG-001")
+        .collect();
+    assert_eq!(parse_findings.len(), 2, "claude JSON and codex TOML");
+    for finding in parse_findings {
+        assert_eq!(finding["severity"], "low");
+        assert_eq!(finding["kind"], "config-parse-error");
+        assert!(finding["evidence"][0]
+            .as_str()
+            .unwrap()
+            .starts_with("parse-error:"));
+    }
+}
+
+fn sarif_results(json: &Value) -> &Vec<Value> {
+    json["runs"][0]["results"]
+        .as_array()
+        .expect("results array")
+}
+
+fn sarif_rules(json: &Value) -> &Vec<Value> {
+    json["runs"][0]["tool"]["driver"]["rules"]
+        .as_array()
+        .expect("rules array")
+}
+
+#[test]
+fn sarif_output_is_valid_and_maps_severity_levels() {
+    let root = fixture_root("home");
+    let output = run(&["scan", "--root", &root, "--format", "sarif"]);
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: Value = serde_json::from_slice(&output.stdout).expect("valid SARIF JSON");
+    assert_eq!(json["version"], "2.1.0");
+    assert_eq!(
+        json["$schema"],
+        "https://json.schemastore.org/sarif-2.1.0.json"
+    );
+    let driver = &json["runs"][0]["tool"]["driver"];
+    assert_eq!(driver["name"], "etherfence");
+    assert_eq!(driver["version"], "0.1.8");
+
+    let rules = sarif_rules(&json);
+    let rule_ids: Vec<&str> = rules
+        .iter()
+        .map(|rule| rule["id"].as_str().unwrap())
+        .collect();
+    let mut deduped = rule_ids.clone();
+    deduped.sort();
+    deduped.dedup();
+    assert_eq!(deduped.len(), rule_ids.len(), "rule IDs are unique");
+    assert!(rule_ids.contains(&"EF-MCP-001"));
+
+    let results = sarif_results(&json);
+    assert!(!results.is_empty());
+    for result in results {
+        let rule_id = result["ruleId"].as_str().unwrap();
+        assert!(
+            rule_ids.contains(&rule_id),
+            "result rule {rule_id} declared"
+        );
+        let level = result["level"].as_str().unwrap();
+        let severity = result["properties"]["etherfenceSeverity"].as_str().unwrap();
+        let expected = match severity {
+            "high" => "error",
+            "medium" => "warning",
+            "low" | "info" => "note",
+            other => panic!("unexpected severity {other}"),
+        };
+        assert_eq!(level, expected);
+        assert!(result["partialFingerprints"]["etherfenceFingerprint/v1"]
+            .as_str()
+            .unwrap()
+            .starts_with("efp1-"));
+    }
+
+    let mcp = results
+        .iter()
+        .find(|result| result["ruleId"] == "EF-MCP-001")
+        .expect("broad filesystem result");
+    assert_eq!(mcp["level"], "error");
+    assert_eq!(
+        mcp["locations"][0]["physicalLocation"]["artifactLocation"]["uri"],
+        "~/.claude.json"
+    );
+    assert_eq!(mcp["properties"]["agent"], "claude-code");
+    assert_eq!(mcp["properties"]["target"], "filesystem");
+    let message = mcp["message"]["text"].as_str().unwrap();
+    assert!(message.contains("Broad filesystem access hint"));
+    assert!(message.contains("Impact:"));
+    assert!(message.contains("Recommendation:"));
+}
+
+#[test]
+fn sarif_policy_scan_includes_policy_rule_and_result() {
+    let root = fixture_root("home");
+    let policy = strict_policy();
+    let output = run(&[
+        "scan", "--root", &root, "--policy", &policy, "--format", "sarif",
+    ]);
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: Value = serde_json::from_slice(&output.stdout).expect("valid SARIF JSON");
+    assert!(sarif_rules(&json)
+        .iter()
+        .any(|rule| rule["id"] == "EF-POL-001"));
+    let policy_result = sarif_results(&json)
+        .iter()
+        .find(|result| result["ruleId"] == "EF-POL-001")
+        .expect("policy violation result");
+    assert_eq!(policy_result["level"], "error");
+    assert_eq!(policy_result["properties"]["policyStatus"], "violation");
+    assert_eq!(
+        policy_result["properties"]["policyId"],
+        "unexpected-mcp-server"
+    );
+    assert_eq!(
+        json["runs"][0]["properties"]["policy"]["policy_name"],
+        "strict-local-ai-agent-policy"
+    );
+}
+
+#[test]
+fn sarif_policy_profile_scan_works() {
+    let root = fixture_root("home");
+    let output = run(&[
+        "scan",
+        "--root",
+        &root,
+        "--policy-profile",
+        "ci-runner",
+        "--format",
+        "sarif",
+    ]);
+
+    assert!(output.status.success());
+    let json: Value = serde_json::from_slice(&output.stdout).expect("valid SARIF JSON");
+    assert_eq!(
+        json["runs"][0]["properties"]["policy"]["policy_source"],
+        "built-in-profile"
+    );
+    assert!(sarif_results(&json)
+        .iter()
+        .any(|result| result["ruleId"].as_str().unwrap().starts_with("EF-POL")));
+}
+
+#[test]
+fn sarif_baseline_scan_marks_existing_findings() {
+    let root = fixture_root("home");
+    let baseline = temp_file("sarif-baseline");
+    let baseline_s = baseline.to_string_lossy().to_string();
+    assert!(
+        run(&["scan", "--root", &root, "--write-baseline", &baseline_s])
+            .status
+            .success()
+    );
+
+    let output = run(&[
+        "scan",
+        "--root",
+        &root,
+        "--baseline",
+        &baseline_s,
+        "--format",
+        "sarif",
+    ]);
+    assert!(output.status.success());
+    let json: Value = serde_json::from_slice(&output.stdout).expect("valid SARIF JSON");
+    assert_eq!(json["runs"][0]["properties"]["baseline"]["new"], 0);
+    assert!(sarif_results(&json)
+        .iter()
+        .all(|result| result["properties"]["baselineStatus"] == "existing"));
+}
+
+#[test]
+fn sarif_severity_threshold_high_only_emits_error_results() {
+    let root = fixture_root("home");
+    let output = run(&[
+        "scan",
+        "--root",
+        &root,
+        "--severity-threshold",
+        "high",
+        "--format",
+        "sarif",
+    ]);
+
+    assert!(output.status.success());
+    let json: Value = serde_json::from_slice(&output.stdout).expect("valid SARIF JSON");
+    let results = sarif_results(&json);
+    assert!(!results.is_empty());
+    assert!(results.iter().all(|result| result["level"] == "error"));
+}
+
+#[test]
+fn fingerprints_are_stable_across_repeated_scans() {
+    let root = fixture_root("home");
+    let extract = |output: &std::process::Output| -> Vec<String> {
+        let json: Value = serde_json::from_slice(&output.stdout).expect("valid JSON output");
+        json["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|finding| finding["fingerprint"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let first = run(&["scan", "--root", &root, "--format", "json"]);
+    let second = run(&["scan", "--root", &root, "--format", "json"]);
+    assert!(first.status.success() && second.status.success());
+    let first_prints = extract(&first);
+    assert!(!first_prints.is_empty());
+    assert_eq!(first_prints, extract(&second));
 }
 
 #[test]

@@ -1,4 +1,4 @@
-# EtherFence v0.1.7 Release Checklist
+# EtherFence v0.1.8 Release Checklist
 
 Status: pre-alpha, scan-only. This checklist prepares Linux and Windows CLI artifacts without claiming runtime enforcement or production readiness.
 
@@ -33,9 +33,9 @@ On Linux:
 
 ```sh
 cargo build --release -p etherfence-cli
-mkdir -p dist/etherfence-v0.1.7-linux-x86_64
-cp target/release/etherfence dist/etherfence-v0.1.7-linux-x86_64/
-tar -C dist -czf dist/etherfence-linux-x86_64.tar.gz etherfence-v0.1.7-linux-x86_64
+mkdir -p dist/etherfence-v0.1.8-linux-x86_64
+cp target/release/etherfence dist/etherfence-v0.1.8-linux-x86_64/
+tar -C dist -czf dist/etherfence-linux-x86_64.tar.gz etherfence-v0.1.8-linux-x86_64
 ```
 
 Smoke check:
@@ -51,9 +51,9 @@ On Windows PowerShell:
 
 ```powershell
 cargo build --release -p etherfence-cli
-New-Item -ItemType Directory -Force -Path dist/etherfence-v0.1.7-windows-x86_64 | Out-Null
-Copy-Item target/release/etherfence.exe dist/etherfence-v0.1.7-windows-x86_64/
-Compress-Archive -Path dist/etherfence-v0.1.7-windows-x86_64 -DestinationPath dist/etherfence-windows-x86_64.zip -Force
+New-Item -ItemType Directory -Force -Path dist/etherfence-v0.1.8-windows-x86_64 | Out-Null
+Copy-Item target/release/etherfence.exe dist/etherfence-v0.1.8-windows-x86_64/
+Compress-Archive -Path dist/etherfence-v0.1.8-windows-x86_64 -DestinationPath dist/etherfence-windows-x86_64.zip -Force
 ```
 
 Smoke check:
@@ -108,17 +108,17 @@ smoke-tested:
 ```sh
 git checkout main
 git pull origin main
-git tag -a v0.1.7 -m "EtherFence v0.1.7: scan-only Linux/Windows discovery, path normalization, CI matrix, release packaging"
-git push origin v0.1.7
+git tag -a v0.1.8 -m "EtherFence v0.1.8: scan-only parser hardening and SARIF 2.1.0 export"
+git push origin v0.1.8
 ```
 
 Then create the GitHub release from the tag and attach the CI-built
 `etherfence-linux-x86_64.tar.gz` and `etherfence-windows-x86_64.zip`:
 
 ```sh
-gh release create v0.1.7 \
-  --title "EtherFence v0.1.7" \
-  --notes-file <(sed -n '/^## \[0.1.7\]/,/^## /p' CHANGELOG.md | sed '$d') \
+gh release create v0.1.8 \
+  --title "EtherFence v0.1.8" \
+  --notes-file <(sed -n '/^## \[0.1.8\]/,/^## /p' CHANGELOG.md | sed '$d') \
   dist-ci/etherfence-linux-x86_64/etherfence-linux-x86_64.tar.gz \
   dist-ci/etherfence-windows-x86_64/etherfence-windows-x86_64.zip
 ```
