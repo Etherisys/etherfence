@@ -69,6 +69,14 @@ fn mcp_policy_examples_parse() {
             "sampling-denied",
             include_str!("../../../examples/policies/mcp-sampling-denied.toml"),
         ),
+        (
+            "filesystem-project-readonly",
+            include_str!("../../../examples/policies/mcp-filesystem-project-readonly.toml"),
+        ),
+        (
+            "resources-project-only",
+            include_str!("../../../examples/policies/mcp-resources-project-only.toml"),
+        ),
     ] {
         let policy = etherfence_mcp::parse_mcp_policy(content)
             .unwrap_or_else(|error| panic!("{name} policy should parse: {error}"));
@@ -116,6 +124,8 @@ fn mcp_compatibility_matrix_documents_fake_fixture_row() {
         "../../examples/policies/mcp-readonly.toml",
         "../../examples/policies/mcp-resources-denied.toml",
         "../../examples/policies/mcp-sampling-denied.toml",
+        "../../examples/policies/mcp-filesystem-project-readonly.toml",
+        "../../examples/policies/mcp-resources-project-only.toml",
     ] {
         assert!(
             manifest_dir.join(policy).exists(),

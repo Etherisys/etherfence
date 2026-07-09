@@ -241,6 +241,28 @@
 - No daemon mode, API server, network interception, shell hooks, terminal
   command scanning, endpoint agent behavior, or non-stdio proxying added
 
+## v0.4.0 - MCP proxy local path-aware argument/resource policy
+
+- Optional `path_rules` for the existing `ef-mcp-policy/v0.1` MCP proxy schema
+  with explicit `allow_roots` and `deny_roots`
+- Per-tool argument guards such as `[tools."filesystem.read".arguments]` with
+  configured `path_keys`
+- Per-method resource guards such as `[methods."resources/read".params]` with
+  configured `uri_keys`
+- Deny roots override allow roots; configured malformed, missing, non-string,
+  relative, or non-normalizable path-like keys fail closed
+- `file://` resource URIs are converted to local paths before comparison;
+  guarded non-file URI schemes are denied rather than treated as broad URL
+  policy
+- Audit records add only safe path metadata (`path_rule`, `path_key`, and
+  redacted `path_classification`) and continue to omit full paths, URIs, prompt
+  text, message bodies, file/resource contents, secrets, tokens, and full params
+- Existing v0.3.1 method policy, tools/call policy, tools/list filtering,
+  fail-closed batches, schema compatibility, and stdio-only scope are preserved
+- Not in scope: server/control plane, daemon, API service, network interception,
+  shell hooks, terminal-command scanning, endpoint agent, generic policy
+  language, content inspection, or DLP engine
+
 ## v0.2.x ideas
 
 - Expand tested config schemas and platform paths

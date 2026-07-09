@@ -6,8 +6,9 @@ use std::sync::{Arc, Mutex};
 
 use crate::audit::{redacted_argument_keys, redacted_param_keys, AuditLog, AuditRecord};
 use crate::policy::{
-    decide_method, decide_method_for_direction, decide_tool_call, Decision, McpPolicyFile,
-    MethodDirection,
+    decide_method, decide_method_for_direction, decide_method_param_paths,
+    decide_tool_argument_paths, decide_tool_call, Decision, McpPolicyFile, MethodDirection,
+    PathPolicyDecision,
 };
 
 pub const TOOL_CALL_METHOD: &str = "tools/call";
@@ -300,8 +301,8 @@ pub fn inspect_client_line(policy: &McpPolicyFile, server_name: &str, line: &str
         let tool_name = params
             .and_then(|params| params.get("name"))
             .and_then(Value::as_str);
-        let argument_keys =
-            redacted_argument_keys(params.and_then(|params| params.get("arguments")));
+        let arguments = params.and_then(|params| params.get("arguments"));
+        let argument_keys = redacted_argument_keys(arguments);
 
         let (tool_for_audit, decision, reason) = match tool_name {
             Some(name) => {
@@ -315,7 +316,11 @@ pub fn inspect_client_line(policy: &McpPolicyFile, server_name: &str, line: &str
             ),
         };
 
-        let audit = Some(AuditRecord::tool_call(
+        let path_decision =
+            tool_for_audit.and_then(|tool| decide_tool_argument_paths(policy, tool, arguments));
+        let (decision, reason) = apply_path_decision(decision, reason, path_decision.as_ref());
+
+        let mut audit = AuditRecord::tool_call(
             &policy.name,
             server_name,
             request_id.clone(),
@@ -323,7 +328,15 @@ pub fn inspect_client_line(policy: &McpPolicyFile, server_name: &str, line: &str
             argument_keys,
             decision,
             &reason,
-        ));
+        );
+        if let Some(path_decision) = path_decision.as_ref() {
+            audit = audit.with_path_metadata(
+                &path_decision.rule_name,
+                &path_decision.key_name,
+                &path_decision.classification,
+            );
+        }
+        let audit = Some(audit);
 
         match decision {
             Decision::Allow => InspectedLine {
@@ -346,20 +359,62 @@ pub fn inspect_client_line(policy: &McpPolicyFile, server_name: &str, line: &str
         // Any other allowed method (resources/list, resources/read, prompts/list,
         // prompts/get, completion/complete, roots/list, sampling/createMessage,
         // or custom methods): forward and audit the method allow decision.
-        let audit = Some(AuditRecord::method_decision(
+        let path_decision = if method == "resources/read" {
+            decide_method_param_paths(policy, method, params)
+        } else {
+            None
+        };
+        let (decision, reason) = apply_path_decision(
+            Decision::Allow,
+            method_decision.reason.clone(),
+            path_decision.as_ref(),
+        );
+        let mut audit = AuditRecord::method_decision(
             &policy.name,
             server_name,
             method,
-            request_id,
+            request_id.clone(),
             param_keys,
-            Decision::Allow,
-            &method_decision.reason,
-        ));
-        InspectedLine {
-            action: ClientAction::Forward,
-            audit,
-            tools_list_request: None,
+            decision,
+            &reason,
+        );
+        if let Some(path_decision) = path_decision.as_ref() {
+            audit = audit.with_path_metadata(
+                &path_decision.rule_name,
+                &path_decision.key_name,
+                &path_decision.classification,
+            );
         }
+        match decision {
+            Decision::Allow => InspectedLine {
+                action: ClientAction::Forward,
+                audit: Some(audit),
+                tools_list_request: None,
+            },
+            Decision::Deny | Decision::PolicyError => {
+                let response = request_id
+                    .filter(|id| !id.is_null())
+                    .map(|id| method_denied_error_response(&id, method, &reason));
+                InspectedLine {
+                    action: ClientAction::Deny { response },
+                    audit: Some(audit),
+                    tools_list_request: None,
+                }
+            }
+        }
+    }
+}
+
+fn apply_path_decision(
+    base_decision: Decision,
+    base_reason: String,
+    path_decision: Option<&PathPolicyDecision>,
+) -> (Decision, String) {
+    match (base_decision, path_decision) {
+        (Decision::Allow, Some(path_decision)) => {
+            (path_decision.decision, path_decision.reason.clone())
+        }
+        _ => (base_decision, base_reason),
     }
 }
 

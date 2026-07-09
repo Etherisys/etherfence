@@ -1,11 +1,12 @@
 # MCP Boundary Proxy (experimental)
 
-`etherfence mcp-proxy` is the first prototype in the EtherFence v0.2.x/
-v0.3.x runtime-control line. It is a minimal MCP **stdio** boundary proxy
+`etherfence mcp-proxy` is the first prototype in the EtherFence v0.2.x+
+runtime-control line. It is a minimal MCP **stdio** boundary proxy
 that sits between an MCP client and an MCP server, inspects every
-client→server JSON-RPC method, enforces method-level and tool-level
-allow/deny policy, filters tool advertisements, and audits decisions
-deterministically using a small TOML policy.
+client→server JSON-RPC method, enforces method-level, tool-level, and
+configured local path-aware argument/resource policy, filters tool
+advertisements, and audits decisions deterministically using a small TOML
+policy.
 
 Status: **experimental prototype**. It is not production-ready, it is not a
 daemon or endpoint agent, and it does not replace the v0.1.x scan-only
@@ -40,8 +41,11 @@ The proxy:
    JSON-RPC error and are **not** forwarded to the server.
 5. Tracks client `tools/list` requests and filters the matching server
    responses so denied and default-denied tools are not advertised.
-6. Leaves server→client messages untouched (no response inspection beyond
-   tracked `tools/list` filtering).
+6. Inspects server→client JSON-RPC request/notification objects with a
+   `method` field before forwarding (v0.3.1). Denied id-bearing requests
+   receive an error back toward the server; denied notifications are dropped.
+7. Applies configured v0.4.0 path guards to selected local path-like
+   `tools/call` arguments and `resources/read` URI params before forwarding.
 
 Example, wrapping a filesystem MCP server:
 
@@ -97,6 +101,8 @@ Examples live at:
 - `examples/policies/mcp-readonly.toml` (v0.3.0)
 - `examples/policies/mcp-resources-denied.toml` (v0.3.0)
 - `examples/policies/mcp-sampling-denied.toml` (v0.3.0)
+- `examples/policies/mcp-filesystem-project-readonly.toml` (v0.4.0)
+- `examples/policies/mcp-resources-project-only.toml` (v0.4.0)
 
 Decision rules for tool names, in exact order:
 
@@ -157,6 +163,54 @@ the `deny` list. Use this with caution.
 Per-server method scoping follows the same precedence as tool rules:
 global deny, server deny, server allow, global allow, then default deny.
 
+### Path-aware argument/resource policy (v0.4.0)
+
+v0.4.0 adds optional local path guards under the existing
+`ef-mcp-policy/v0.1` schema. Path guards are deliberately narrow: they do not
+create a generic policy language, regex/glob matcher, URL filter, DLP engine,
+content inspector, daemon, or network interceptor. They only classify specific
+operator-configured keys as local paths or `file://` resource URIs and compare
+their lexically normalized path to explicit allow/deny roots.
+
+```toml
+[path_rules.project_readonly]
+allow_roots = ["/home/user/project"]
+deny_roots = ["/home/user/project/.git", "/home/user/project/secrets"]
+
+[tools."filesystem.read".arguments]
+path_keys = ["path"]
+path_rule = "project_readonly"
+
+[methods."resources/read".params]
+uri_keys = ["uri"]
+path_rule = "project_readonly"
+```
+
+Path decision rules:
+
+1. Path guards only run when a guard is configured for the exact tool or
+   method/key. Existing v0.3.1 policies without path guards parse and behave as
+   before.
+2. Deny roots take precedence over allow roots.
+3. The candidate path must be under at least one configured allow root.
+4. If a configured key is missing, non-string, relative, malformed, contains a
+   NUL byte, or cannot be normalized, the request is denied fail-closed.
+5. `file://` URIs are converted to local paths before comparison.
+   Non-`file://` schemes are denied when a URI key is guarded; EtherFence does
+   not attempt broad URL filtering in v0.4.0.
+6. Normalization is lexical and local-first: `.`/`..` segments are collapsed
+   before root comparison, and Windows-style absolute paths are supported where
+   the policy and request use matching path style. EtherFence does not resolve
+   symlinks or canonicalize against the live filesystem, so operators should
+   choose roots accordingly.
+
+Denied path-guard decisions are not forwarded. They produce the same safe
+JSON-RPC error shape as method/tool denials and an audit record that includes
+only safe metadata: decision, reason category such as `outside_allowed_roots`,
+`inside_denied_root`, or `path_parse_error`, method, direction, tool name,
+argument/param key names, `path_rule`, `path_key`, and
+`path_classification`. Raw paths and URIs are never logged.
+
 **Direction semantics:** Method policy now applies in both MCP directions, but
 the protocol behavior differs by direction. Client→server denials are returned
 as JSON-RPC errors to the client and are never forwarded to the server.
@@ -177,6 +231,9 @@ Fail-closed cases:
   advertise an empty `tools` array for that response.
 - Client→server or server→client JSON-RPC batch arrays -> denied wholesale
   (fail closed); the proxy does not unpack mixed batches.
+- A configured path-like argument or URI param that is malformed, outside the
+  allow roots, inside a deny root, or a non-`file://` URI -> denied before
+  forwarding.
 
 ## `tools/list` filtering
 
@@ -273,7 +330,7 @@ audited.
 example:
 
 ```json
-{"ts":"2026-07-09T02:04:56Z","event":"tool_call_decision","policy":"minimal-mcp-boundary","server":"filesystem","method":"tools/call","request_id":3,"tool":"shell.run","argument_keys":["api_token","command"],"original_count":null,"filtered_count":null,"allowed_tools":[],"decision":"deny","reason":"tool name is in the global policy deny list"}
+{"ts":"2026-07-09T02:04:56Z","event":"tool_call_decision","policy":"minimal-mcp-boundary","server":"filesystem","direction":"client_to_server","method":"tools/call","request_id":3,"request_id_type":"number","tool":"shell.run","argument_keys":["api_token","command"],"param_keys":[],"original_count":null,"filtered_count":null,"allowed_tools":[],"path_rule":null,"path_key":null,"path_classification":null,"decision":"deny","reason":"tool name is in the global policy deny list"}
 ```
 
 Tool-list filtering example:
@@ -305,13 +362,17 @@ Fields:
 - `filtered_count`: remaining advertised tool count for `tools_list_filtered`
 - `allowed_tools`: allowed tool names retained in a filtered `tools/list`
   response
+- `path_rule`, `path_key`, `path_classification`: optional v0.4.0 safe
+  path-guard metadata; classification is a category such as
+  `inside_allowed_root`, `outside_allowed_roots`, `inside_denied_root`, or
+  `path_parse_error`, never the raw path or URI
 - `decision`: `allow`, `deny`, or `policy_error`
 - `reason`: the policy or fail-safe reason for the decision
 
-Argument values are never written to the audit log, so secret values passed as
-tool arguments do not leak into it. Full tool schemas/descriptions are not
-written for `tools_list_filtered`; only counts and allowed tool names are
-recorded.
+Argument values, param values, full paths, URIs, prompt text, message bodies,
+resource/file contents, secrets, and tokens are never written to the audit log.
+Full tool schemas/descriptions are not written for `tools_list_filtered`; only
+counts and allowed tool names are recorded.
 
 Audit failures are best-effort: if the audit log file cannot be opened at
 startup, the proxy exits before starting the MCP server (code `4`); if writing

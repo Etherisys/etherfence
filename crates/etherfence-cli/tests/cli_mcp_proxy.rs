@@ -619,6 +619,29 @@ allow = [
 deny = ["sampling/createMessage", "elicitation/create"]
 "#;
 
+const PATH_GUARD_POLICY: &str = r#"
+schema_version = "ef-mcp-policy/v0.1"
+name = "path-guard-test"
+
+[methods]
+allow = ["tools/list", "tools/call", "resources/read"]
+
+[tools]
+allow = ["filesystem.read"]
+
+[path_rules.project_readonly]
+allow_roots = ["/home/user/project"]
+deny_roots = ["/home/user/project/.git", "/home/user/project/secrets"]
+
+[tools."filesystem.read".arguments]
+path_keys = ["path"]
+path_rule = "project_readonly"
+
+[methods."resources/read".params]
+uri_keys = ["uri"]
+path_rule = "project_readonly"
+"#;
+
 #[test]
 fn proxy_denies_server_to_client_sampling_before_client_and_answers_server() {
     let policy = write_temp_policy("server-sampling", SERVER_TO_CLIENT_POLICY);
@@ -748,6 +771,90 @@ fn proxy_denies_server_to_client_batch_fail_closed() {
     let audit = std::fs::read_to_string(&run.audit_log).expect("audit log");
     assert!(audit.contains("\"event\":\"batch_denied\""));
     assert!(audit.contains("\"direction\":\"server_to_client\""));
+
+    let _ = std::fs::remove_file(&policy);
+    let _ = std::fs::remove_file(&run.server_log);
+    let _ = std::fs::remove_file(&run.audit_log);
+}
+
+#[test]
+fn proxy_path_guard_allows_configured_tool_path_under_root() {
+    let policy = write_temp_policy("path-allow", PATH_GUARD_POLICY);
+    let run = run_proxy_with_input(
+        "path-allow",
+        &policy,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"filesystem.read","arguments":{"path":"/home/user/project/docs/readme.md"}}}"#,
+        ],
+    );
+    assert!(
+        run.output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&run.output.stderr)
+    );
+    let lines = stdout_json_lines(&run.output);
+    assert_eq!(
+        response_with_id(&lines, 1)["result"]["echo_tool"],
+        "filesystem.read"
+    );
+    let audit = std::fs::read_to_string(&run.audit_log).expect("audit log");
+    assert!(audit.contains("\"path_rule\":\"project_readonly\""));
+    assert!(audit.contains("\"path_key\":\"path\""));
+    assert!(audit.contains("\"path_classification\":\"inside_allowed_root\""));
+    assert!(!audit.contains("/home/user/project"));
+
+    let _ = std::fs::remove_file(&policy);
+    let _ = std::fs::remove_file(&run.server_log);
+    let _ = std::fs::remove_file(&run.audit_log);
+}
+
+#[test]
+fn proxy_path_guard_denies_tool_path_outside_root_without_forwarding() {
+    let policy = write_temp_policy("path-deny-outside", PATH_GUARD_POLICY);
+    let run = run_proxy_with_input(
+        "path-deny-outside",
+        &policy,
+        &[
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"filesystem.read","arguments":{"path":"/home/user/other/secret.txt"}}}"#,
+        ],
+    );
+    assert!(run.output.status.success());
+    let lines = stdout_json_lines(&run.output);
+    assert_eq!(response_with_id(&lines, 2)["error"]["code"], -32000);
+    let received = std::fs::read_to_string(&run.server_log).unwrap_or_default();
+    assert!(!received.contains("/home/user/other"));
+    let audit = std::fs::read_to_string(&run.audit_log).expect("audit log");
+    assert!(audit.contains("outside_allowed_roots"));
+    assert!(!audit.contains("/home/user/other"));
+
+    let _ = std::fs::remove_file(&policy);
+    let _ = std::fs::remove_file(&run.server_log);
+    let _ = std::fs::remove_file(&run.audit_log);
+}
+
+#[test]
+fn proxy_path_guard_denies_file_uri_under_denied_root_and_non_file_uri() {
+    let policy = write_temp_policy("path-uri", PATH_GUARD_POLICY);
+    let run = run_proxy_with_input(
+        "path-uri",
+        &policy,
+        &[
+            r#"{"jsonrpc":"2.0","id":3,"method":"resources/read","params":{"uri":"file:///home/user/project/secrets/token.txt"}}"#,
+            r#"{"jsonrpc":"2.0","id":4,"method":"resources/read","params":{"uri":"https://example.invalid/resource"}}"#,
+        ],
+    );
+    assert!(run.output.status.success());
+    let lines = stdout_json_lines(&run.output);
+    assert_eq!(response_with_id(&lines, 3)["error"]["code"], -32000);
+    assert_eq!(response_with_id(&lines, 4)["error"]["code"], -32000);
+    let received = std::fs::read_to_string(&run.server_log).unwrap_or_default();
+    assert!(!received.contains("resources/read"));
+    let audit = std::fs::read_to_string(&run.audit_log).expect("audit log");
+    assert!(audit.contains("inside_denied_root"));
+    assert!(audit.contains("path_parse_error"));
+    assert!(audit.contains("\"path_key\":\"uri\""));
+    assert!(!audit.contains("file:///home/user/project/secrets"));
+    assert!(!audit.contains("https://example.invalid"));
 
     let _ = std::fs::remove_file(&policy);
     let _ = std::fs::remove_file(&run.server_log);

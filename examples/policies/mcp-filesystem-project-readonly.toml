@@ -1,0 +1,16 @@
+schema_version = "ef-mcp-policy/v0.1"
+name = "mcp-filesystem-project-readonly"
+
+# v0.4.0 example: allow a filesystem read tool, but only for paths under
+# one project root. Denied roots win even when they sit under an allowed root.
+[tools]
+allow = ["filesystem.read"]
+deny = ["filesystem.write", "filesystem.delete", "shell.run"]
+
+[path_rules.project_readonly]
+allow_roots = ["/home/user/project"]
+deny_roots = ["/home/user/project/.git", "/home/user/project/secrets"]
+
+[tools."filesystem.read".arguments]
+path_keys = ["path"]
+path_rule = "project_readonly"

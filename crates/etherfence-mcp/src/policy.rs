@@ -43,6 +43,8 @@ pub struct McpPolicyFile {
     #[serde(default)]
     pub methods: Option<MethodRules>,
     #[serde(default)]
+    pub path_rules: BTreeMap<String, PathRule>,
+    #[serde(default)]
     pub servers: BTreeMap<String, ServerPolicy>,
 }
 
@@ -60,6 +62,14 @@ pub struct ToolRules {
     pub allow: Vec<String>,
     #[serde(default)]
     pub deny: Vec<String>,
+    #[serde(flatten)]
+    pub path_guards: BTreeMap<String, ToolPathGuard>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ToolPathGuard {
+    #[serde(default)]
+    pub arguments: Option<PathKeyGuard>,
 }
 
 /// Method-level allow/deny rules. When present, these control which JSON-RPC
@@ -78,6 +88,31 @@ pub struct MethodRules {
     pub allow: Vec<String>,
     #[serde(default)]
     pub deny: Vec<String>,
+    #[serde(flatten)]
+    pub path_guards: BTreeMap<String, MethodPathGuard>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct MethodPathGuard {
+    #[serde(default)]
+    pub params: Option<PathKeyGuard>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct PathKeyGuard {
+    #[serde(default)]
+    pub path_keys: Vec<String>,
+    #[serde(default)]
+    pub uri_keys: Vec<String>,
+    pub path_rule: String,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct PathRule {
+    #[serde(default)]
+    pub allow_roots: Vec<String>,
+    #[serde(default)]
+    pub deny_roots: Vec<String>,
 }
 
 /// The decision the proxy made for one MCP tool call or method.
@@ -104,6 +139,21 @@ pub struct PolicyDecision {
     pub reason: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PathInputKind {
+    Path,
+    Uri,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PathPolicyDecision {
+    pub decision: Decision,
+    pub reason: String,
+    pub rule_name: String,
+    pub key_name: String,
+    pub classification: String,
+}
+
 // `path` here is an explicit, trusted-operator CLI input (`mcp-proxy
 // --policy`); see the doc comment on `read_bounded_text_file` for the
 // CLI-vs-future-API path trust model this crate follows.
@@ -126,7 +176,309 @@ pub fn parse_mcp_policy(content: &str) -> Result<McpPolicyFile> {
     if policy.name.trim().is_empty() {
         anyhow::bail!("MCP proxy policy name must not be empty");
     }
+    for (name, rule) in &policy.path_rules {
+        if name.trim().is_empty() {
+            anyhow::bail!("MCP proxy path rule names must not be empty");
+        }
+        if rule.allow_roots.is_empty() {
+            anyhow::bail!(
+                "MCP proxy path rule {name:?} must configure at least one allow_roots entry"
+            );
+        }
+    }
     Ok(policy)
+}
+
+pub fn decide_tool_argument_paths(
+    policy: &McpPolicyFile,
+    tool_name: &str,
+    arguments: Option<&serde_json::Value>,
+) -> Option<PathPolicyDecision> {
+    let guard = policy
+        .tools
+        .path_guards
+        .get(tool_name)?
+        .arguments
+        .as_ref()?;
+    Some(decide_path_keys(
+        policy,
+        guard,
+        arguments,
+        PathInputKind::Path,
+    ))
+}
+
+pub fn decide_method_param_paths(
+    policy: &McpPolicyFile,
+    method: &str,
+    params: Option<&serde_json::Value>,
+) -> Option<PathPolicyDecision> {
+    let guard = policy
+        .methods
+        .as_ref()?
+        .path_guards
+        .get(method)?
+        .params
+        .as_ref()?;
+    Some(decide_path_keys(policy, guard, params, PathInputKind::Uri))
+}
+
+fn decide_path_keys(
+    policy: &McpPolicyFile,
+    guard: &PathKeyGuard,
+    container: Option<&serde_json::Value>,
+    default_kind: PathInputKind,
+) -> PathPolicyDecision {
+    let rule_name = guard.path_rule.clone();
+    let Some(rule) = policy.path_rules.get(&guard.path_rule) else {
+        return path_decision(
+            Decision::Deny,
+            "path rule referenced by path guard was not found",
+            rule_name,
+            first_configured_key(guard),
+            "rule_not_found",
+        );
+    };
+
+    for key in &guard.path_keys {
+        let decision = decide_one_path_key(rule, &rule_name, container, key, PathInputKind::Path);
+        if decision.decision != Decision::Allow {
+            return decision;
+        }
+    }
+    for key in &guard.uri_keys {
+        let decision = decide_one_path_key(rule, &rule_name, container, key, PathInputKind::Uri);
+        if decision.decision != Decision::Allow {
+            return decision;
+        }
+    }
+    if guard.path_keys.is_empty() && guard.uri_keys.is_empty() {
+        return path_decision(
+            Decision::Deny,
+            "path guard has no configured path_keys or uri_keys",
+            rule_name,
+            "<none>".to_string(),
+            "path_parse_error",
+        );
+    }
+
+    path_decision(
+        Decision::Allow,
+        match default_kind {
+            PathInputKind::Path => {
+                "path argument is inside an allowed root and outside denied roots"
+            }
+            PathInputKind::Uri => {
+                "URI parameter resolves inside an allowed root and outside denied roots"
+            }
+        },
+        rule_name,
+        first_configured_key(guard),
+        "inside_allowed_root",
+    )
+}
+
+fn decide_one_path_key(
+    rule: &PathRule,
+    rule_name: &str,
+    container: Option<&serde_json::Value>,
+    key: &str,
+    kind: PathInputKind,
+) -> PathPolicyDecision {
+    let Some(value) = container
+        .and_then(serde_json::Value::as_object)
+        .and_then(|object| object.get(key))
+        .and_then(serde_json::Value::as_str)
+    else {
+        return path_decision(
+            Decision::Deny,
+            "path-like key is missing or is not a string",
+            rule_name.to_string(),
+            key.to_string(),
+            "path_parse_error",
+        );
+    };
+    evaluate_path_value(rule, rule_name, key, kind, value)
+}
+
+fn evaluate_path_value(
+    rule: &PathRule,
+    rule_name: &str,
+    key: &str,
+    kind: PathInputKind,
+    raw_value: &str,
+) -> PathPolicyDecision {
+    let Some(candidate) = normalize_path_value(raw_value, kind) else {
+        return path_decision(
+            Decision::Deny,
+            "path-like value could not be parsed or normalized",
+            rule_name.to_string(),
+            key.to_string(),
+            "path_parse_error",
+        );
+    };
+    let allow_roots: Option<Vec<String>> = rule
+        .allow_roots
+        .iter()
+        .map(|root| normalize_path_value(root, PathInputKind::Path))
+        .collect();
+    let Some(allow_roots) = allow_roots else {
+        return path_decision(
+            Decision::Deny,
+            "configured allow root could not be parsed or normalized",
+            rule_name.to_string(),
+            key.to_string(),
+            "path_parse_error",
+        );
+    };
+    let deny_roots: Option<Vec<String>> = rule
+        .deny_roots
+        .iter()
+        .map(|root| normalize_path_value(root, PathInputKind::Path))
+        .collect();
+    let Some(deny_roots) = deny_roots else {
+        return path_decision(
+            Decision::Deny,
+            "configured deny root could not be parsed or normalized",
+            rule_name.to_string(),
+            key.to_string(),
+            "path_parse_error",
+        );
+    };
+    if deny_roots
+        .iter()
+        .any(|root| path_has_root(&candidate, root))
+    {
+        return path_decision(
+            Decision::Deny,
+            "inside_denied_root",
+            rule_name.to_string(),
+            key.to_string(),
+            "inside_denied_root",
+        );
+    }
+    if !allow_roots
+        .iter()
+        .any(|root| path_has_root(&candidate, root))
+    {
+        return path_decision(
+            Decision::Deny,
+            "outside_allowed_roots",
+            rule_name.to_string(),
+            key.to_string(),
+            "outside_allowed_roots",
+        );
+    }
+    path_decision(
+        Decision::Allow,
+        "inside_allowed_root",
+        rule_name.to_string(),
+        key.to_string(),
+        "inside_allowed_root",
+    )
+}
+
+fn normalize_path_value(raw_value: &str, kind: PathInputKind) -> Option<String> {
+    if raw_value.is_empty() || raw_value.contains('\0') {
+        return None;
+    }
+    let local_path = match kind {
+        PathInputKind::Path => {
+            if raw_value.contains("://") {
+                return None;
+            }
+            raw_value.to_string()
+        }
+        PathInputKind::Uri => extract_file_uri_path(raw_value)?,
+    };
+    normalize_local_path(&local_path)
+}
+
+fn extract_file_uri_path(uri: &str) -> Option<String> {
+    let rest = uri.strip_prefix("file://")?;
+    if rest.contains('%') || rest.contains('\0') {
+        return None;
+    }
+    if let Some(path) = rest.strip_prefix("localhost/") {
+        return Some(format!("/{path}"));
+    }
+    if rest.starts_with('/') {
+        return Some(rest.to_string());
+    }
+    None
+}
+
+fn normalize_local_path(raw_path: &str) -> Option<String> {
+    let path = raw_path.replace('\\', "/");
+    if is_windows_absolute(&path) {
+        let drive = path[..1].to_ascii_lowercase();
+        let rest = &path[2..];
+        let components = normalize_components(rest)?;
+        return Some(format!("{drive}:/{components}").to_ascii_lowercase());
+    }
+    if path.starts_with('/') {
+        let components = normalize_components(&path)?;
+        return Some(format!("/{components}"));
+    }
+    None
+}
+
+fn is_windows_absolute(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && bytes[2] == b'/'
+}
+
+fn normalize_components(path: &str) -> Option<String> {
+    let mut components: Vec<&str> = Vec::new();
+    for component in path.split('/') {
+        match component {
+            "" | "." => {}
+            ".." => {
+                components.pop();
+            }
+            value if value.contains('\0') => return None,
+            value => components.push(value),
+        }
+    }
+    Some(components.join("/"))
+}
+
+fn path_has_root(candidate: &str, root: &str) -> bool {
+    if root == "/" {
+        return candidate.starts_with('/');
+    }
+    if root.len() == 3 && root.as_bytes()[1] == b':' && root.ends_with('/') {
+        return candidate.starts_with(root);
+    }
+    candidate == root
+        || candidate
+            .strip_prefix(root)
+            .is_some_and(|rest| rest.starts_with('/'))
+}
+
+fn first_configured_key(guard: &PathKeyGuard) -> String {
+    guard
+        .path_keys
+        .first()
+        .or_else(|| guard.uri_keys.first())
+        .cloned()
+        .unwrap_or_else(|| "<none>".to_string())
+}
+
+fn path_decision(
+    decision: Decision,
+    reason: &str,
+    rule_name: String,
+    key_name: String,
+    classification: &str,
+) -> PathPolicyDecision {
+    PathPolicyDecision {
+        decision,
+        reason: reason.to_string(),
+        rule_name,
+        key_name,
+        classification: classification.to_string(),
+    }
 }
 
 /// Deterministic decision for a tool name: deny-list match wins, then
@@ -297,6 +649,7 @@ pub fn decide_method_for_direction(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     const VALID_POLICY: &str = r#"
 schema_version = "ef-mcp-policy/v0.1"
@@ -305,6 +658,29 @@ name = "minimal-mcp-boundary"
 [tools]
 allow = ["github.list_repos", "filesystem.read"]
 deny = ["filesystem.read_secret", "shell.run"]
+"#;
+
+    const PATH_POLICY: &str = r#"
+schema_version = "ef-mcp-policy/v0.1"
+name = "path-aware"
+
+[tools]
+allow = ["filesystem.read"]
+
+[methods]
+allow = ["tools/list", "tools/call", "resources/read"]
+
+[path_rules.project_readonly]
+allow_roots = ["/home/user/project"]
+deny_roots = ["/home/user/project/.git", "/home/user/project/secrets"]
+
+[tools."filesystem.read".arguments]
+path_keys = ["path"]
+path_rule = "project_readonly"
+
+[methods."resources/read".params]
+uri_keys = ["uri"]
+path_rule = "project_readonly"
 "#;
 
     #[test]
@@ -386,6 +762,222 @@ allow = ["filesystem.read"]
         let methods = filesystem.methods.as_ref().expect("server methods");
         assert_eq!(methods.allow, vec!["resources/list", "resources/read"]);
         assert_eq!(methods.deny, vec!["prompts/get"]);
+    }
+
+    #[test]
+    fn parses_path_rules_and_guards() {
+        let policy = parse_mcp_policy(PATH_POLICY).expect("valid path-aware policy");
+        assert!(policy.path_rules.contains_key("project_readonly"));
+        assert!(policy.tools.path_guards.contains_key("filesystem.read"));
+        assert!(policy
+            .methods
+            .as_ref()
+            .expect("methods")
+            .path_guards
+            .contains_key("resources/read"));
+    }
+
+    #[test]
+    fn path_guard_allows_path_under_allowed_root() {
+        let policy = parse_mcp_policy(PATH_POLICY).expect("policy");
+        let decision = decide_tool_argument_paths(
+            &policy,
+            "filesystem.read",
+            Some(&json!({"path": "/home/user/project/docs/readme.md"})),
+        )
+        .expect("path guard");
+        assert_eq!(decision.decision, Decision::Allow);
+        assert_eq!(decision.classification, "inside_allowed_root");
+    }
+
+    #[test]
+    fn path_guard_denies_path_outside_allowed_root() {
+        let policy = parse_mcp_policy(PATH_POLICY).expect("policy");
+        let decision = decide_tool_argument_paths(
+            &policy,
+            "filesystem.read",
+            Some(&json!({"path": "/home/user/other/file.txt"})),
+        )
+        .expect("path guard");
+        assert_eq!(decision.decision, Decision::Deny);
+        assert_eq!(decision.classification, "outside_allowed_roots");
+    }
+
+    #[test]
+    fn path_guard_denies_denied_root_before_allow() {
+        let policy = parse_mcp_policy(PATH_POLICY).expect("policy");
+        let decision = decide_tool_argument_paths(
+            &policy,
+            "filesystem.read",
+            Some(&json!({"path": "/home/user/project/secrets/token.txt"})),
+        )
+        .expect("path guard");
+        assert_eq!(decision.decision, Decision::Deny);
+        assert_eq!(decision.classification, "inside_denied_root");
+    }
+
+    #[test]
+    fn path_guard_denies_traversal_outside_allowed_root() {
+        let policy = parse_mcp_policy(PATH_POLICY).expect("policy");
+        let decision = decide_tool_argument_paths(
+            &policy,
+            "filesystem.read",
+            Some(&json!({"path": "/home/user/project/../secrets/token.txt"})),
+        )
+        .expect("path guard");
+        assert_eq!(decision.decision, Decision::Deny);
+        assert_eq!(decision.classification, "outside_allowed_roots");
+    }
+
+    #[test]
+    fn path_guard_denies_malformed_path_when_configured() {
+        let policy = parse_mcp_policy(PATH_POLICY).expect("policy");
+        let decision = decide_tool_argument_paths(
+            &policy,
+            "filesystem.read",
+            Some(&json!({"path": "../secrets/token.txt"})),
+        )
+        .expect("path guard");
+        assert_eq!(decision.decision, Decision::Deny);
+        assert_eq!(decision.classification, "path_parse_error");
+    }
+
+    #[test]
+    fn uri_guard_handles_file_uri_and_denies_non_file_uri() {
+        let policy = parse_mcp_policy(PATH_POLICY).expect("policy");
+        let allowed = decide_method_param_paths(
+            &policy,
+            "resources/read",
+            Some(&json!({"uri": "file:///home/user/project/docs/readme.md"})),
+        )
+        .expect("uri guard");
+        assert_eq!(allowed.decision, Decision::Allow);
+
+        let denied = decide_method_param_paths(
+            &policy,
+            "resources/read",
+            Some(&json!({"uri": "https://example.invalid/resource"})),
+        )
+        .expect("uri guard");
+        assert_eq!(denied.decision, Decision::Deny);
+        assert_eq!(denied.classification, "path_parse_error");
+    }
+
+    #[test]
+    fn path_guard_supports_windows_style_paths_lexically() {
+        let content = r#"
+schema_version = "ef-mcp-policy/v0.1"
+name = "windows-paths"
+
+[tools]
+allow = ["filesystem.read"]
+
+[path_rules.win_project]
+allow_roots = ["C:\\Users\\user\\project"]
+deny_roots = ["C:\\Users\\user\\project\\secrets"]
+
+[tools."filesystem.read".arguments]
+path_keys = ["path"]
+path_rule = "win_project"
+"#;
+        let policy = parse_mcp_policy(content).expect("policy");
+        let allowed = decide_tool_argument_paths(
+            &policy,
+            "filesystem.read",
+            Some(&json!({"path": "C:\\Users\\user\\project\\docs\\readme.md"})),
+        )
+        .expect("path guard");
+        assert_eq!(allowed.decision, Decision::Allow);
+        let denied = decide_tool_argument_paths(
+            &policy,
+            "filesystem.read",
+            Some(&json!({"path": "C:\\Users\\user\\project\\secrets\\token.txt"})),
+        )
+        .expect("path guard");
+        assert_eq!(denied.classification, "inside_denied_root");
+    }
+
+    #[test]
+    fn windows_deny_root_blocks_case_variant_candidate() {
+        let content = r#"
+schema_version = "ef-mcp-policy/v0.1"
+name = "windows-case-deny"
+
+[tools]
+allow = ["filesystem.read"]
+
+[path_rules.win_project]
+allow_roots = ["C:/Users/Alice/project"]
+deny_roots = ["C:/Users/Alice/project/secrets"]
+
+[tools."filesystem.read".arguments]
+path_keys = ["path"]
+path_rule = "win_project"
+"#;
+        let policy = parse_mcp_policy(content).expect("policy");
+        let decision = decide_tool_argument_paths(
+            &policy,
+            "filesystem.read",
+            Some(&json!({"path": "C:/Users/Alice/project/Secrets/token.txt"})),
+        )
+        .expect("path guard");
+        assert_eq!(decision.decision, Decision::Deny);
+        assert_eq!(decision.classification, "inside_denied_root");
+    }
+
+    #[test]
+    fn windows_allow_root_allows_case_variant_candidate() {
+        let content = r#"
+schema_version = "ef-mcp-policy/v0.1"
+name = "windows-case-allow"
+
+[tools]
+allow = ["filesystem.read"]
+
+[path_rules.win_project]
+allow_roots = ["C:/Users/Alice/project"]
+
+[tools."filesystem.read".arguments]
+path_keys = ["path"]
+path_rule = "win_project"
+"#;
+        let policy = parse_mcp_policy(content).expect("policy");
+        let decision = decide_tool_argument_paths(
+            &policy,
+            "filesystem.read",
+            Some(&json!({"path": "c:/users/alice/PROJECT/docs/readme.md"})),
+        )
+        .expect("path guard");
+        assert_eq!(decision.decision, Decision::Allow);
+        assert_eq!(decision.classification, "inside_allowed_root");
+    }
+
+    #[test]
+    fn windows_deny_root_wins_after_case_folding() {
+        let content = r#"
+schema_version = "ef-mcp-policy/v0.1"
+name = "windows-case-deny-wins"
+
+[tools]
+allow = ["filesystem.read"]
+
+[path_rules.win_project]
+allow_roots = ["C:/Users/Alice/project"]
+deny_roots = ["c:/users/alice/PROJECT/SECRETS"]
+
+[tools."filesystem.read".arguments]
+path_keys = ["path"]
+path_rule = "win_project"
+"#;
+        let policy = parse_mcp_policy(content).expect("policy");
+        let decision = decide_tool_argument_paths(
+            &policy,
+            "filesystem.read",
+            Some(&json!({"path": "C:/Users/Alice/project/secrets/token.txt"})),
+        )
+        .expect("path guard");
+        assert_eq!(decision.decision, Decision::Deny);
+        assert_eq!(decision.classification, "inside_denied_root");
     }
 
     #[test]

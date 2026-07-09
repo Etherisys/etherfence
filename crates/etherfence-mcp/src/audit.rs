@@ -28,6 +28,9 @@ pub struct AuditRecord {
     pub original_count: Option<usize>,
     pub filtered_count: Option<usize>,
     pub allowed_tools: Vec<String>,
+    pub path_rule: Option<String>,
+    pub path_key: Option<String>,
+    pub path_classification: Option<String>,
     pub decision: String,
     pub reason: String,
 }
@@ -58,6 +61,9 @@ impl AuditRecord {
             original_count: None,
             filtered_count: None,
             allowed_tools: Vec::new(),
+            path_rule: None,
+            path_key: None,
+            path_classification: None,
             decision: decision.as_str().to_string(),
             reason: reason.to_string(),
         }
@@ -82,6 +88,18 @@ impl AuditRecord {
             decision,
             reason,
         )
+    }
+
+    pub fn with_path_metadata(
+        mut self,
+        path_rule: &str,
+        path_key: &str,
+        path_classification: &str,
+    ) -> Self {
+        self.path_rule = Some(path_rule.to_string());
+        self.path_key = Some(path_key.to_string());
+        self.path_classification = Some(path_classification.to_string());
+        self
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -111,6 +129,9 @@ impl AuditRecord {
             original_count: None,
             filtered_count: None,
             allowed_tools: Vec::new(),
+            path_rule: None,
+            path_key: None,
+            path_classification: None,
             decision: decision.as_str().to_string(),
             reason: reason.to_string(),
         }
@@ -141,6 +162,9 @@ impl AuditRecord {
             original_count: None,
             filtered_count: None,
             allowed_tools: Vec::new(),
+            path_rule: None,
+            path_key: None,
+            path_classification: None,
             decision: Decision::Deny.as_str().to_string(),
             reason: reason.to_string(),
         }
@@ -170,6 +194,9 @@ impl AuditRecord {
             original_count: Some(original_count),
             filtered_count: Some(allowed_tools.len()),
             allowed_tools,
+            path_rule: None,
+            path_key: None,
+            path_classification: None,
             decision: Decision::Allow.as_str().to_string(),
             reason: reason.to_string(),
         }
@@ -197,6 +224,9 @@ impl AuditRecord {
             original_count: Some(0),
             filtered_count: Some(0),
             allowed_tools: Vec::new(),
+            path_rule: None,
+            path_key: None,
+            path_classification: None,
             decision: Decision::Allow.as_str().to_string(),
             reason: reason.to_string(),
         }
@@ -218,6 +248,9 @@ impl AuditRecord {
             original_count: None,
             filtered_count: None,
             allowed_tools: Vec::new(),
+            path_rule: None,
+            path_key: None,
+            path_classification: None,
             decision: Decision::Allow.as_str().to_string(),
             reason: "tracked tools/list response handled; request tracking entry cleared"
                 .to_string(),
@@ -240,6 +273,9 @@ impl AuditRecord {
             original_count: None,
             filtered_count: None,
             allowed_tools: Vec::new(),
+            path_rule: None,
+            path_key: None,
+            path_classification: None,
             decision: Decision::PolicyError.as_str().to_string(),
             reason: reason.to_string(),
         }
