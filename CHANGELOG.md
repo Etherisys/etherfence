@@ -9,6 +9,17 @@ one opt-in experimental runtime component: an MCP stdio boundary proxy.
 EtherFence still has no daemon mode, shell hooks, command interception,
 terminal-command scanning, or network interception.
 
+## [0.2.3] - 2026-07-09
+
+### Changed
+
+- Switched project license metadata and root license text to
+  `AGPL-3.0-only`.
+
+### Notes
+
+- No runtime behavior changes.
+
 ## [0.2.2] - 2026-07-09
 
 ### Added
