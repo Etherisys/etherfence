@@ -154,6 +154,20 @@
 - No new enforcement semantics or runtime behavior; release creation stays
   explicit and fails closed on ambiguous state
 
+## v0.2.6 - MCP proxy request tracking hardening
+
+- Hardened JSON-RPC request/response tracking in the stdio MCP proxy:
+  - Track client `tools/list` requests by `(method, id)` instead of a bare id
+  - Reference-counted tracking entries removed after the matching response is
+    processed, so duplicate in-flight ids are handled deterministically and
+    entries cannot leak
+  - Explicit, documented behavior for notifications, unknown/no-id responses,
+    server errors for tracked ids, malformed successful `tools/list` results,
+    and unrelated-method responses that reuse a tracked id style
+  - `tools_list_tracking_removed` audit event and `tools_list_malformed` reason
+  - No new enforcement semantics or transports; proxy remains stdio-only,
+    exact-name-only, experimental
+
 ## v0.2.x ideas
 
 - Expand tested config schemas and platform paths

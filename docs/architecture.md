@@ -1,6 +1,6 @@
 # EtherFence Architecture
 
-EtherFence v0.2.2 is a small Rust workspace with scan-only posture discovery
+EtherFence v0.2.6 is a small Rust workspace with scan-only posture discovery
 plus an experimental MCP stdio boundary proxy.
 
 ## Crates
@@ -29,7 +29,13 @@ plus an experimental MCP stdio boundary proxy.
 3. The proxy selects the configured server scope (`--server-name`, default `default`) and spawns the MCP server child process.
 4. It pumps newline-delimited JSON-RPC lines in both directions.
 5. `tools/call` requests from the client are checked against the policy: global deny, server deny, server allow, global allow, then default deny. Allowed calls are forwarded unchanged; denied calls receive a JSON-RPC error from the proxy and never reach the server.
-6. Client `tools/list` request ids are tracked; matching successful server responses have `result.tools` filtered with the same policy so denied/default-denied tools are not advertised. Unexpected successful `tools/list` shapes are rewritten to advertise an empty tools list.
+6. Client `tools/list` requests are tracked by `(method, id)` with reference
+   counted cleanup; matching successful server responses have `result.tools`
+   filtered with the same policy so denied/default-denied tools are not
+   advertised. Unexpected successful `tools/list` shapes are rewritten to
+   advertise an empty tools list. Notifications, unknown/no-id responses, and
+   unrelated-method responses that reuse a tracked id style pass through
+   unchanged; server errors clear the tracked entry.
 7. Unrelated protocol messages pass through untouched.
 8. Tool-call and tool-list filter decisions are optionally appended to a JSONL audit log with timestamp, server name, decision, reason, argument key names only for calls, and count/name metadata only for list filtering.
 9. Compatibility tests use a checked-in deterministic stdio MCP fixture plus

@@ -229,6 +229,41 @@ message. This keeps CI deterministic while allowing maintainers to validate
 that EtherFence can sit between a client-like test harness and a real stdio
 MCP server.
 
+## Request tracking behavior
+
+The proxy tracks only the client requests it must act on later. Today that is
+`tools/list`: the proxy remembers each `tools/list` request so it can filter the
+matching response. This tracking is hardened against the protocol edge cases
+below.
+
+- **Tracked by method + id.** Each tracked request is keyed by both its
+  JSON-RPC `method` and a canonical id key (the id serialized to compact JSON,
+  so `1`, `"1"`, `[1]`, `{"a":1}`, and `true` each have a stable, distinct key).
+  A response is only filtered when its `(method, id)` matches a tracked request.
+  A `tools/call` result (or any other method) that happens to reuse the same id
+  style is never re-shaped into a tool list.
+- **Notifications are not tracked.** A `tools/list` message with no usable id
+  (a notification) is forwarded unchanged and is never added to the tracking
+  set, because there is no response to match it against.
+- **Deterministic cleanup.** Tracking entries are reference-counted. Tracking a
+  duplicate in-flight `tools/list` id increments the count; each matching
+  response decrements it, and the entry is removed only when the count reaches
+  zero. This means two identical `tools/list` ids in flight are both handled
+  unambiguously: the first response does not silently orphan the second.
+- **Server errors clear tracking.** A JSON-RPC error response for a tracked
+  `tools/list` id passes through unchanged and clears the tracking entry. The
+  proxy never fabricates a tool list from an error.
+- **Unknown / no-id responses pass through.** A response whose id matches no
+  tracked request, or whose id is missing/null, is forwarded unchanged and
+  does not affect tracking. A tracked-id response whose `result` is not a tool
+  list (no `tools` object) is also forwarded unchanged and its tracking entry
+  is cleared, so entries cannot leak and later match an unrelated response.
+- **Malformed tool lists fail safe.** A `tools/list` result that is not a valid
+  tool list (missing `result`, `result` not an object, missing `tools`, or
+  `tools` not an array) is rewritten to `{"tools":[]}` and audited as
+  `tools_list_malformed`. Denied and default-denied tools are removed from
+  allowed lists as before.
+
 ## Compatibility matrix workflow
 
 `docs/mcp-compatibility-matrix.md` defines the fields required for every compatibility record: server name, server version, platform, command template, policy used, `tools/list` behavior, allowed and denied `tools/call` results, audit result, tester/date, and notes/limitations. The checked-in fake MCP server row is the only deterministic CI-backed record. External server rows should be added only after running the optional real-server template and recording exact tool names and versions.
@@ -257,6 +292,10 @@ for local paths, server commands, and exact tool names.
   an allow-listed tool.
 - Non-JSON input lines are forwarded unchanged for the server to reject,
   matching plain JSON-RPC behavior.
+- Tracking is best-effort and scoped to `tools/list`: a client that never sends
+  `tools/list`, or that reuses one id for multiple unrelated methods, may see a
+  tracked-id response forwarded unchanged with its tracking entry cleared. The
+  proxy does not reorder, buffer, or correlate responses beyond id matching.
 - One client, one server, one process; no daemon mode, shell hooks, command
   interception, terminal-command scanning, or network interception — those
   remain out of scope.
