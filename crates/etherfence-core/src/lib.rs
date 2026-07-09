@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::fs;
 use std::io;
+use std::io::Read;
 use std::path::Path;
 
 /// Maximum size accepted for policy, MCP proxy policy, and scanned agent
@@ -14,7 +15,16 @@ pub const MAX_CONFIG_FILE_BYTES: u64 = 5 * 1024 * 1024;
 /// findings over time so they are allowed to grow larger than config files.
 pub const MAX_BASELINE_FILE_BYTES: u64 = 25 * 1024 * 1024;
 
-/// Reads a UTF-8 text file, rejecting it up front if it exceeds `max_bytes`.
+/// Reads a UTF-8 text file, rejecting it if it exceeds `max_bytes`.
+///
+/// The limit is enforced against the actual bytes read, not against
+/// `stat`-reported file size: special files (procfs entries, device nodes
+/// like `/dev/zero`, FIFOs) can report a length of zero or an unreliable
+/// size while still producing unbounded or unexpected data on read, so a
+/// pre-read `metadata.len()` check alone is not a real bound. This function
+/// also rejects any path that is not a regular file, and caps the read
+/// itself at `max_bytes + 1` via a bounded reader so no more than that
+/// many bytes are ever pulled into memory regardless of what `stat` says.
 ///
 /// This only bounds the amount of data read; it does not sandbox or
 /// validate `path` in any way. In EtherFence's CLI, paths passed to this
@@ -27,19 +37,36 @@ pub const MAX_BASELINE_FILE_BYTES: u64 = 25 * 1024 * 1024;
 /// explicit base directory and reject traversal before it ever reaches
 /// this helper.
 pub fn read_bounded_text_file(path: &Path, max_bytes: u64) -> io::Result<String> {
-    let metadata = fs::metadata(path)?;
-    if metadata.len() > max_bytes {
+    let file = fs::File::open(path)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{} is not a regular file", path.display()),
+        ));
+    }
+
+    let read_limit = max_bytes.saturating_add(1);
+    let mut buf = Vec::new();
+    file.take(read_limit).read_to_end(&mut buf)?;
+
+    if buf.len() as u64 > max_bytes {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!(
-                "file {} is {} bytes, exceeding the maximum allowed size of {} bytes",
+                "file {} exceeds the maximum allowed size of {} bytes",
                 path.display(),
-                metadata.len(),
                 max_bytes
             ),
         ));
     }
-    fs::read_to_string(path)
+
+    String::from_utf8(buf).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("file {} is not valid UTF-8", path.display()),
+        )
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -438,5 +465,79 @@ mod tests {
         b.target = "other".to_string();
         b.refresh_fingerprint();
         assert_ne!(a.fingerprint, b.fingerprint);
+    }
+
+    fn write_temp_file(name: &str, contents: &[u8]) -> std::path::PathBuf {
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "etherfence-core-test-{}-{}-{:016x}",
+            std::process::id(),
+            name,
+            fnv1a64(contents)
+        ));
+        fs::write(&path, contents).expect("write temp file");
+        path
+    }
+
+    #[test]
+    fn read_bounded_text_file_accepts_file_exactly_at_limit() {
+        let contents = vec![b'a'; 16];
+        let path = write_temp_file("at-limit", &contents);
+
+        let result = read_bounded_text_file(&path, 16);
+
+        fs::remove_file(&path).ok();
+        assert_eq!(result.unwrap(), "a".repeat(16));
+    }
+
+    #[test]
+    fn read_bounded_text_file_rejects_file_over_limit() {
+        let contents = vec![b'a'; 17];
+        let path = write_temp_file("over-limit", &contents);
+
+        let result = read_bounded_text_file(&path, 16);
+
+        fs::remove_file(&path).ok();
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn read_bounded_text_file_rejects_invalid_utf8() {
+        let contents = vec![0xff, 0xfe, 0xfd];
+        let path = write_temp_file("invalid-utf8", &contents);
+
+        let result = read_bounded_text_file(&path, 1024);
+
+        fs::remove_file(&path).ok();
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn read_bounded_text_file_rejects_directory() {
+        let dir = std::env::temp_dir();
+
+        let result = read_bounded_text_file(&dir, 1024);
+
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_bounded_text_file_rejects_unbounded_device_file() {
+        let path = Path::new("/dev/zero");
+        if !path.exists() {
+            return;
+        }
+
+        // /dev/zero reports a length of 0 via stat but produces infinite
+        // data on read; a `metadata.len()` pre-check alone would let this
+        // through. The bounded reader must reject it without hanging.
+        let result = read_bounded_text_file(path, 1024);
+
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
     }
 }
