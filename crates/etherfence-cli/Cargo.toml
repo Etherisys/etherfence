@@ -15,6 +15,7 @@ clap.workspace = true
 etherfence-core = { path = "../etherfence-core" }
 etherfence-detectors = { path = "../etherfence-detectors" }
 etherfence-inventory = { path = "../etherfence-inventory" }
+etherfence-mcp = { path = "../etherfence-mcp" }
 etherfence-policy = { path = "../etherfence-policy" }
 etherfence-report = { path = "../etherfence-report" }
 serde_json.workspace = true

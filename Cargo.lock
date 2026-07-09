@@ -121,13 +121,14 @@ checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
 
 [[package]]
 name = "etherfence-cli"
-version = "0.1.8"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",
  "etherfence-core",
  "etherfence-detectors",
  "etherfence-inventory",
+ "etherfence-mcp",
  "etherfence-policy",
  "etherfence-report",
  "serde_json",
@@ -135,21 +136,21 @@ dependencies = [
 
 [[package]]
 name = "etherfence-core"
-version = "0.1.8"
+version = "0.2.0"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "etherfence-detectors"
-version = "0.1.8"
+version = "0.2.0"
 dependencies = [
  "etherfence-core",
 ]
 
 [[package]]
 name = "etherfence-inventory"
-version = "0.1.8"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "etherfence-core",
@@ -158,8 +159,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "etherfence-mcp"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "toml",
+]
+
+[[package]]
 name = "etherfence-policy"
-version = "0.1.8"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "etherfence-core",
@@ -170,7 +181,7 @@ dependencies = [
 
 [[package]]
 name = "etherfence-report"
-version = "0.1.8"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "etherfence-core",

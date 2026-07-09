@@ -56,6 +56,20 @@ enum Command {
         #[command(subcommand)]
         command: PolicyCommand,
     },
+    /// Experimental: run an MCP stdio boundary proxy that audits and
+    /// allows/denies MCP tool calls using a TOML policy. Fails closed when
+    /// the policy cannot be loaded.
+    McpProxy {
+        /// TOML MCP proxy policy file (schema ef-mcp-policy/v0.1).
+        #[arg(long)]
+        policy: PathBuf,
+        /// Append JSONL audit records for tool-call decisions to this file.
+        #[arg(long)]
+        audit_log: Option<PathBuf>,
+        /// MCP server command and arguments, after `--`.
+        #[arg(last = true, required = true)]
+        server_command: Vec<String>,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -147,7 +161,46 @@ fn main() -> Result<()> {
             root,
         }),
         Command::Policy { command } => run_policy_command(command),
+        Command::McpProxy {
+            policy,
+            audit_log,
+            server_command,
+        } => run_mcp_proxy(&policy, audit_log.as_deref(), &server_command),
     }
+}
+
+fn run_mcp_proxy(
+    policy_path: &Path,
+    audit_log_path: Option<&Path>,
+    server_command: &[String],
+) -> Result<()> {
+    let mut audit_log = audit_log_path
+        .map(etherfence_mcp::AuditLog::open)
+        .transpose()?;
+    let policy = match etherfence_mcp::load_mcp_policy(policy_path) {
+        Ok(policy) => policy,
+        Err(error) => {
+            // Fail closed: record the policy error and never start the server.
+            if let Some(log) = audit_log.as_mut() {
+                log.write(&etherfence_mcp::AuditRecord::policy_error(&format!(
+                    "{error:#}"
+                )))?;
+            }
+            eprintln!("etherfence mcp-proxy: fail closed, MCP server not started: {error:#}");
+            std::process::exit(2);
+        }
+    };
+    let exit_code = etherfence_mcp::run_proxy(
+        std::io::stdin().lock(),
+        std::io::stdout(),
+        server_command,
+        &policy,
+        audit_log,
+    )?;
+    if exit_code != 0 {
+        std::process::exit(exit_code);
+    }
+    Ok(())
 }
 
 fn run_policy_command(command: PolicyCommand) -> Result<()> {

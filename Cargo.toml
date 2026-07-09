@@ -4,13 +4,14 @@ members = [
     "crates/etherfence-core",
     "crates/etherfence-inventory",
     "crates/etherfence-detectors",
+    "crates/etherfence-mcp",
     "crates/etherfence-policy",
     "crates/etherfence-report",
 ]
 resolver = "2"
 
 [workspace.package]
-version = "0.1.8"
+version = "0.2.0"
 edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/Etherisys-id/etherfence"

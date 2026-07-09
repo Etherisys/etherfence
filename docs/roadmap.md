@@ -89,19 +89,31 @@
 - `docs/sarif.md` documenting the SARIF mapping
 - Tests for new fixture variants, malformed-config graceful failure, SARIF validity, SARIF rule/result mapping for MCP and policy findings, and fingerprint stability across repeated scans
 
-## v0.2 ideas
+## v0.2.0 - experimental MCP boundary proxy prototype
+
+- New `etherfence-mcp` crate with policy, audit, and stdio proxy modules
+- `etherfence mcp-proxy --policy <file> [--audit-log <file>] -- <server-command> [args...]`
+- Minimal MCP stdio proxy: spawns the real MCP server as a child process and forwards newline-delimited JSON-RPC between client and server
+- `ef-mcp-policy/v0.1` TOML policy with exact-match tool-name `allow`/`deny` lists
+- Deterministic decisions: deny list wins, allow list admits, default deny for unlisted tools
+- Fail closed on missing/invalid/unsupported policy: the MCP server is never started
+- Denied `tools/call` requests receive a safe JSON-RPC error and are not forwarded
+- JSONL audit log (`--audit-log`) with timestamp, tool name, decision, reason, and argument key names only — argument values are never logged
+- Tests: policy matching, allow/deny decisions, fail-closed behavior, fake stdio MCP server integration, forwarding assertions, and audit redaction
+- v0.1.x scan/report behavior unchanged and backward compatible
+
+## v0.2.x ideas
 
 - Expand tested config schemas and platform paths
 - Add baseline fingerprint migration notes if needed
-- Add richer machine-readable policy checks without enforcement
+- Add richer machine-readable policy checks
 - Improve documentation for safe enterprise rollout
-- Consider policy schema evolution once real-world policy examples stabilize
+- Consider MCP proxy policy evolution (per-server scoping, patterns) once real-world examples stabilize
+- Optional `tools/list` response filtering so denied tools are not advertised
 
-## Later, not v0.1
+## Later
 
-- Runtime control design
-- MCP proxy experiments
-- Explicit allow/deny policy enforcement
+- Broader runtime control design beyond the stdio proxy prototype
 - Integration with complementary tools such as Tirith
 
-Any runtime blocking, proxying, or interception must be designed and threat-modeled before implementation.
+Any further runtime blocking, proxying, or interception must be designed and threat-modeled before implementation. Daemon mode, shell hooks, command interception, terminal-command scanning, and network interception remain out of scope.

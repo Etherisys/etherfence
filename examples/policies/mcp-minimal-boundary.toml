@@ -1,0 +1,9 @@
+# Example MCP boundary proxy policy for `etherfence mcp-proxy --policy <file>`.
+# Tool names are matched exactly. The deny list wins over the allow list, and
+# any tool name not in the allow list is denied by default.
+schema_version = "ef-mcp-policy/v0.1"
+name = "minimal-mcp-boundary"
+
+[tools]
+allow = ["github.list_repos", "filesystem.read"]
+deny = ["filesystem.read_secret", "shell.run"]
