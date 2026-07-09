@@ -9,6 +9,29 @@ one opt-in experimental runtime component: an MCP stdio boundary proxy.
 EtherFence still has no daemon mode, shell hooks, command interception,
 terminal-command scanning, or network interception.
 
+## [0.2.4] - 2026-07-09
+
+### Added
+
+- MCP compatibility matrix workflow in `docs/mcp-compatibility-matrix.md`
+  with required fields for server/version/platform, command template, policy,
+  tools/list behavior, allowed and denied tools/call outcomes, audit result,
+  tester/date, and limitations.
+- Checked compatibility record for the deterministic fake MCP server fixture.
+- Real stdio MCP server smoke-test template in
+  `docs/mcp-real-server-test-template.md` for optional maintainer-run
+  validation and matrix updates.
+- Validation tests that keep the compatibility matrix, checked JSON client
+  examples, and example MCP proxy TOML policies parseable and referenced.
+
+### Notes
+
+- No new enforcement semantics. The MCP proxy remains stdio-only,
+  experimental/pre-alpha, exact tool-name matching only, and does not add
+  daemon mode, HTTP/SSE transport, network interception, shell hooks,
+  terminal-command scanning, wildcard/prefix/regex matching, or Tirith
+  terminal-security duplication.
+
 ## [0.2.3] - 2026-07-09
 
 ### Changed

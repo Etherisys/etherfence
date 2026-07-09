@@ -113,3 +113,7 @@ ETHERFENCE_REAL_MCP_CMD='["/absolute/path/to/server","--arg","value"]' \
 ```
 
 Using a JSON array avoids shell parsing inside the test harness. Do not include shell metacharacters expecting them to be interpreted; pass each argument as its own JSON string.
+
+## Compatibility matrix
+
+Use `docs/mcp-compatibility-matrix.md` to record tested server/version/platform combinations. Use `docs/mcp-real-server-test-template.md` when collecting optional real-server evidence. Matrix entries must keep exact tool names and must not imply HTTP/SSE, daemon, shell-hook, network-interception, wildcard, prefix, or regex support.

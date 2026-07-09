@@ -1,4 +1,4 @@
-# EtherFence v0.2.2 Release Checklist
+# EtherFence v0.2.4 Release Checklist
 
 Status: pre-alpha. Scan commands are scan-only; v0.2.x additionally ships the
 experimental `etherfence mcp-proxy` stdio boundary proxy prototype. This
@@ -38,9 +38,9 @@ On Linux:
 
 ```sh
 cargo build --release -p etherfence-cli
-mkdir -p dist/etherfence-v0.2.2-linux-x86_64
-cp target/release/etherfence dist/etherfence-v0.2.2-linux-x86_64/
-tar -C dist -czf dist/etherfence-linux-x86_64.tar.gz etherfence-v0.2.2-linux-x86_64
+mkdir -p dist/etherfence-v0.2.4-linux-x86_64
+cp target/release/etherfence dist/etherfence-v0.2.4-linux-x86_64/
+tar -C dist -czf dist/etherfence-linux-x86_64.tar.gz etherfence-v0.2.4-linux-x86_64
 ```
 
 Smoke check:
@@ -58,9 +58,9 @@ On Windows PowerShell:
 
 ```powershell
 cargo build --release -p etherfence-cli
-New-Item -ItemType Directory -Force -Path dist/etherfence-v0.2.2-windows-x86_64 | Out-Null
-Copy-Item target/release/etherfence.exe dist/etherfence-v0.2.2-windows-x86_64/
-Compress-Archive -Path dist/etherfence-v0.2.2-windows-x86_64 -DestinationPath dist/etherfence-windows-x86_64.zip -Force
+New-Item -ItemType Directory -Force -Path dist/etherfence-v0.2.4-windows-x86_64 | Out-Null
+Copy-Item target/release/etherfence.exe dist/etherfence-v0.2.4-windows-x86_64/
+Compress-Archive -Path dist/etherfence-v0.2.4-windows-x86_64 -DestinationPath dist/etherfence-windows-x86_64.zip -Force
 ```
 
 Smoke check:
@@ -69,6 +69,16 @@ Smoke check:
 .\target\release\etherfence.exe scan --root tests\fixtures\windows-home
 .\target\release\etherfence.exe scan --root tests\fixtures\windows-home --policy-profile ci-runner --format json
 ```
+
+
+## MCP compatibility matrix checks
+
+For v0.2.4 and later, confirm:
+
+- `docs/mcp-compatibility-matrix.md` exists and includes the fake MCP server row.
+- `docs/mcp-real-server-test-template.md` documents `ETHERFENCE_REAL_MCP_CMD` as JSON argv.
+- Compatibility records do not claim daemon mode, HTTP/SSE transport, network interception, shell hooks, terminal-command scanning, wildcard/prefix/regex matching, or new enforcement semantics.
+- Checked JSON client examples and example MCP proxy TOML policies are covered by tests.
 
 ## GitHub Actions
 
@@ -115,17 +125,17 @@ smoke-tested:
 ```sh
 git checkout main
 git pull origin main
-git tag -a v0.2.2 -m "EtherFence v0.2.2: MCP stdio compatibility tests and client examples"
-git push origin v0.2.2
+git tag -a v0.2.4 -m "EtherFence v0.2.4: MCP compatibility matrix workflow"
+git push origin v0.2.4
 ```
 
 Then create the GitHub release from the tag and attach the CI-built
 `etherfence-linux-x86_64.tar.gz` and `etherfence-windows-x86_64.zip`:
 
 ```sh
-gh release create v0.2.2 \
-  --title "EtherFence v0.2.2" \
-  --notes-file <(sed -n '/^## \[0.2.2\]/,/^## /p' CHANGELOG.md | sed '$d') \
+gh release create v0.2.4 \
+  --title "EtherFence v0.2.4" \
+  --notes-file <(sed -n '/^## \[0.2.4\]/,/^## /p' CHANGELOG.md | sed '$d') \
   dist-ci/etherfence-linux-x86_64/etherfence-linux-x86_64.tar.gz \
   dist-ci/etherfence-windows-x86_64/etherfence-windows-x86_64.zip
 ```

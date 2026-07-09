@@ -129,6 +129,19 @@
 - Scan behavior and v0.2.0/v0.2.1 MCP policy compatibility remain backward
   compatible; proxy remains stdio-only and experimental
 
+## v0.2.3 - AGPL-3.0-only license metadata
+
+- Project license metadata and root license text updated to AGPL-3.0-only
+- No runtime behavior changes
+
+## v0.2.4 - MCP compatibility matrix workflow
+
+- `docs/mcp-compatibility-matrix.md` records compatibility evidence fields for MCP stdio server checks
+- Checked fake MCP server compatibility row documents deterministic CI-backed behavior
+- `docs/mcp-real-server-test-template.md` documents optional maintainer-run real-server smoke tests using `ETHERFENCE_REAL_MCP_CMD` as JSON argv
+- Validation tests keep matrix docs, JSON client examples, and example MCP proxy policies checked
+- No new enforcement semantics; the proxy remains stdio-only, exact-name-only, and experimental
+
 ## v0.2.x ideas
 
 - Expand tested config schemas and platform paths
