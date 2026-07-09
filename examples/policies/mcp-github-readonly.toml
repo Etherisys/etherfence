@@ -1,0 +1,37 @@
+# Example EtherFence MCP proxy policy for a GitHub MCP server.
+# Template only: GitHub MCP tool names vary by server/version. Keep exact names.
+schema_version = "ef-mcp-policy/v0.1"
+name = "mcp-github-readonly"
+
+# Global deny wins over every allow list. Keep write/admin tools here when known.
+[tools]
+allow = []
+deny = [
+  "github.create_issue",
+  "github.update_issue",
+  "github.create_pull_request",
+  "github.merge_pull_request",
+  "github.create_or_update_file",
+  "github.delete_file",
+]
+
+# Server-scoped allow list for:
+#   etherfence mcp-proxy --server-name github -- <github-mcp-server-command>
+[servers.github.tools]
+allow = [
+  "github.list_repos",
+  "github.get_repo",
+  "github.get_file_contents",
+  "github.list_issues",
+  "github.get_issue",
+  "github.list_pull_requests",
+  "github.get_pull_request",
+]
+deny = [
+  "github.create_issue",
+  "github.update_issue",
+  "github.create_pull_request",
+  "github.merge_pull_request",
+  "github.create_or_update_file",
+  "github.delete_file",
+]

@@ -1,0 +1,21 @@
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "/usr/local/bin/etherfence",
+      "args": [
+        "mcp-proxy",
+        "--policy",
+        "/home/example/.config/etherfence/mcp-filesystem-readonly.toml",
+        "--server-name",
+        "filesystem",
+        "--audit-log",
+        "/home/example/.local/state/etherfence/claude-filesystem-audit.jsonl",
+        "--",
+        "/usr/bin/npx",
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "/home/example/projects"
+      ]
+    }
+  }
+}

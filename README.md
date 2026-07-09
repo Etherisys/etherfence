@@ -32,7 +32,7 @@ Initial inventory targets:
 
 The parser intentionally uses conservative path discovery and fixture-backed config parsing. Missing files are skipped gracefully, malformed JSON/TOML config files are reported instead of aborting the scan, and unknown extra config fields are ignored. Fixture coverage exercises common shapes (minimal configs, multiple MCP servers, no MCP servers, malformed files, Linux- and Windows-style paths), but EtherFence does not claim complete support for every agent config format or install location. Findings are posture hints, not proof of exploitability.
 
-## Experimental: MCP boundary proxy (v0.2.1)
+## Experimental: MCP boundary proxy (v0.2.2)
 
 `etherfence mcp-proxy` is an **experimental prototype** that starts the v0.2
 runtime-control line. It is a minimal MCP stdio boundary proxy that sits
@@ -48,7 +48,9 @@ etherfence mcp-proxy \
 ```
 
 Proxy policies use schema `ef-mcp-policy/v0.1` (see
-`examples/policies/mcp-minimal-boundary.toml`):
+`examples/policies/mcp-minimal-boundary.toml`,
+`examples/policies/mcp-filesystem-readonly.toml`, and
+`examples/policies/mcp-github-readonly.toml`):
 
 ```toml
 schema_version = "ef-mcp-policy/v0.1"
@@ -86,7 +88,8 @@ Behavior:
 
 The proxy is stdio-only, exact-match-only, and only covers `tools/call` plus
 `tools/list` advertisement filtering. It is not production-ready. See
-`docs/mcp-proxy.md` for details and limitations.
+`docs/mcp-proxy.md` for details and limitations, and `docs/mcp-clients.md`
+plus `docs/examples/*.json` for client configuration templates.
 
 
 ## Linux and Windows usage
@@ -317,18 +320,18 @@ Linux:
 
 ```sh
 cargo build --release -p etherfence-cli
-mkdir -p dist/etherfence-v0.2.1-linux-x86_64
-cp target/release/etherfence dist/etherfence-v0.2.1-linux-x86_64/
-tar -C dist -czf dist/etherfence-linux-x86_64.tar.gz etherfence-v0.2.1-linux-x86_64
+mkdir -p dist/etherfence-v0.2.2-linux-x86_64
+cp target/release/etherfence dist/etherfence-v0.2.2-linux-x86_64/
+tar -C dist -czf dist/etherfence-linux-x86_64.tar.gz etherfence-v0.2.2-linux-x86_64
 ```
 
 Windows PowerShell:
 
 ```powershell
 cargo build --release -p etherfence-cli
-New-Item -ItemType Directory -Force -Path dist/etherfence-v0.2.1-windows-x86_64 | Out-Null
-Copy-Item target/release/etherfence.exe dist/etherfence-v0.2.1-windows-x86_64/
-Compress-Archive -Path dist/etherfence-v0.2.1-windows-x86_64 -DestinationPath dist/etherfence-windows-x86_64.zip -Force
+New-Item -ItemType Directory -Force -Path dist/etherfence-v0.2.2-windows-x86_64 | Out-Null
+Copy-Item target/release/etherfence.exe dist/etherfence-v0.2.2-windows-x86_64/
+Compress-Archive -Path dist/etherfence-v0.2.2-windows-x86_64 -DestinationPath dist/etherfence-windows-x86_64.zip -Force
 ```
 
 GitHub Actions builds and uploads matching Linux `tar.gz` and Windows `zip` artifacts for CI runs.
