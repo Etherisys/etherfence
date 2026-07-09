@@ -89,3 +89,55 @@ component. Its trust boundary assumptions:
   audit rotation or durable fsync beyond the per-write flush, and a child that
   ignores a closed stdin while keeping its stdout open will keep the server
   pump alive until the proxy is killed (matching normal stdio MCP behavior).
+
+## Path handling and Semgrep path-traversal triage
+
+Static analysis (Semgrep) flags file-path handling across EtherFence as a
+generic path-traversal pattern (a path string reaching an `fs::` read call).
+This section records how those findings were triaged and what changed.
+
+**Current CLI path model: trusted local operator.** EtherFence today is a
+local CLI. Every path it reads — `scan --policy`, `--baseline`,
+`--write-baseline`, `mcp-proxy --policy`, `--audit-log`, and the fixed set of
+per-agent config file locations under a scanned root — is either an explicit
+flag value chosen by the person invoking the CLI, or a filename EtherFence
+itself appends to a scanned root the operator selected. There is no remote
+caller and no untrusted input reaching these paths, so the security boundary
+is "the operator chose this path," not filesystem containment. Consistent
+with that, EtherFence does not restrict these CLI paths to a base directory
+and does not reject `..` in them — doing so would break documented,
+intentional CLI behavior (for example, running `etherfence scan --policy
+../shared/team-policy.toml` from a subdirectory).
+
+**What changed as a result of the Semgrep triage:**
+
+- **Policy path prefix/traversal fix.** `crates/etherfence-policy` previously
+  compared `allowed_path_prefixes` against filesystem-capable MCP server
+  paths using a plain string-prefix check, so a discovered path like
+  `/path/to/project/../secrets` would satisfy a naive `starts_with` check
+  against the prefix `/path/to/project` even though it lexically resolves
+  outside it. Path comparisons (`allowed_path_prefixes` containment and
+  `denied_paths` equality) now go through a lexical normalizer that collapses
+  `.` and `..` components (without touching the filesystem or requiring the
+  path to exist) before comparing, and treat `/`- and `\`-separated paths the
+  same way. See `docs/policy.md` for details and examples.
+- **Broader filesystem-path detection.** `looks_like_path()` now also
+  recognizes relative (`.`, `..`, `./x`, `../x`), home-relative (`~/x`),
+  and environment-variable-style (`$HOME/x`, `${HOME}/x`, `%USERPROFILE%\x`)
+  filesystem grants, plus common broad Unix directories (`/etc`, `/var`,
+  `/tmp`) and any Windows drive path (`C:\`, `D:\data`), so these are
+  evaluated against policy instead of silently skipped.
+- **Bounded reads.** Policy, MCP proxy policy, and scanned agent config
+  files are read through a shared `read_bounded_text_file` helper
+  (`crates/etherfence-core`) that rejects files over 5 MiB before reading
+  them fully into memory; baseline files use the same helper with a 25 MiB
+  ceiling. This bounds worst-case memory/time on an oversized or corrupted
+  file; it is a resource-exhaustion guard, not an access-control boundary.
+
+**Future API rule.** EtherFence has no network-facing API today. If one is
+ever added, it must never pass an untrusted path string directly to an
+`fs::` operation. Any path originating from a remote caller, a UI, or an
+MCP-exposed tool must be resolved against and constrained under an explicit
+base directory, with traversal (`..` escaping that base) rejected, before
+any filesystem access — the trusted-operator model above applies only to
+today's local CLI surface.

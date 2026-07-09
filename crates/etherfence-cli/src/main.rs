@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use etherfence_core::{
-    BaselineComparison, BaselineFile, BaselineStatus, Finding, PolicyMetadata, ScanReport,
-    Severity, Summary,
+    read_bounded_text_file, BaselineComparison, BaselineFile, BaselineStatus, Finding,
+    PolicyMetadata, ScanReport, Severity, Summary, MAX_BASELINE_FILE_BYTES,
 };
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -457,8 +457,11 @@ fn apply_baseline(
     }
 }
 
+// `path` here is an explicit, trusted-operator CLI input (`--baseline`);
+// see the doc comment on `read_bounded_text_file` for the CLI-vs-future-API
+// path trust model this crate follows.
 fn read_baseline(path: &Path) -> Result<BaselineFile> {
-    let content = fs::read_to_string(path)
+    let content = read_bounded_text_file(path, MAX_BASELINE_FILE_BYTES)
         .with_context(|| format!("reading baseline file {}", path.display()))?;
     serde_json::from_str(&content)
         .with_context(|| format!("parsing baseline file {}", path.display()))

@@ -16,7 +16,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: release-${{ github.event.inputs.version }}
+  group: release-${{ inputs.version }}
   cancel-in-progress: false
 
 jobs:
@@ -44,9 +44,15 @@ jobs:
 
       - name: validate version input is semver-like
         id: version
+        # The raw workflow_dispatch input is untrusted, attacker-influenced
+        # text until it passes the semver check below. Pass it through env
+        # rather than interpolating github.event.inputs.version directly
+        # into the script, so it is never substituted into shell source.
+        env:
+          VERSION_INPUT: ${{ github.event.inputs.version }}
         run: |
           set -euo pipefail
-          version="${{ github.event.inputs.version }}"
+          version="$VERSION_INPUT"
           if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
             echo "::error::version input '$version' is not semver-like (expected X.Y.Z)."
             exit 1
