@@ -46,6 +46,20 @@ impl AuditRecord {
         }
     }
 
+    pub fn batch_denied(policy_name: &str, reason: &str) -> Self {
+        AuditRecord {
+            ts: rfc3339_utc_now(),
+            event: "batch_denied".to_string(),
+            policy: Some(policy_name.to_string()),
+            method: None,
+            request_id: None,
+            tool: None,
+            argument_keys: Vec::new(),
+            decision: Decision::Deny.as_str().to_string(),
+            reason: reason.to_string(),
+        }
+    }
+
     pub fn policy_error(reason: &str) -> Self {
         AuditRecord {
             ts: rfc3339_utc_now(),

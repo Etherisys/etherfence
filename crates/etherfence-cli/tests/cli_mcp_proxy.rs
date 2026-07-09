@@ -176,6 +176,44 @@ fn proxy_audit_log_records_decisions_without_secret_values() {
 }
 
 #[test]
+fn proxy_denies_json_rpc_batches_without_forwarding() {
+    let policy = write_temp_policy("batch", TEST_POLICY);
+    let run = run_proxy_with_input(
+        "batch",
+        &policy,
+        &[
+            r#"[{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"github.list_repos","arguments":{}}}]"#,
+        ],
+    );
+    assert!(
+        run.output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&run.output.stderr)
+    );
+
+    // The whole batch is answered with a single null-id JSON-RPC error.
+    let lines = stdout_json_lines(&run.output);
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["id"], Value::Null);
+    assert_eq!(lines[0]["error"]["code"], -32000);
+
+    // The batch never reached the server, even though every call inside it
+    // names an allow-listed tool.
+    let received = std::fs::read_to_string(&run.server_log).unwrap_or_default();
+    assert!(!received.contains("github.list_repos"));
+
+    let audit = std::fs::read_to_string(&run.audit_log).expect("audit log");
+    let record: Value =
+        serde_json::from_str(audit.lines().next().expect("one audit record")).expect("audit JSON");
+    assert_eq!(record["event"], "batch_denied");
+    assert_eq!(record["decision"], "deny");
+
+    let _ = std::fs::remove_file(&policy);
+    let _ = std::fs::remove_file(&run.server_log);
+    let _ = std::fs::remove_file(&run.audit_log);
+}
+
+#[test]
 fn proxy_fails_closed_on_invalid_policy_without_starting_server() {
     let policy = write_temp_policy(
         "invalid",

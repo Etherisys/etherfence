@@ -32,11 +32,17 @@ terminal-command scanning, or network interception.
   (code `-32000`) and are never forwarded to the server; denied
   notifications are dropped and audited. Tool calls with a missing or
   non-string tool name are denied (fail closed).
+- JSON-RPC batch arrays from the client are denied fail closed instead of
+  being unpacked: the proxy answers with a single null-id JSON-RPC error,
+  audits a `batch_denied` event, and never forwards the batch, so a batch
+  cannot smuggle a denied tool call past per-message inspection.
 - JSONL audit logging via `--audit-log <file>`: each tool-call decision
   records an RFC 3339 UTC timestamp, policy name, method, request id, tool
   name, decision (`allow`/`deny`/`policy_error`), policy reason, and the
   sorted tool-call argument key names. Argument values are never logged, so
-  secret values do not leak into the audit log.
+  secret values do not leak into the audit log. Audit failures are fail
+  closed: an unopenable audit log stops the proxy before the server starts,
+  and a failed audit write stops forwarding.
 - Tests: unit tests for policy parsing/matching and allow/deny decisions,
   audit redaction tests, and CLI integration tests against a fake stdio MCP
   server fixture proving allowed calls are forwarded, denied calls are not,
@@ -59,6 +65,7 @@ terminal-command scanning, or network interception.
 - Only `tools/call` requests are inspected; tool results, resources,
   prompts, and `tools/list` responses pass through unmodified, so denied
   tools may still appear in tool listings.
+- JSON-RPC batch arrays are denied fail closed rather than unpacked.
 - No daemon mode, shell hooks, command interception, terminal-command
   scanning, or network interception; Tirith remains complementary
   terminal-command protection.

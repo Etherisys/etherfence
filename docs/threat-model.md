@@ -45,6 +45,12 @@ component. Its trust boundary assumptions:
   server is never started.
 - The audit log records decisions and argument key names only; argument
   values are excluded so secrets do not leak into the log.
+- JSON-RPC batch arrays from the client are denied fail closed rather than
+  unpacked, so a batch cannot smuggle a denied tool call past per-message
+  inspection.
+- Audit failures are fail closed: an unopenable audit log stops the proxy
+  before the server starts, and a failed audit write stops forwarding.
 - The proxy is a prototype and has not had a full adversarial review of MCP
-  framing edge cases (for example batched JSON-RPC arrays or multi-line
-  framing variants). It must not be treated as a security guarantee.
+  framing edge cases (for example multi-line or non-standard framing
+  variants, or servers whose JSON parsers resolve duplicate keys differently
+  from the proxy). It must not be treated as a security guarantee.

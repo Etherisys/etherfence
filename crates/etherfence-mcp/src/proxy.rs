@@ -32,7 +32,9 @@ pub struct InspectedLine {
 /// Only `tools/call` requests are policy-checked. Every other message —
 /// including non-JSON lines the server will reject itself — is forwarded
 /// unchanged to preserve protocol behavior. Tool calls without a usable
-/// string tool name are denied (fail closed).
+/// string tool name are denied (fail closed). JSON-RPC batch arrays are
+/// not unpacked: they are denied wholesale (fail closed), because a batch
+/// could smuggle a denied `tools/call` past per-message inspection.
 pub fn inspect_client_line(policy: &McpPolicyFile, line: &str) -> InspectedLine {
     let Ok(message) = serde_json::from_str::<Value>(line) else {
         return InspectedLine {
@@ -40,6 +42,15 @@ pub fn inspect_client_line(policy: &McpPolicyFile, line: &str) -> InspectedLine 
             audit: None,
         };
     };
+    if message.is_array() {
+        let reason = "fail closed: JSON-RPC batch arrays are not inspected by this proxy";
+        return InspectedLine {
+            action: ClientAction::Deny {
+                response: Some(batch_denied_response(reason)),
+            },
+            audit: Some(AuditRecord::batch_denied(&policy.name, reason)),
+        };
+    }
     if message.get("method").and_then(Value::as_str) != Some(TOOL_CALL_METHOD) {
         return InspectedLine {
             action: ClientAction::Forward,
@@ -91,6 +102,23 @@ pub fn inspect_client_line(policy: &McpPolicyFile, line: &str) -> InspectedLine 
             }
         }
     }
+}
+
+/// JSON-RPC replies to a rejected batch with a single response object whose
+/// id is null, so the client gets an explicit error instead of a hang.
+fn batch_denied_response(reason: &str) -> String {
+    json!({
+        "jsonrpc": "2.0",
+        "id": Value::Null,
+        "error": {
+            "code": DENIED_ERROR_CODE,
+            "message": "EtherFence MCP proxy denied this JSON-RPC batch by policy",
+            "data": {
+                "reason": reason,
+            },
+        },
+    })
+    .to_string()
 }
 
 fn denied_error_response(request_id: &Value, tool_name: &str, reason: &str) -> String {
@@ -285,6 +313,31 @@ deny = ["filesystem.read_secret", "shell.run"]
         let audit = inspected.audit.expect("audit record");
         assert_eq!(audit.decision, "deny");
         assert!(audit.reason.contains("fail closed"));
+    }
+
+    #[test]
+    fn json_rpc_batch_arrays_are_denied_fail_closed() {
+        let inspected = inspect_client_line(
+            &policy(),
+            r#"[{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"filesystem.read"}}]"#,
+        );
+        let ClientAction::Deny { response } = inspected.action else {
+            panic!("expected deny");
+        };
+        let json: Value = serde_json::from_str(&response.expect("batch error response")).unwrap();
+        assert_eq!(json["id"], Value::Null);
+        assert_eq!(json["error"]["code"], DENIED_ERROR_CODE);
+        let audit = inspected.audit.expect("audit record");
+        assert_eq!(audit.event, "batch_denied");
+        assert_eq!(audit.decision, "deny");
+        assert!(audit.reason.contains("fail closed"));
+    }
+
+    #[test]
+    fn empty_json_array_is_denied_fail_closed() {
+        let inspected = inspect_client_line(&policy(), "[]");
+        assert!(matches!(inspected.action, ClientAction::Deny { .. }));
+        assert_eq!(inspected.audit.expect("audit record").event, "batch_denied");
     }
 
     #[test]

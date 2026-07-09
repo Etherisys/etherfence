@@ -111,7 +111,7 @@ audited.
 Fields:
 
 - `ts`: RFC 3339 UTC timestamp
-- `event`: `tool_call_decision` or `policy_load_error`
+- `event`: `tool_call_decision`, `batch_denied`, or `policy_load_error`
 - `policy`: policy `name` (absent for policy load errors)
 - `method`: JSON-RPC method (`tools/call`)
 - `request_id`: JSON-RPC request id when present
@@ -123,6 +123,11 @@ Fields:
 Argument values are never written to the audit log, so secret values passed
 as tool arguments do not leak into it. Only argument key names are recorded.
 
+Audit failures are fail closed: if the audit log file cannot be opened at
+startup, the proxy exits before starting the MCP server; if writing an audit
+record fails while the proxy is running, the proxy stops forwarding and exits
+with an error instead of continuing unaudited.
+
 ## Limitations
 
 - stdio transport only; HTTP/SSE MCP transports are not supported.
@@ -131,6 +136,10 @@ as tool arguments do not leak into it. Only argument key names are recorded.
 - The proxy inspects `tools/call` requests. It does not inspect tool results,
   resources, prompts, or sampling traffic, and it does not rewrite
   `tools/list` responses, so denied tools may still be listed to the client.
+- JSON-RPC batch arrays are not unpacked. A batch line from the client is
+  denied fail closed — answered with a single null-id JSON-RPC error, audited
+  as `batch_denied`, and never forwarded — even if every call inside it names
+  an allow-listed tool.
 - Non-JSON input lines are forwarded unchanged for the server to reject,
   matching plain JSON-RPC behavior.
 - One client, one server, one process; no daemon mode, shell hooks, command
