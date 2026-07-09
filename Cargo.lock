@@ -163,6 +163,7 @@ name = "etherfence-mcp"
 version = "0.2.7"
 dependencies = [
  "anyhow",
+ "etherfence-core",
  "serde",
  "serde_json",
  "toml",

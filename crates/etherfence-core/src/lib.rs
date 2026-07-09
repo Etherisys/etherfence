@@ -1,5 +1,46 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
+use std::fs;
+use std::io;
+use std::path::Path;
+
+/// Maximum size accepted for policy, MCP proxy policy, and scanned agent
+/// config files (5 MiB). These are small structured text files; anything
+/// larger is almost certainly not a legitimate config and should not be
+/// read fully into memory.
+pub const MAX_CONFIG_FILE_BYTES: u64 = 5 * 1024 * 1024;
+
+/// Maximum size accepted for baseline files (25 MiB). Baselines accumulate
+/// findings over time so they are allowed to grow larger than config files.
+pub const MAX_BASELINE_FILE_BYTES: u64 = 25 * 1024 * 1024;
+
+/// Reads a UTF-8 text file, rejecting it up front if it exceeds `max_bytes`.
+///
+/// This only bounds the amount of data read; it does not sandbox or
+/// validate `path` in any way. In EtherFence's CLI, paths passed to this
+/// function (`--policy`, `--baseline`, `--write-baseline`, `mcp-proxy
+/// --policy`, `--audit-log`, and scanned agent config files) are explicit,
+/// trusted-operator inputs — the security boundary is "the person running
+/// the CLI chose this path," not path containment. Any future EtherFence
+/// surface that accepts a path string from an untrusted caller (an API,
+/// UI, or MCP-exposed tool) must additionally constrain that path under an
+/// explicit base directory and reject traversal before it ever reaches
+/// this helper.
+pub fn read_bounded_text_file(path: &Path, max_bytes: u64) -> io::Result<String> {
+    let metadata = fs::metadata(path)?;
+    if metadata.len() > max_bytes {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "file {} is {} bytes, exceeding the maximum allowed size of {} bytes",
+                path.display(),
+                metadata.len(),
+                max_bytes
+            ),
+        ));
+    }
+    fs::read_to_string(path)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]

@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
+use etherfence_core::{read_bounded_text_file, MAX_CONFIG_FILE_BYTES};
 use serde::Deserialize;
 use std::collections::BTreeMap;
-use std::fs;
 use std::path::Path;
 
 pub const SUPPORTED_MCP_POLICY_SCHEMA_VERSION: &str = "ef-mcp-policy/v0.1";
@@ -55,8 +55,11 @@ pub struct PolicyDecision {
     pub reason: String,
 }
 
+// `path` here is an explicit, trusted-operator CLI input (`mcp-proxy
+// --policy`); see the doc comment on `read_bounded_text_file` for the
+// CLI-vs-future-API path trust model this crate follows.
 pub fn load_mcp_policy(path: &Path) -> Result<McpPolicyFile> {
-    let content = fs::read_to_string(path)
+    let content = read_bounded_text_file(path, MAX_CONFIG_FILE_BYTES)
         .with_context(|| format!("reading MCP proxy policy file {}", path.display()))?;
     parse_mcp_policy(&content)
         .with_context(|| format!("parsing MCP proxy policy file {}", path.display()))

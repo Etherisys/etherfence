@@ -1,8 +1,10 @@
 use anyhow::{Context, Result};
-use etherfence_core::{AgentKind, EnvVar, InventoryItem, McpServer, PARSE_ERROR_EVIDENCE_PREFIX};
+use etherfence_core::{
+    read_bounded_text_file, AgentKind, EnvVar, InventoryItem, McpServer, MAX_CONFIG_FILE_BYTES,
+    PARSE_ERROR_EVIDENCE_PREFIX,
+};
 use serde_json::Value as JsonValue;
 use std::env;
-use std::fs;
 use std::path::{Path, PathBuf};
 use toml::Value as TomlValue;
 
@@ -226,9 +228,13 @@ fn append_tirith_binary(items: &mut Vec<InventoryItem>) {
     }
 }
 
+// `path` is derived from a known, fixed set of agent config file locations
+// under the scanned root (a trusted-operator-provided directory), not from
+// an untrusted caller; see the doc comment on `read_bounded_text_file` for
+// the CLI-vs-future-API path trust model this crate follows.
 fn parse_candidate(root: &Path, path: &Path, candidate: Candidate) -> Result<InventoryItem> {
-    let content =
-        fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    let content = read_bounded_text_file(path, MAX_CONFIG_FILE_BYTES)
+        .with_context(|| format!("reading {}", path.display()))?;
     let mut item = InventoryItem {
         agent: candidate.agent,
         config_path: display_path(root, path),

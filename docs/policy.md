@@ -47,6 +47,8 @@ Agent names can use display names such as `Claude Code`, `Cursor`, `VS Code`, `W
 
 `[filesystem].denied_paths` lists explicitly denied broad paths. EtherFence also treats root and home-directory-wide grants such as `/`, `/home/user`, and `/Users/example` as broad grants.
 
+Prefix and denied-path matching apply lexical path normalization before comparing: `.` segments are dropped and `..` segments are resolved against the path they appear in (a rooted path cannot be walked above its root). This means a discovered path such as `/path/to/project/../secrets` normalizes to `/path/to/secrets` and is correctly evaluated against `allowed_path_prefixes = ["/path/to/project"]` as *not* a child of the project prefix, rather than matching on the raw, unnormalized string. Both `/`-separated and `\`-separated (Windows) paths are handled the same way. This normalization is purely lexical (string-level) — it does not touch the filesystem, does not resolve symlinks, and does not require the path to exist, keeping policy evaluation deterministic and scan-only.
+
 Filesystem policy violations emit `EF-POL-002`.
 
 ### Environment rules

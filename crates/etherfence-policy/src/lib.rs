@@ -1,12 +1,11 @@
 use anyhow::{Context, Result};
 use etherfence_core::{
-    AgentKind, BaselineStatus, Finding, FindingKind, InventoryItem, McpServer, PolicyStatus,
-    Severity,
+    read_bounded_text_file, AgentKind, BaselineStatus, Finding, FindingKind, InventoryItem,
+    McpServer, PolicyStatus, Severity, MAX_CONFIG_FILE_BYTES,
 };
 use regex::Regex;
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
-use std::fs;
 use std::path::Path;
 
 pub const SUPPORTED_POLICY_SCHEMA_VERSION: &str = "ef-policy/v0.1";
@@ -67,8 +66,11 @@ struct CompiledPolicy {
     allowed_env_name_patterns: Vec<Regex>,
 }
 
+// `path` here is an explicit, trusted-operator CLI input (`--policy`); see
+// the doc comment on `read_bounded_text_file` for the CLI-vs-future-API
+// path trust model this crate follows.
 pub fn load_policy(path: &Path) -> Result<PolicyFile> {
-    let content = fs::read_to_string(path)
+    let content = read_bounded_text_file(path, MAX_CONFIG_FILE_BYTES)
         .with_context(|| format!("reading policy file {}", path.display()))?;
     parse_policy(&content).with_context(|| format!("parsing policy file {}", path.display()))
 }
@@ -417,11 +419,35 @@ fn server_values(server: &McpServer) -> Vec<String> {
 
 fn looks_like_path(value: &str) -> bool {
     let value = value.trim();
-    value == "/"
+    if value.is_empty() {
+        return false;
+    }
+    if value == "." || value == ".." || value.starts_with("./") || value.starts_with("../") {
+        return true;
+    }
+    if value == "~" || value.starts_with("~/") {
+        return true;
+    }
+    if value == "$HOME" || value.starts_with("$HOME/") || value.starts_with("$HOME\\") {
+        return true;
+    }
+    if value == "${HOME}" || value.starts_with("${HOME}/") || value.starts_with("${HOME}\\") {
+        return true;
+    }
+    if value.to_ascii_uppercase().starts_with("%USERPROFILE%") {
+        return true;
+    }
+    if value == "/"
         || value.starts_with("/home/")
         || value.starts_with("/Users/")
         || value.starts_with("/path/")
-        || windows_user_path(value)
+        || value.starts_with("/etc")
+        || value.starts_with("/var")
+        || value.starts_with("/tmp")
+    {
+        return true;
+    }
+    windows_drive_path(value)
 }
 
 fn is_broad_filesystem_path(path: &str) -> bool {
@@ -442,11 +468,14 @@ fn home_wide_grant(path: &str) -> bool {
     matches!(parts.as_slice(), ["home", _] | ["Users", _])
 }
 
-fn windows_user_path(path: &str) -> bool {
-    let normalized = normalized_path(path);
-    normalized.len() >= 10
-        && normalized.as_bytes().get(1) == Some(&b':')
-        && normalized[2..].starts_with("/Users/")
+/// True for any Windows drive-letter path such as `C:\`, `C:/Users/...`, or
+/// `D:\data` (checked on the raw, not-yet-normalized value).
+fn windows_drive_path(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && (bytes[2] == b'\\' || bytes[2] == b'/')
 }
 
 fn windows_home_wide_grant(path: &str) -> bool {
@@ -455,21 +484,85 @@ fn windows_home_wide_grant(path: &str) -> bool {
     matches!(parts.as_slice(), [drive, "Users", _] if drive.ends_with(':'))
 }
 
+/// A path decomposed into an optional root (`/` for POSIX-absolute, `C:`
+/// for a Windows drive-absolute path, or `None` for a relative path) and a
+/// list of lexically resolved components with `.` and `..` collapsed.
+///
+/// This is purely a string-level (lexical) normalization for deterministic,
+/// scan-only policy evaluation: it never touches the filesystem and does
+/// not require the path to exist. `..` is resolved the same way common
+/// path-cleaning implementations do it: it pops the previous component
+/// when there is one to pop, is dropped when it would go above a rooted
+/// path's root (you cannot lexically go above `/` or `C:`), and is kept
+/// as a leading component for relative paths (there is nothing to pop).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LexicalPath {
+    root: Option<String>,
+    components: Vec<String>,
+}
+
+impl LexicalPath {
+    fn parse(path: &str) -> Self {
+        let slashed = path.trim().replace('\\', "/");
+        let (root, rest) = split_root(&slashed);
+        let rooted = root.is_some();
+        let mut components: Vec<String> = Vec::new();
+        for part in rest.split('/') {
+            match part {
+                "" | "." => continue,
+                ".." => {
+                    if matches!(components.last(), Some(last) if last != "..") {
+                        components.pop();
+                    } else if !rooted {
+                        components.push("..".to_string());
+                    }
+                    // rooted with nothing left to pop: dropped, since a
+                    // rooted path cannot lexically go above its root.
+                }
+                other => components.push(other.to_string()),
+            }
+        }
+        LexicalPath { root, components }
+    }
+
+    fn to_canonical_string(&self) -> String {
+        match &self.root {
+            Some(root) if root == "/" => format!("/{}", self.components.join("/")),
+            Some(drive) => format!("{drive}/{}", self.components.join("/")),
+            None if self.components.is_empty() => ".".to_string(),
+            None => self.components.join("/"),
+        }
+    }
+
+    fn has_prefix(&self, prefix: &LexicalPath) -> bool {
+        self.root == prefix.root
+            && self.components.len() >= prefix.components.len()
+            && self.components[..prefix.components.len()] == prefix.components[..]
+    }
+}
+
+/// Splits a `/`-normalized path into (root, remainder). Handles POSIX
+/// absolute paths (`/...`) and Windows drive-absolute paths (`C:...`);
+/// anything else is treated as relative (`root = None`).
+fn split_root(path: &str) -> (Option<String>, &str) {
+    if let Some(rest) = path.strip_prefix('/') {
+        return (Some("/".to_string()), rest);
+    }
+    let bytes = path.as_bytes();
+    if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
+        let drive = path[..1].to_ascii_uppercase();
+        let rest = path[2..].strip_prefix('/').unwrap_or(&path[2..]);
+        return (Some(format!("{drive}:")), rest);
+    }
+    (None, path)
+}
+
 fn path_has_prefix(path: &str, prefix: &str) -> bool {
-    let path = normalized_path(path);
-    let prefix = normalized_path(prefix);
-    path == prefix || path.starts_with(&format!("{prefix}/"))
+    LexicalPath::parse(path).has_prefix(&LexicalPath::parse(prefix))
 }
 
 fn normalized_path(path: &str) -> String {
-    let path = path.trim().trim_end_matches('/');
-    if path.is_empty() {
-        "/".to_string()
-    } else if path == "/" {
-        path.to_string()
-    } else {
-        path.replace('\\', "/")
-    }
+    LexicalPath::parse(path).to_canonical_string()
 }
 
 fn same_name(left: &str, right: &str) -> bool {
@@ -640,5 +733,97 @@ name = "future-policy"
             .findings
             .iter()
             .any(|finding| finding.id == "EF-POL-004"));
+    }
+
+    #[test]
+    fn path_prefix_rejects_unix_traversal_outside_project() {
+        assert!(!path_has_prefix(
+            "/path/to/project/../secrets",
+            "/path/to/project"
+        ));
+        assert!(!path_has_prefix(
+            "/path/to/project/../../etc",
+            "/path/to/project"
+        ));
+    }
+
+    #[test]
+    fn path_prefix_rejects_windows_traversal_outside_project() {
+        assert!(!path_has_prefix(
+            r"C:\Users\example\project\..\secrets",
+            r"C:\Users\example\project"
+        ));
+    }
+
+    #[test]
+    fn path_prefix_allows_legitimate_children() {
+        assert!(path_has_prefix("/path/to/project/src", "/path/to/project"));
+        assert!(path_has_prefix(
+            r"C:\Users\example\project\src",
+            r"C:\Users\example\project"
+        ));
+    }
+
+    #[test]
+    fn traversal_bypass_is_denied_end_to_end_by_policy_evaluation() {
+        let policy = strict_policy();
+        let inventory = vec![InventoryItem {
+            agent: AgentKind::ClaudeCode,
+            config_path: "~/.claude.json".to_string(),
+            mcp_servers: vec![McpServer {
+                name: "filesystem".to_string(),
+                command: Some("npx".to_string()),
+                args: vec![
+                    "@modelcontextprotocol/server-filesystem".to_string(),
+                    "/path/to/project/../secrets".to_string(),
+                ],
+                env: Vec::new(),
+                url: None,
+            }],
+            evidence: Vec::new(),
+        }];
+        let result = evaluate_policy(&policy, &inventory).expect("evaluate policy");
+        assert!(result
+            .findings
+            .iter()
+            .any(|finding| finding.id == "EF-POL-002"));
+    }
+
+    #[test]
+    fn looks_like_path_recognizes_broad_relative_home_and_env_paths() {
+        for value in [
+            ".",
+            "..",
+            "./x",
+            "../x",
+            "~/x",
+            "$HOME/x",
+            "${HOME}/x",
+            "%USERPROFILE%\\x",
+            "/etc",
+            "/var",
+            "/tmp",
+            r"C:\",
+            r"D:\data",
+        ] {
+            assert!(
+                looks_like_path(value),
+                "expected {value:?} to look like a path"
+            );
+        }
+    }
+
+    #[test]
+    fn normalized_path_collapses_dot_and_dot_dot_segments() {
+        assert_eq!(
+            normalized_path("/path/to/project/../secrets"),
+            "/path/to/secrets"
+        );
+        assert_eq!(normalized_path("/path/to/project/../../etc"), "/path/etc");
+        assert_eq!(normalized_path("/path/./to/project"), "/path/to/project");
+        assert_eq!(
+            normalized_path(r"C:\Users\example\project\..\secrets"),
+            "C:/Users/example/secrets"
+        );
     }
 }
