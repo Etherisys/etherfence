@@ -1,0 +1,20 @@
+# Example EtherFence MCP proxy policy: read-only proxy.
+# Allows tools/list, tools/call, resources/list, and resources/read.
+# Denies prompts, sampling, completion, and roots methods.
+# Tool names must still be explicitly allowed.
+schema_version = "ef-mcp-policy/v0.1"
+name = "mcp-readonly"
+
+[methods]
+allow = ["tools/list", "tools/call", "resources/list", "resources/read"]
+deny = [
+  "prompts/list",
+  "prompts/get",
+  "sampling/createMessage",
+  "completion/complete",
+  "roots/list",
+]
+
+[tools]
+allow = ["filesystem.read", "filesystem.list", "filesystem.stat"]
+deny = ["filesystem.write", "filesystem.delete", "shell.run"]

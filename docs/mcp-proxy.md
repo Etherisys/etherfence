@@ -1,10 +1,11 @@
 # MCP Boundary Proxy (experimental)
 
-`etherfence mcp-proxy` is the first prototype in the EtherFence v0.2.x
-runtime-control line. It is a minimal MCP **stdio** boundary proxy that sits
-between an MCP client and an MCP server, audits MCP tool calls, filters tool
-advertisements, and allows/denies tool calls deterministically using a small
-TOML policy.
+`etherfence mcp-proxy` is the first prototype in the EtherFence v0.2.x/
+v0.3.x runtime-control line. It is a minimal MCP **stdio** boundary proxy
+that sits between an MCP client and an MCP server, inspects every
+client→server JSON-RPC method, enforces method-level and tool-level
+allow/deny policy, filters tool advertisements, and audits decisions
+deterministically using a small TOML policy.
 
 Status: **experimental prototype**. It is not production-ready, it is not a
 daemon or endpoint agent, and it does not replace the v0.1.x scan-only
@@ -31,12 +32,16 @@ The proxy:
    deadlock the proxy's own pipes.
 3. Forwards newline-delimited JSON-RPC messages between the client (the
    proxy's own stdin/stdout) and the server.
-4. Inspects `tools/call` requests before forwarding. Allowed calls are
-   forwarded unchanged; denied calls are answered with a safe JSON-RPC error
-   and are **not** forwarded to the server.
+4. Inspects every client→server JSON-RPC request before forwarding. The
+   method-level policy is checked first (v0.3.0). Denied methods are never
+   forwarded and receive a JSON-RPC error. `tools/call` requests that pass
+   the method check are then checked against the tool-name policy: allowed
+   calls are forwarded unchanged; denied calls are answered with a safe
+   JSON-RPC error and are **not** forwarded to the server.
 5. Tracks client `tools/list` requests and filters the matching server
    responses so denied and default-denied tools are not advertised.
-6. Leaves unrelated protocol messages untouched.
+6. Leaves server→client messages untouched (no response inspection beyond
+   tracked `tools/list` filtering).
 
 Example, wrapping a filesystem MCP server:
 
@@ -88,8 +93,12 @@ Examples live at:
 - `examples/policies/mcp-minimal-boundary.toml`
 - `examples/policies/mcp-filesystem-readonly.toml`
 - `examples/policies/mcp-github-readonly.toml`
+- `examples/policies/mcp-strict-tools-only.toml` (v0.3.0)
+- `examples/policies/mcp-readonly.toml` (v0.3.0)
+- `examples/policies/mcp-resources-denied.toml` (v0.3.0)
+- `examples/policies/mcp-sampling-denied.toml` (v0.3.0)
 
-Decision rules, in exact order:
+Decision rules for tool names, in exact order:
 
 1. Tool name in global `[tools].deny` -> **deny**.
 2. Tool name in `[servers.<server-name>.tools].deny` -> **deny**.
@@ -97,8 +106,47 @@ Decision rules, in exact order:
 4. Tool name in global `[tools].allow` -> **allow**.
 5. Anything else -> **deny** (default deny).
 
-Deny therefore always overrides allow. Tool names are matched exactly. There
-are no globs, prefixes, or regular expressions in `ef-mcp-policy/v0.1`.
+### Method-level policy (v0.3.0)
+
+v0.3.0 adds optional `[methods]` and `[servers.<name>.methods]` sections
+that control which JSON-RPC methods the proxy forwards to the server:
+
+```toml
+schema_version = "ef-mcp-policy/v0.1"
+name = "mcp-readonly"
+
+[methods]
+allow = ["tools/list", "tools/call", "resources/list", "resources/read"]
+deny = ["sampling/createMessage", "prompts/get"]
+
+[tools]
+allow = ["filesystem.read"]
+```
+
+Method decision rules, in exact order:
+
+1. Method is `initialize`, `notifications/initialized`, or `ping` ->
+   **always allow** (protocol-required; bypasses all method policy).
+2. Method in global `[methods].deny` -> **deny**.
+3. Method in `[servers.<server-name>.methods].deny` -> **deny**.
+4. Method in `[servers.<server-name>.methods].allow` -> **allow**.
+5. Method in global `[methods].allow` -> **allow**.
+6. Global `[methods].allow` contains `"*"` -> **allow** (wildcard).
+7. No `[methods]` section at all (global and server) -> **built-in
+   default**: allow `tools/list` and `tools/call`, deny everything else.
+8. A `[methods]` section exists but the method is not listed -> **deny**
+   (default deny for unknown methods).
+
+When no `[methods]` section is present, the built-in default preserves
+v0.2.x behavior: only `tools/list` and `tools/call` are allowed. This
+means existing v0.2.x policies work unchanged.
+
+The `"*"` wildcard in the `allow` list explicitly opts in to permissive
+mode: all methods (including unknown ones) are allowed except those in
+the `deny` list. Use this with caution.
+
+Per-server method scoping follows the same precedence as tool rules:
+global deny, server deny, server allow, global allow, then default deny.
 
 Fail-closed cases:
 
@@ -216,14 +264,19 @@ Tool-list filtering example:
 Fields:
 
 - `ts`: RFC 3339 UTC timestamp
-- `event`: `tool_call_decision`, `tools_list_filtered`, `batch_denied`, or
-  `policy_load_error`
+- `event`: `tool_call_decision`, `method_decision`, `tools_list_filtered`,
+  `batch_denied`, or `policy_load_error`
 - `policy`: policy `name` (absent for policy load errors)
 - `server`: selected server name when applicable
-- `method`: JSON-RPC method (`tools/call` or `tools/list`)
+- `method`: JSON-RPC method (`tools/call`, `tools/list`, or the method
+  name for `method_decision` events)
 - `request_id`: JSON-RPC request id when present
+- `request_id_type`: JSON type of the request id (`number`, `string`,
+  `bool`, `object`, `array`, `null`, or `missing`) (v0.3.0)
 - `tool`: tool name for tool-call decisions when it could be extracted
 - `argument_keys`: sorted tool-call argument **key names only**
+- `param_keys`: sorted top-level `params` key names for method decisions
+  (v0.3.0)
 - `original_count`: original advertised tool count for `tools_list_filtered`
 - `filtered_count`: remaining advertised tool count for `tools_list_filtered`
 - `allowed_tools`: allowed tool names retained in a filtered `tools/list`
@@ -329,13 +382,17 @@ for local paths, server commands, and exact tool names.
 
 - stdio transport only; HTTP/SSE MCP transports are not supported.
 - Newline-delimited JSON-RPC framing only; each message must be one line.
-- Exact tool-name matching only; no wildcard, prefix, regex, argument-aware, or
+- Exact tool-name and method-name matching only; no wildcard (except the
+  `"*` method allow wildcard), prefix, regex, argument-aware, or
   schema-aware rules.
 - Per-server scoping is selected explicitly with `--server-name`; the proxy
   does not auto-discover or authenticate MCP server identity.
-- The proxy inspects `tools/call` requests and filters tracked `tools/list`
-  responses. It does not inspect tool results, resources, prompts, or sampling
-  traffic.
+- The proxy inspects every client→server JSON-RPC request method and
+  enforces method-level + tool-level policy. It does not inspect tool
+  results, resource contents, prompt responses, or sampling responses
+  beyond what is needed for `tools/list` response filtering.
+- No filesystem path-scoped argument policy in this release; argument
+  values are never inspected or logged.
 - JSON-RPC batch arrays are not unpacked. A batch line from the client is
   denied fail closed — answered with a single null-id JSON-RPC error, audited
   as `batch_denied`, and never forwarded — even if every call inside it names
@@ -348,6 +405,6 @@ for local paths, server commands, and exact tool names.
   `tools/list`, or that reuses one id for multiple unrelated methods, may see a
   tracked-id response forwarded unchanged with its tracking entry cleared. The
   proxy does not reorder, buffer, or correlate responses beyond id matching.
-- One client, one server, one process; no daemon mode, shell hooks, command
-  interception, terminal-command scanning, or network interception — those
-  remain out of scope.
+- One client, one server, one process; no daemon mode, API server, shell hooks,
+  command interception, terminal-command scanning, or network interception —
+  those remain out of scope.

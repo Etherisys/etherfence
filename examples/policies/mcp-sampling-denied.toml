@@ -1,0 +1,22 @@
+# Example EtherFence MCP proxy policy: sampling denied.
+# Allows tools, resources, and prompts but denies sampling/createMessage
+# to prevent the MCP server from requesting LLM completions from the client.
+schema_version = "ef-mcp-policy/v0.1"
+name = "mcp-sampling-denied"
+
+[methods]
+allow = [
+  "tools/list",
+  "tools/call",
+  "resources/list",
+  "resources/read",
+  "prompts/list",
+  "prompts/get",
+  "completion/complete",
+  "roots/list",
+]
+deny = ["sampling/createMessage"]
+
+[tools]
+allow = ["filesystem.read"]
+deny = ["shell.run"]

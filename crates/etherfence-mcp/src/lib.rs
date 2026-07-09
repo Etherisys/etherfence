@@ -1,18 +1,20 @@
-//! Experimental MCP stdio boundary proxy for EtherFence v0.2.x.
+//! Experimental MCP stdio boundary proxy for EtherFence v0.2.x/v0.3.x.
 //!
 //! The proxy sits between an MCP client and an MCP server, forwards
-//! newline-delimited JSON-RPC messages, and enforces a minimal allow/deny
-//! tool-call policy. It is a prototype: stdio transport only, exact-match
-//! tool names, no daemon, no shell hooks, and no network interception.
+//! newline-delimited JSON-RPC messages, and enforces method-level and
+//! tool-level allow/deny policy. It is a prototype: stdio transport only,
+//! exact-match tool and method names, no daemon, no shell hooks, and no
+//! network interception.
 
 mod audit;
 mod policy;
 mod proxy;
 
-pub use audit::{redacted_argument_keys, AuditLog, AuditRecord};
+pub use audit::{redacted_argument_keys, redacted_param_keys, AuditLog, AuditRecord};
 pub use policy::{
-    decide_tool_call, load_mcp_policy, parse_mcp_policy, Decision, McpPolicyFile, PolicyDecision,
-    ServerPolicy, ToolRules, SUPPORTED_MCP_POLICY_SCHEMA_VERSION,
+    decide_method, decide_tool_call, is_always_allowed_method, load_mcp_policy, parse_mcp_policy,
+    Decision, McpPolicyFile, MethodRules, PolicyDecision, ServerPolicy, ToolRules,
+    ALWAYS_ALLOWED_METHODS, DEFAULT_ALLOWED_METHODS, SUPPORTED_MCP_POLICY_SCHEMA_VERSION,
 };
 pub use proxy::exit_code;
 pub use proxy::{

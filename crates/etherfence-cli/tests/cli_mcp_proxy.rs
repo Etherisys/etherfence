@@ -248,14 +248,24 @@ fn proxy_filters_tools_list_and_audits_metadata_without_schemas() {
     assert!(!response.to_string().contains("browser.open"));
 
     let audit = std::fs::read_to_string(&run.audit_log).expect("audit log");
-    let record: Value = serde_json::from_str(audit.lines().next().expect("one audit record"))
-        .expect("audit line is JSON");
-    assert_eq!(record["event"], "tools_list_filtered");
-    assert_eq!(record["server"], "default");
-    assert_eq!(record["original_count"], 9);
-    assert_eq!(record["filtered_count"], 2);
+    let records: Vec<Value> = audit
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("audit line is JSON"))
+        .collect();
+    // v0.3.0: the first audit record is a method_decision (allow tools/list).
+    assert_eq!(records[0]["event"], "method_decision");
+    assert_eq!(records[0]["method"], "tools/list");
+    assert_eq!(records[0]["decision"], "allow");
+    // The tools_list_filtered record follows.
+    let filter_record = records
+        .iter()
+        .find(|r| r["event"] == "tools_list_filtered")
+        .expect("tools_list_filtered record");
+    assert_eq!(filter_record["server"], "default");
+    assert_eq!(filter_record["original_count"], 9);
+    assert_eq!(filter_record["filtered_count"], 2);
     assert_eq!(
-        record["allowed_tools"],
+        filter_record["allowed_tools"],
         serde_json::json!(["filesystem.read", "github.list_repos"])
     );
     assert!(!audit.contains("Secret-bearing schema"));
@@ -896,4 +906,335 @@ fn proxy_fails_closed_when_audit_log_cannot_be_opened() {
     );
     let _ = std::fs::remove_file(&policy);
     let _ = std::fs::remove_file(&blocking_file);
+}
+
+// --- v0.3.0 method-level policy integration tests ---
+
+const METHOD_POLICY: &str = r#"
+schema_version = "ef-mcp-policy/v0.1"
+name = "method-level-test"
+
+[methods]
+allow = ["tools/list", "tools/call", "resources/list", "resources/read", "prompts/list"]
+deny = ["sampling/createMessage", "prompts/get"]
+
+[tools]
+allow = ["filesystem.read"]
+"#;
+
+#[test]
+fn proxy_denied_prompts_get_not_forwarded() {
+    let policy = write_temp_policy("deny-prompts-get", METHOD_POLICY);
+    let run = run_proxy_with_input(
+        "deny-prompts-get",
+        &policy,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26"}}"#,
+            r#"{"jsonrpc":"2.0","id":2,"method":"prompts/get","params":{"name":"secret_prompt","arguments":{"user_input":"do not leak this"}}}"#,
+        ],
+    );
+    assert!(
+        run.output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&run.output.stderr)
+    );
+    let lines = stdout_json_lines(&run.output);
+
+    // initialize passed through
+    assert!(lines
+        .iter()
+        .any(|l| l["id"] == 1 && l.get("result").is_some()));
+
+    // prompts/get was denied by policy — should get a proxy error, not a server response
+    let denied = lines
+        .iter()
+        .find(|l| l["id"] == 2)
+        .expect("denied prompts/get response");
+    assert_eq!(denied["error"]["code"], -32000);
+    assert_eq!(denied["error"]["data"]["method"], "prompts/get");
+    assert!(!denied.to_string().contains("do not leak this"));
+
+    // The server must never have received prompts/get
+    let received = std::fs::read_to_string(&run.server_log).expect("server log");
+    assert!(!received.contains("prompts/get"));
+    assert!(!received.contains("do not leak this"));
+    assert!(received.contains("initialize"));
+
+    // Audit should record the method_decision deny
+    let audit = std::fs::read_to_string(&run.audit_log).expect("audit log");
+    assert!(audit.contains("\"method_decision\""));
+    assert!(audit.contains("\"prompts/get\""));
+    assert!(audit.contains("\"deny\""));
+    assert!(audit.contains("\"param_keys\":[\"arguments\",\"name\"]"));
+    assert!(!audit.contains("do not leak this"));
+    assert!(!audit.contains("secret_prompt"));
+
+    let _ = std::fs::remove_file(&policy);
+    let _ = std::fs::remove_file(&run.server_log);
+    let _ = std::fs::remove_file(&run.audit_log);
+}
+
+#[test]
+fn proxy_denied_sampling_create_message_not_forwarded() {
+    let policy = write_temp_policy("deny-sampling", METHOD_POLICY);
+    let run = run_proxy_with_input(
+        "deny-sampling",
+        &policy,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26"}}"#,
+            r#"{"jsonrpc":"2.0","id":2,"method":"sampling/createMessage","params":{"messages":[{"role":"user","content":"secret message body"}]}}"#,
+        ],
+    );
+    assert!(
+        run.output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&run.output.stderr)
+    );
+    let lines = stdout_json_lines(&run.output);
+
+    let denied = lines
+        .iter()
+        .find(|l| l["id"] == 2)
+        .expect("denied sampling response");
+    assert_eq!(denied["error"]["code"], -32000);
+    assert_eq!(denied["error"]["data"]["method"], "sampling/createMessage");
+    assert!(!denied.to_string().contains("secret message body"));
+
+    let received = std::fs::read_to_string(&run.server_log).expect("server log");
+    assert!(!received.contains("sampling/createMessage"));
+    assert!(!received.contains("secret message body"));
+
+    let audit = std::fs::read_to_string(&run.audit_log).expect("audit log");
+    assert!(audit.contains("\"sampling/createMessage\""));
+    assert!(audit.contains("\"deny\""));
+    assert!(audit.contains("\"param_keys\":[\"messages\"]"));
+    assert!(!audit.contains("secret message body"));
+
+    let _ = std::fs::remove_file(&policy);
+    let _ = std::fs::remove_file(&run.server_log);
+    let _ = std::fs::remove_file(&run.audit_log);
+}
+
+#[test]
+fn proxy_unknown_method_not_forwarded_by_default() {
+    // Using TEST_POLICY which has no [methods] section — built-in default
+    // allows only tools/list and tools/call.
+    let policy = write_temp_policy("unknown-method", TEST_POLICY);
+    let run = run_proxy_with_input(
+        "unknown-method",
+        &policy,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26"}}"#,
+            r#"{"jsonrpc":"2.0","id":2,"method":"some/unknown/method","params":{"data":"x"}}"#,
+        ],
+    );
+    assert!(
+        run.output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&run.output.stderr)
+    );
+    let lines = stdout_json_lines(&run.output);
+
+    // unknown method denied
+    let denied = lines
+        .iter()
+        .find(|l| l["id"] == 2)
+        .expect("denied unknown method response");
+    assert_eq!(denied["error"]["code"], -32000);
+    assert_eq!(denied["error"]["data"]["method"], "some/unknown/method");
+
+    let received = std::fs::read_to_string(&run.server_log).expect("server log");
+    assert!(!received.contains("some/unknown/method"));
+
+    let _ = std::fs::remove_file(&policy);
+    let _ = std::fs::remove_file(&run.server_log);
+    let _ = std::fs::remove_file(&run.audit_log);
+}
+
+#[test]
+fn proxy_allowed_resources_read_is_forwarded() {
+    let policy = write_temp_policy("allow-res-read", METHOD_POLICY);
+    let run = run_proxy_with_input(
+        "allow-res-read",
+        &policy,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26"}}"#,
+            r#"{"jsonrpc":"2.0","id":2,"method":"resources/read","params":{"uri":"file:///safe/path"}}"#,
+        ],
+    );
+    assert!(
+        run.output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&run.output.stderr)
+    );
+    let lines = stdout_json_lines(&run.output);
+
+    // resources/read reached the server and got a response
+    let resp = lines
+        .iter()
+        .find(|l| l["id"] == 2)
+        .expect("resources/read response");
+    assert_eq!(resp["result"]["echo_method"], "resources/read");
+
+    let received = std::fs::read_to_string(&run.server_log).expect("server log");
+    assert!(received.contains("resources/read"));
+
+    let audit = std::fs::read_to_string(&run.audit_log).expect("audit log");
+    assert!(audit.contains("\"resources/read\""));
+    assert!(audit.contains("\"allow\""));
+
+    let _ = std::fs::remove_file(&policy);
+    let _ = std::fs::remove_file(&run.server_log);
+    let _ = std::fs::remove_file(&run.audit_log);
+}
+
+#[test]
+fn proxy_method_denied_response_preserves_request_id() {
+    let policy = write_temp_policy("id-preserve", METHOD_POLICY);
+    let run = run_proxy_with_input(
+        "id-preserve",
+        &policy,
+        &[r#"{"jsonrpc":"2.0","id":"custom-id-99","method":"prompts/get","params":{}}"#],
+    );
+    assert!(
+        run.output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&run.output.stderr)
+    );
+    let lines = stdout_json_lines(&run.output);
+    let denied = lines
+        .iter()
+        .find(|l| l["id"] == "custom-id-99")
+        .expect("denied response with preserved id");
+    assert_eq!(denied["error"]["code"], -32000);
+    assert_eq!(denied["error"]["data"]["method"], "prompts/get");
+
+    let _ = std::fs::remove_file(&policy);
+    let _ = std::fs::remove_file(&run.server_log);
+    let _ = std::fs::remove_file(&run.audit_log);
+}
+
+#[test]
+fn proxy_audit_excludes_sensitive_param_values() {
+    let policy = write_temp_policy("audit-safe", METHOD_POLICY);
+    let run = run_proxy_with_input(
+        "audit-safe",
+        &policy,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"prompts/get","params":{"name":"my_prompt","arguments":{"secret_key":"secret_value_123","token":"abc-token-xyz"}}}"#,
+        ],
+    );
+    assert!(
+        run.output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&run.output.stderr)
+    );
+    let audit = std::fs::read_to_string(&run.audit_log).expect("audit log");
+    // Param keys are safe metadata
+    assert!(audit.contains("\"arguments\""));
+    assert!(audit.contains("\"name\""));
+    // Sensitive values must not appear
+    assert!(!audit.contains("secret_value_123"));
+    assert!(!audit.contains("abc-token-xyz"));
+    assert!(!audit.contains("my_prompt"));
+    // request_id_type should be recorded
+    assert!(audit.contains("\"request_id_type\":\"number\""));
+
+    let _ = std::fs::remove_file(&policy);
+    let _ = std::fs::remove_file(&run.server_log);
+    let _ = std::fs::remove_file(&run.audit_log);
+}
+
+#[test]
+fn proxy_tools_call_still_works_with_method_policy() {
+    let policy = write_temp_policy("tools-call-method", METHOD_POLICY);
+    let run = run_proxy_with_input(
+        "tools-call-method",
+        &policy,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26"}}"#,
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"filesystem.read","arguments":{"path":"/x"}}}"#,
+            r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"shell.run","arguments":{}}}"#,
+        ],
+    );
+    assert!(
+        run.output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&run.output.stderr)
+    );
+    let lines = stdout_json_lines(&run.output);
+    // Allowed tool call reached server
+    assert_eq!(
+        lines.iter().find(|l| l["id"] == 2).expect("allowed call")["result"]["echo_tool"],
+        "filesystem.read"
+    );
+    // Denied tool call got proxy error
+    assert_eq!(
+        lines.iter().find(|l| l["id"] == 3).expect("denied call")["error"]["code"],
+        -32000
+    );
+
+    let _ = std::fs::remove_file(&policy);
+    let _ = std::fs::remove_file(&run.server_log);
+    let _ = std::fs::remove_file(&run.audit_log);
+}
+
+#[test]
+fn proxy_batch_arrays_still_denied_with_method_policy() {
+    let policy = write_temp_policy("batch-method", METHOD_POLICY);
+    let run = run_proxy_with_input(
+        "batch-method",
+        &policy,
+        &[r#"[{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}]"#],
+    );
+    assert!(
+        run.output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&run.output.stderr)
+    );
+    let lines = stdout_json_lines(&run.output);
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["id"], Value::Null);
+    assert_eq!(lines[0]["error"]["code"], -32000);
+
+    let received = std::fs::read_to_string(&run.server_log).unwrap_or_default();
+    assert!(!received.contains("tools/list"));
+
+    let _ = std::fs::remove_file(&policy);
+    let _ = std::fs::remove_file(&run.server_log);
+    let _ = std::fs::remove_file(&run.audit_log);
+}
+
+#[test]
+fn proxy_default_policy_denies_resources_read() {
+    // TEST_POLICY has no [methods] section, so built-in default applies:
+    // only tools/list and tools/call are allowed.
+    let policy = write_temp_policy("default-deny-res", TEST_POLICY);
+    let run = run_proxy_with_input(
+        "default-deny-res",
+        &policy,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26"}}"#,
+            r#"{"jsonrpc":"2.0","id":2,"method":"resources/read","params":{"uri":"file:///etc/passwd"}}"#,
+        ],
+    );
+    assert!(
+        run.output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&run.output.stderr)
+    );
+    let lines = stdout_json_lines(&run.output);
+    // resources/read denied by default
+    let denied = lines
+        .iter()
+        .find(|l| l["id"] == 2)
+        .expect("denied resources/read");
+    assert_eq!(denied["error"]["code"], -32000);
+
+    let received = std::fs::read_to_string(&run.server_log).expect("server log");
+    assert!(!received.contains("resources/read"));
+
+    let _ = std::fs::remove_file(&policy);
+    let _ = std::fs::remove_file(&run.server_log);
+    let _ = std::fs::remove_file(&run.audit_log);
 }

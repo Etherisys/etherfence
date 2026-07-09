@@ -10,7 +10,8 @@ use crate::policy::Decision;
 use crate::policy::McpPolicyFile;
 
 /// One JSONL audit record. Request metadata is redacted before it gets here:
-/// only tool-call argument key names are recorded, never argument values.
+/// only tool-call argument key names and top-level params key names are
+/// recorded, never argument or param values.
 #[derive(Debug, Clone, Serialize)]
 pub struct AuditRecord {
     pub ts: String,
@@ -19,8 +20,10 @@ pub struct AuditRecord {
     pub server: Option<String>,
     pub method: Option<String>,
     pub request_id: Option<Value>,
+    pub request_id_type: Option<String>,
     pub tool: Option<String>,
     pub argument_keys: Vec<String>,
+    pub param_keys: Vec<String>,
     pub original_count: Option<usize>,
     pub filtered_count: Option<usize>,
     pub allowed_tools: Vec<String>,
@@ -38,6 +41,7 @@ impl AuditRecord {
         decision: Decision,
         reason: &str,
     ) -> Self {
+        let (request_id, request_id_type) = split_request_id(request_id);
         AuditRecord {
             ts: rfc3339_utc_now(),
             event: "tool_call_decision".to_string(),
@@ -45,8 +49,39 @@ impl AuditRecord {
             server: Some(server_name.to_string()),
             method: Some("tools/call".to_string()),
             request_id,
+            request_id_type,
             tool: tool.map(str::to_string),
             argument_keys,
+            param_keys: Vec::new(),
+            original_count: None,
+            filtered_count: None,
+            allowed_tools: Vec::new(),
+            decision: decision.as_str().to_string(),
+            reason: reason.to_string(),
+        }
+    }
+
+    pub fn method_decision(
+        policy_name: &str,
+        server_name: &str,
+        method: &str,
+        request_id: Option<Value>,
+        param_keys: Vec<String>,
+        decision: Decision,
+        reason: &str,
+    ) -> Self {
+        let (request_id, request_id_type) = split_request_id(request_id);
+        AuditRecord {
+            ts: rfc3339_utc_now(),
+            event: "method_decision".to_string(),
+            policy: Some(policy_name.to_string()),
+            server: Some(server_name.to_string()),
+            method: Some(method.to_string()),
+            request_id,
+            request_id_type,
+            tool: None,
+            argument_keys: Vec::new(),
+            param_keys,
             original_count: None,
             filtered_count: None,
             allowed_tools: Vec::new(),
@@ -63,8 +98,10 @@ impl AuditRecord {
             server: Some(server_name.to_string()),
             method: None,
             request_id: None,
+            request_id_type: None,
             tool: None,
             argument_keys: Vec::new(),
+            param_keys: Vec::new(),
             original_count: None,
             filtered_count: None,
             allowed_tools: Vec::new(),
@@ -81,6 +118,7 @@ impl AuditRecord {
         allowed_tools: Vec<String>,
         reason: &str,
     ) -> Self {
+        let (request_id, request_id_type) = split_request_id(request_id);
         AuditRecord {
             ts: rfc3339_utc_now(),
             event: "tools_list_filtered".to_string(),
@@ -88,8 +126,10 @@ impl AuditRecord {
             server: Some(server_name.to_string()),
             method: Some("tools/list".to_string()),
             request_id,
+            request_id_type,
             tool: None,
             argument_keys: Vec::new(),
+            param_keys: Vec::new(),
             original_count: Some(original_count),
             filtered_count: Some(allowed_tools.len()),
             allowed_tools,
@@ -104,6 +144,7 @@ impl AuditRecord {
         request_id: Option<Value>,
         reason: &str,
     ) -> Self {
+        let (request_id, request_id_type) = split_request_id(request_id);
         AuditRecord {
             ts: rfc3339_utc_now(),
             event: "tools_list_malformed".to_string(),
@@ -111,8 +152,10 @@ impl AuditRecord {
             server: Some(server_name.to_string()),
             method: Some("tools/list".to_string()),
             request_id,
+            request_id_type,
             tool: None,
             argument_keys: Vec::new(),
+            param_keys: Vec::new(),
             original_count: Some(0),
             filtered_count: Some(0),
             allowed_tools: Vec::new(),
@@ -129,8 +172,10 @@ impl AuditRecord {
             server: Some(server_name.to_string()),
             method: Some("tools/list".to_string()),
             request_id: None,
+            request_id_type: None,
             tool: None,
             argument_keys: Vec::new(),
+            param_keys: Vec::new(),
             original_count: None,
             filtered_count: None,
             allowed_tools: Vec::new(),
@@ -148,14 +193,32 @@ impl AuditRecord {
             server: None,
             method: None,
             request_id: None,
+            request_id_type: None,
             tool: None,
             argument_keys: Vec::new(),
+            param_keys: Vec::new(),
             original_count: None,
             filtered_count: None,
             allowed_tools: Vec::new(),
             decision: Decision::PolicyError.as_str().to_string(),
             reason: reason.to_string(),
         }
+    }
+}
+
+/// Split a JSON-RPC request id into its value and a short type tag for audit.
+/// The type tag is one of: "number", "string", "bool", "object", "array",
+/// "null", or "missing" (when the id field is absent). Values are never logged
+/// beyond the id itself (which is client-visible metadata, not a secret).
+fn split_request_id(request_id: Option<Value>) -> (Option<Value>, Option<String>) {
+    match request_id {
+        None => (None, Some("missing".to_string())),
+        Some(Value::Null) => (Some(Value::Null), Some("null".to_string())),
+        Some(v @ Value::Number(_)) => (Some(v), Some("number".to_string())),
+        Some(v @ Value::String(_)) => (Some(v), Some("string".to_string())),
+        Some(v @ Value::Bool(_)) => (Some(v), Some("bool".to_string())),
+        Some(v @ Value::Object(_)) => (Some(v), Some("object".to_string())),
+        Some(v @ Value::Array(_)) => (Some(v), Some("array".to_string())),
     }
 }
 
@@ -192,6 +255,21 @@ impl AuditLog {
 /// Values are intentionally dropped so secrets never reach the audit log.
 pub fn redacted_argument_keys(arguments: Option<&Value>) -> Vec<String> {
     match arguments {
+        Some(Value::Object(map)) => {
+            let mut keys: Vec<String> = map.keys().cloned().collect();
+            keys.sort();
+            keys
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Extract only the top-level key names from a JSON-RPC `params` object.
+/// Values are intentionally dropped so sensitive param content (prompt text,
+/// resource URIs, message bodies, file contents, secrets) never reaches the
+/// audit log.
+pub fn redacted_param_keys(params: Option<&Value>) -> Vec<String> {
+    match params {
         Some(Value::Object(map)) => {
             let mut keys: Vec<String> = map.keys().cloned().collect();
             keys.sort();
@@ -254,7 +332,7 @@ mod tests {
     fn argument_keys_drop_values() {
         let arguments = json!({
             "path": "/home/user/notes.txt",
-            "api_token": "sk-super-secret-value",
+            "api_token": "«redacted:sk-…»",
         });
         let keys = redacted_argument_keys(Some(&arguments));
         assert_eq!(keys, vec!["api_token", "path"]);
@@ -265,6 +343,23 @@ mod tests {
         assert!(redacted_argument_keys(None).is_empty());
         assert!(redacted_argument_keys(Some(&json!("string"))).is_empty());
         assert!(redacted_argument_keys(Some(&json!(["a", "b"]))).is_empty());
+    }
+
+    #[test]
+    fn param_keys_drop_values() {
+        let params = json!({
+            "uri": "file:///etc/passwd",
+            "prompt": "system prompt text here",
+        });
+        let keys = redacted_param_keys(Some(&params));
+        assert_eq!(keys, vec!["prompt", "uri"]);
+    }
+
+    #[test]
+    fn param_keys_handle_missing_or_non_object() {
+        assert!(redacted_param_keys(None).is_empty());
+        assert!(redacted_param_keys(Some(&json!(42))).is_empty());
+        assert!(redacted_param_keys(Some(&json!([1]))).is_empty());
     }
 
     #[test]
@@ -282,6 +377,42 @@ mod tests {
         assert!(line.contains("\"decision\":\"deny\""));
         assert!(line.contains("\"tool\":\"filesystem.read\""));
         assert!(line.contains("\"api_token\""));
-        assert!(!line.contains("sk-super-secret-value"));
+        assert!(!line.contains("«redacted:sk-…»"));
+    }
+
+    #[test]
+    fn audit_record_serializes_without_param_values() {
+        let record = AuditRecord::method_decision(
+            "test-policy",
+            "default",
+            "resources/read",
+            Some(json!("req-1")),
+            vec!["uri".to_string()],
+            Decision::Deny,
+            "method is not allowed by policy",
+        );
+        let line = serde_json::to_string(&record).unwrap();
+        assert!(line.contains("\"event\":\"method_decision\""));
+        assert!(line.contains("\"method\":\"resources/read\""));
+        assert!(line.contains("\"request_id_type\":\"string\""));
+        assert!(line.contains("\"param_keys\":[\"uri\"]"));
+        assert!(!line.contains("file:///etc/passwd"));
+        assert!(!line.contains("system prompt text"));
+    }
+
+    #[test]
+    fn request_id_type_is_correct() {
+        for (id, expected_type) in [
+            (None, "missing"),
+            (Some(Value::Null), "null"),
+            (Some(json!(42)), "number"),
+            (Some(json!("abc")), "string"),
+            (Some(json!(true)), "bool"),
+            (Some(json!({"k": 1})), "object"),
+            (Some(json!([1, 2])), "array"),
+        ] {
+            let (_, id_type) = split_request_id(id);
+            assert_eq!(id_type.as_deref(), Some(expected_type));
+        }
     }
 }

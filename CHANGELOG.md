@@ -9,6 +9,76 @@ one opt-in experimental runtime component: an MCP stdio boundary proxy.
 EtherFence still has no daemon mode, shell hooks, command interception,
 terminal-command scanning, or network interception.
 
+## [0.3.0] - 2026-07-09
+
+### Added
+
+- Method-level MCP/JSON-RPC policy enforcement in `etherfence mcp-proxy`:
+  every client→server JSON-RPC request object is now inspected before
+  forwarding. The proxy checks the method name against an optional
+  `[methods]` allow/deny policy before any method-specific logic runs.
+  Unknown or unspecified methods default deny unless explicitly allowed.
+- Optional `[methods]` and `[servers.<name>.methods]` sections in
+  `ef-mcp-policy/v0.1` TOML policies with exact-match `allow`/`deny` lists
+  and a `"*"` wildcard for permissive deployments. When no `[methods]`
+  section is present, the built-in default allows only `tools/list` and
+  `tools/call` (preserving v0.2.x behavior).
+- Always-allowed methods (`initialize`, `notifications/initialized`,
+  `ping`) bypass method policy entirely, since they are required for MCP
+  protocol initialization and liveness.
+- `method_decision` audit event recording server name, method, decision,
+  reason, request id presence/type, and safe top-level param key names
+  only — no param values, prompt text, resource content, message bodies,
+  secrets, tokens, or file contents are ever logged.
+- `request_id_type` audit field recording the JSON type of the request id
+  (number, string, bool, object, array, null, or missing).
+- `param_keys` audit field recording sorted top-level `params` key names
+  for method decisions.
+- New example MCP proxy policies: `mcp-strict-tools-only.toml`,
+  `mcp-readonly.toml`, `mcp-resources-denied.toml`,
+  `mcp-sampling-denied.toml`.
+
+### Changed
+
+- `inspect_client_line` now checks method-level policy for every
+  client→server JSON-RPC request before forwarding. Denied methods are
+  never forwarded to the server and receive a JSON-RPC error response
+  with the method name and reason. `tools/call` and `tools/list` behavior
+  is preserved: when the method is allowed, the existing tool-name policy
+  and response filtering logic runs unchanged.
+- The `AuditRecord` struct includes new `request_id_type` and `param_keys`
+  fields. Existing audit events (`tool_call_decision`,
+  `tools_list_filtered`, `batch_denied`, etc.) include these fields with
+  appropriate values (empty arrays where not applicable).
+- Version bumped to 0.3.0. All scan/report behavior is unchanged and
+  backward compatible.
+
+### Security notes
+
+- Denied methods never reach the child MCP server. This closes the v0.2.x
+  gap where `resources/read`, `prompts/get`, `sampling/createMessage`,
+  and other methods passed through the proxy uninspected.
+- Unknown/custom methods are denied by default, reducing the attack
+  surface for novel MCP method names.
+- Batch arrays remain denied fail-closed (unchanged).
+- Audit records exclude all sensitive values: only key names, method
+  names, decision outcomes, and request id type metadata are logged.
+- The proxy is still stdio-only, experimental, and does not add daemon
+  mode, API server, network interception, shell hooks, terminal-command
+  scanning, or filesystem path-scoped argument policy.
+
+### Policy/schema compatibility
+
+- Schema version remains `ef-mcp-policy/v0.1` (no version bump needed).
+  The `[methods]` section is optional: existing v0.2.x policies without it
+  continue to work with identical behavior (built-in default allows
+  `tools/list` and `tools/call`, denies everything else).
+- The `[methods]` section is additive and backward-compatible. No
+  migration is required for existing policies.
+- Per-server method scoping via `[servers.<name>.methods]` follows the
+  same precedence as tool rules: global deny, server deny, server allow,
+  global allow, then default deny.
+
 ## [0.2.8] - 2026-07-09
 
 ### Changed

@@ -53,12 +53,27 @@ fn mcp_policy_examples_parse() {
             "github-readonly",
             include_str!("../../../examples/policies/mcp-github-readonly.toml"),
         ),
+        (
+            "strict-tools-only",
+            include_str!("../../../examples/policies/mcp-strict-tools-only.toml"),
+        ),
+        (
+            "readonly",
+            include_str!("../../../examples/policies/mcp-readonly.toml"),
+        ),
+        (
+            "resources-denied",
+            include_str!("../../../examples/policies/mcp-resources-denied.toml"),
+        ),
+        (
+            "sampling-denied",
+            include_str!("../../../examples/policies/mcp-sampling-denied.toml"),
+        ),
     ] {
         let policy = etherfence_mcp::parse_mcp_policy(content)
             .unwrap_or_else(|error| panic!("{name} policy should parse: {error}"));
         assert_eq!(policy.schema_version, "ef-mcp-policy/v0.1");
         assert!(!policy.name.is_empty());
-        assert!(!policy.servers.is_empty());
     }
 }
 
@@ -97,6 +112,10 @@ fn mcp_compatibility_matrix_documents_fake_fixture_row() {
         "../../examples/policies/mcp-minimal-boundary.toml",
         "../../examples/policies/mcp-filesystem-readonly.toml",
         "../../examples/policies/mcp-github-readonly.toml",
+        "../../examples/policies/mcp-strict-tools-only.toml",
+        "../../examples/policies/mcp-readonly.toml",
+        "../../examples/policies/mcp-resources-denied.toml",
+        "../../examples/policies/mcp-sampling-denied.toml",
     ] {
         assert!(
             manifest_dir.join(policy).exists(),
