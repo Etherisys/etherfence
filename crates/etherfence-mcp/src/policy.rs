@@ -414,7 +414,7 @@ fn normalize_local_path(raw_path: &str) -> Option<String> {
         let drive = path[..1].to_ascii_lowercase();
         let rest = &path[2..];
         let components = normalize_components(rest)?;
-        return Some(format!("{drive}:/{components}"));
+        return Some(format!("{drive}:/{components}").to_ascii_lowercase());
     }
     if path.starts_with('/') {
         let components = normalize_components(&path)?;
@@ -895,6 +895,89 @@ path_rule = "win_project"
         )
         .expect("path guard");
         assert_eq!(denied.classification, "inside_denied_root");
+    }
+
+    #[test]
+    fn windows_deny_root_blocks_case_variant_candidate() {
+        let content = r#"
+schema_version = "ef-mcp-policy/v0.1"
+name = "windows-case-deny"
+
+[tools]
+allow = ["filesystem.read"]
+
+[path_rules.win_project]
+allow_roots = ["C:/Users/Alice/project"]
+deny_roots = ["C:/Users/Alice/project/secrets"]
+
+[tools."filesystem.read".arguments]
+path_keys = ["path"]
+path_rule = "win_project"
+"#;
+        let policy = parse_mcp_policy(content).expect("policy");
+        let decision = decide_tool_argument_paths(
+            &policy,
+            "filesystem.read",
+            Some(&json!({"path": "C:/Users/Alice/project/Secrets/token.txt"})),
+        )
+        .expect("path guard");
+        assert_eq!(decision.decision, Decision::Deny);
+        assert_eq!(decision.classification, "inside_denied_root");
+    }
+
+    #[test]
+    fn windows_allow_root_allows_case_variant_candidate() {
+        let content = r#"
+schema_version = "ef-mcp-policy/v0.1"
+name = "windows-case-allow"
+
+[tools]
+allow = ["filesystem.read"]
+
+[path_rules.win_project]
+allow_roots = ["C:/Users/Alice/project"]
+
+[tools."filesystem.read".arguments]
+path_keys = ["path"]
+path_rule = "win_project"
+"#;
+        let policy = parse_mcp_policy(content).expect("policy");
+        let decision = decide_tool_argument_paths(
+            &policy,
+            "filesystem.read",
+            Some(&json!({"path": "c:/users/alice/PROJECT/docs/readme.md"})),
+        )
+        .expect("path guard");
+        assert_eq!(decision.decision, Decision::Allow);
+        assert_eq!(decision.classification, "inside_allowed_root");
+    }
+
+    #[test]
+    fn windows_deny_root_wins_after_case_folding() {
+        let content = r#"
+schema_version = "ef-mcp-policy/v0.1"
+name = "windows-case-deny-wins"
+
+[tools]
+allow = ["filesystem.read"]
+
+[path_rules.win_project]
+allow_roots = ["C:/Users/Alice/project"]
+deny_roots = ["c:/users/alice/PROJECT/SECRETS"]
+
+[tools."filesystem.read".arguments]
+path_keys = ["path"]
+path_rule = "win_project"
+"#;
+        let policy = parse_mcp_policy(content).expect("policy");
+        let decision = decide_tool_argument_paths(
+            &policy,
+            "filesystem.read",
+            Some(&json!({"path": "C:/Users/Alice/project/secrets/token.txt"})),
+        )
+        .expect("path guard");
+        assert_eq!(decision.decision, Decision::Deny);
+        assert_eq!(decision.classification, "inside_denied_root");
     }
 
     #[test]
