@@ -195,7 +195,7 @@ with an error instead of continuing unaudited.
 
 ## Compatibility test harness
 
-v0.2.2 adds a deterministic MCP stdio compatibility harness in
+v0.2.4 documents the compatibility matrix workflow in `docs/mcp-compatibility-matrix.md` and optional real-server test records in `docs/mcp-real-server-test-template.md`. v0.2.2 added a deterministic MCP stdio compatibility harness in
 `crates/etherfence-cli/tests/cli_mcp_proxy.rs` backed by the checked-in
 `fake-mcp-server` test binary. Normal CI remains self-contained: it does not
 require internet access, npm, npx, uvx, Docker, or external MCP packages.
@@ -228,6 +228,10 @@ If `ETHERFENCE_REAL_MCP_CMD` is absent, the optional test skips with a clear
 message. This keeps CI deterministic while allowing maintainers to validate
 that EtherFence can sit between a client-like test harness and a real stdio
 MCP server.
+
+## Compatibility matrix workflow
+
+`docs/mcp-compatibility-matrix.md` defines the fields required for every compatibility record: server name, server version, platform, command template, policy used, `tools/list` behavior, allowed and denied `tools/call` results, audit result, tester/date, and notes/limitations. The checked-in fake MCP server row is the only deterministic CI-backed record. External server rows should be added only after running the optional real-server template and recording exact tool names and versions.
 
 ## Client configuration examples
 
