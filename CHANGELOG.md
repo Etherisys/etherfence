@@ -9,6 +9,42 @@ one opt-in experimental runtime component: an MCP stdio boundary proxy.
 EtherFence still has no daemon mode, shell hooks, command interception,
 terminal-command scanning, or network interception.
 
+## [0.2.5] - 2026-07-09
+
+### Added
+
+- Manual `workflow_dispatch` GitHub Actions release workflow in
+  `.github/workflows/release.yml` that becomes the primary safe release
+  path: it validates release state (main ref, semver-like version input,
+  `Cargo.toml` workspace version match, a matching `CHANGELOG.md` section,
+  and that the target tag/GitHub release do not already exist), runs
+  `cargo fmt --check`, `cargo clippy --all-targets --all-features -- -D
+  warnings`, `cargo test`, `cargo build`, and `git diff --check` on
+  `ubuntu-latest` and `windows-latest`, builds
+  `etherfence-linux-x86_64.tar.gz` and `etherfence-windows-x86_64.zip`
+  packaging the CLI binary with `README.md` and `LICENSE`, then creates an
+  annotated `v<version>` tag on the dispatched `main` commit and a GitHub
+  release with those artifacts and release notes extracted from the
+  matching `CHANGELOG.md` section.
+- `docs/release-automation.md` documenting the workflow's inputs,
+  validation gates, and manual-approval flow.
+
+### Changed
+
+- Version bumped to 0.2.5. All scan/report and MCP proxy behavior is
+  unchanged; scan reports now carry version `0.2.5`.
+- `docs/release-checklist.md` and README now point to the
+  `workflow_dispatch` release workflow as the primary release path, with
+  the previous fully manual tag/release steps kept as a documented
+  fallback.
+
+### Notes
+
+- No runtime product behavior changes. The release workflow only runs on
+  explicit `workflow_dispatch`; it never mutates existing releases,
+  replaces existing tags, force-pushes, or releases from a non-`main` ref,
+  and fails closed if release state is ambiguous.
+
 ## [0.2.4] - 2026-07-09
 
 ### Added

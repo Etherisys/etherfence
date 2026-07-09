@@ -1,9 +1,29 @@
-# EtherFence v0.2.4 Release Checklist
+# EtherFence v0.2.5 Release Checklist
 
 Status: pre-alpha. Scan commands are scan-only; v0.2.x additionally ships the
 experimental `etherfence mcp-proxy` stdio boundary proxy prototype. This
 checklist prepares Linux and Windows CLI artifacts without claiming production
 readiness.
+
+## Primary release path: the release workflow
+
+Starting with v0.2.5, the primary and preferred way to cut a release is the
+manual `workflow_dispatch` GitHub Actions workflow in
+`.github/workflows/release.yml`, documented in full in
+`docs/release-automation.md`:
+
+```sh
+gh workflow run release.yml --ref main -f version=0.2.5
+```
+
+It validates release state, runs the same checks listed below on
+`ubuntu-latest` and `windows-latest`, builds both artifacts, and creates the
+tag and GitHub release automatically. It fails closed (refuses to proceed) if
+the ref is not `main`, the version is not semver-like, `Cargo.toml` or
+`CHANGELOG.md` don't match, or a matching tag/release already exists.
+
+The rest of this checklist documents the fully manual fallback process and
+the local checks a maintainer can run before dispatching the workflow.
 
 ## Scope guard
 
@@ -38,9 +58,9 @@ On Linux:
 
 ```sh
 cargo build --release -p etherfence-cli
-mkdir -p dist/etherfence-v0.2.4-linux-x86_64
-cp target/release/etherfence dist/etherfence-v0.2.4-linux-x86_64/
-tar -C dist -czf dist/etherfence-linux-x86_64.tar.gz etherfence-v0.2.4-linux-x86_64
+mkdir -p dist/etherfence-v0.2.5-linux-x86_64
+cp target/release/etherfence dist/etherfence-v0.2.5-linux-x86_64/
+tar -C dist -czf dist/etherfence-linux-x86_64.tar.gz etherfence-v0.2.5-linux-x86_64
 ```
 
 Smoke check:
@@ -58,9 +78,9 @@ On Windows PowerShell:
 
 ```powershell
 cargo build --release -p etherfence-cli
-New-Item -ItemType Directory -Force -Path dist/etherfence-v0.2.4-windows-x86_64 | Out-Null
-Copy-Item target/release/etherfence.exe dist/etherfence-v0.2.4-windows-x86_64/
-Compress-Archive -Path dist/etherfence-v0.2.4-windows-x86_64 -DestinationPath dist/etherfence-windows-x86_64.zip -Force
+New-Item -ItemType Directory -Force -Path dist/etherfence-v0.2.5-windows-x86_64 | Out-Null
+Copy-Item target/release/etherfence.exe dist/etherfence-v0.2.5-windows-x86_64/
+Compress-Archive -Path dist/etherfence-v0.2.5-windows-x86_64 -DestinationPath dist/etherfence-windows-x86_64.zip -Force
 ```
 
 Smoke check:
@@ -73,7 +93,7 @@ Smoke check:
 
 ## MCP compatibility matrix checks
 
-For v0.2.4 and later, confirm:
+For v0.2.5 and later, confirm:
 
 - `docs/mcp-compatibility-matrix.md` exists and includes the fake MCP server row.
 - `docs/mcp-real-server-test-template.md` documents `ETHERFENCE_REAL_MCP_CMD` as JSON argv.
@@ -117,7 +137,10 @@ dist-ci/etherfence-v*-linux-x86_64/etherfence scan --root tests/fixtures/windows
 Smoke-test `etherfence-windows-x86_64.zip` on a Windows machine (or document
 that it was validated only by the `windows-latest` CI job).
 
-## Tag and push
+## Tag and push (manual fallback)
+
+Prefer dispatching `release.yml` (see above). Use this fully manual path only
+if the automated workflow is unavailable.
 
 After the release PR is merged to `main`, CI is green, and artifacts are
 smoke-tested:
@@ -125,17 +148,17 @@ smoke-tested:
 ```sh
 git checkout main
 git pull origin main
-git tag -a v0.2.4 -m "EtherFence v0.2.4: MCP compatibility matrix workflow"
-git push origin v0.2.4
+git tag -a v0.2.5 -m "EtherFence v0.2.5: manual GitHub Actions release workflow"
+git push origin v0.2.5
 ```
 
 Then create the GitHub release from the tag and attach the CI-built
 `etherfence-linux-x86_64.tar.gz` and `etherfence-windows-x86_64.zip`:
 
 ```sh
-gh release create v0.2.4 \
-  --title "EtherFence v0.2.4" \
-  --notes-file <(sed -n '/^## \[0.2.4\]/,/^## /p' CHANGELOG.md | sed '$d') \
+gh release create v0.2.5 \
+  --title "EtherFence v0.2.5" \
+  --notes-file <(sed -n '/^## \[0.2.5\]/,/^## /p' CHANGELOG.md | sed '$d') \
   dist-ci/etherfence-linux-x86_64/etherfence-linux-x86_64.tar.gz \
   dist-ci/etherfence-windows-x86_64/etherfence-windows-x86_64.zip
 ```

@@ -142,6 +142,18 @@
 - Validation tests keep matrix docs, JSON client examples, and example MCP proxy policies checked
 - No new enforcement semantics; the proxy remains stdio-only, exact-name-only, and experimental
 
+## v0.2.5 - manual GitHub Actions release workflow
+
+- `.github/workflows/release.yml` adds a manual `workflow_dispatch` release
+  path: validates main ref, semver version input, `Cargo.toml`/`CHANGELOG.md`
+  match, and tag/release absence; runs fmt/clippy/test/build checks on Linux
+  and Windows; builds and attaches release artifacts; tags and creates the
+  GitHub release
+- `docs/release-automation.md` documents the workflow's validation gates and
+  safety guarantees
+- No new enforcement semantics or runtime behavior; release creation stays
+  explicit and fails closed on ambiguous state
+
 ## v0.2.x ideas
 
 - Expand tested config schemas and platform paths

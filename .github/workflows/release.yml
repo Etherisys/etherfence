@@ -1,0 +1,259 @@
+name: release
+
+# Manual, explicit release path. This workflow never runs on push/PR/schedule;
+# it only runs when a maintainer dispatches it with a target version. It does
+# not add any runtime product behavior to EtherFence.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release, e.g. 0.2.5"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.event.inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: validate release state
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      sha: ${{ steps.version.outputs.sha }}
+    steps:
+      - name: fail closed unless dispatched from main
+        run: |
+          set -euo pipefail
+          if [ "${{ github.ref }}" != "refs/heads/main" ]; then
+            echo "::error::Release workflow must be dispatched from main (got ${{ github.ref }})."
+            exit 1
+          fi
+
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+
+      - name: validate version input is semver-like
+        id: version
+        run: |
+          set -euo pipefail
+          version="${{ github.event.inputs.version }}"
+          if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::version input '$version' is not semver-like (expected X.Y.Z)."
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: validate Cargo.toml workspace version matches input
+        run: |
+          set -euo pipefail
+          version="${{ steps.version.outputs.version }}"
+          cargo_version="$(grep -m1 '^version = ' Cargo.toml | sed -E 's/version = "(.*)"/\1/')"
+          if [ "$cargo_version" != "$version" ]; then
+            echo "::error::Cargo.toml workspace version ($cargo_version) does not match requested version ($version)."
+            exit 1
+          fi
+
+      - name: validate CHANGELOG.md has a section for this version
+        run: |
+          set -euo pipefail
+          version="${{ steps.version.outputs.version }}"
+          version_re="$(printf '%s' "$version" | sed 's/\./\\./g')"
+          if ! grep -Eq "^## \[${version_re}\]" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md has no '## [$version]' section."
+            exit 1
+          fi
+
+      - name: validate tag does not already exist
+        run: |
+          set -euo pipefail
+          tag="v${{ steps.version.outputs.version }}"
+          if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+            echo "::error::Local tag $tag already exists."
+            exit 1
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
+            echo "::error::Remote tag $tag already exists on origin."
+            exit 1
+          fi
+
+      - name: validate GitHub release does not already exist
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="v${{ steps.version.outputs.version }}"
+          if gh release view "$tag" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "::error::GitHub release $tag already exists."
+            exit 1
+          fi
+
+  verify-and-build:
+    name: verify and build (${{ matrix.os }})
+    needs: validate
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      # fail-fast (unlike ci.yml): a release must not proceed if either
+      # platform fails verification or build.
+      fail-fast: true
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ needs.validate.outputs.sha }}
+
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          components: rustfmt, clippy
+
+      - name: cargo fmt
+        run: cargo fmt --check
+
+      - name: cargo clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: cargo test
+        run: cargo test
+
+      - name: cargo build
+        run: cargo build
+
+      - name: git diff check
+        run: git diff --check
+
+      - name: cargo build release
+        run: cargo build --release -p etherfence-cli
+
+      - name: package linux release artifact
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          version="${{ needs.validate.outputs.version }}"
+          stage="dist/etherfence-v${version}-linux-x86_64"
+          mkdir -p "$stage"
+          cp target/release/etherfence "$stage"/
+          cp README.md LICENSE "$stage"/
+          tar -C dist -czf dist/etherfence-linux-x86_64.tar.gz "etherfence-v${version}-linux-x86_64"
+
+      - name: package windows release artifact
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $version = "${{ needs.validate.outputs.version }}"
+          $stage = "dist/etherfence-v$version-windows-x86_64"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item target/release/etherfence.exe $stage/
+          Copy-Item README.md $stage/
+          Copy-Item LICENSE $stage/
+          Compress-Archive -Path $stage -DestinationPath dist/etherfence-windows-x86_64.zip -Force
+
+      - name: upload linux artifact
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: etherfence-linux-x86_64
+          path: dist/etherfence-linux-x86_64.tar.gz
+          if-no-files-found: error
+
+      - name: upload windows artifact
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: etherfence-windows-x86_64
+          path: dist/etherfence-windows-x86_64.zip
+          if-no-files-found: error
+
+  release:
+    name: tag and create GitHub release
+    needs: [validate, verify-and-build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ needs.validate.outputs.sha }}
+          fetch-depth: 0
+
+      - name: re-validate tag and release absence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="v${{ needs.validate.outputs.version }}"
+          if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+            echo "::error::Local tag $tag already exists."
+            exit 1
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
+            echo "::error::Remote tag $tag already exists on origin."
+            exit 1
+          fi
+          if gh release view "$tag" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "::error::GitHub release $tag already exists."
+            exit 1
+          fi
+
+      - name: download linux artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: etherfence-linux-x86_64
+          path: dist-release
+
+      - name: download windows artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: etherfence-windows-x86_64
+          path: dist-release
+
+      - name: extract release notes from CHANGELOG
+        run: |
+          set -euo pipefail
+          version="${{ needs.validate.outputs.version }}"
+          version_re="$(printf '%s' "$version" | sed 's/\./\\./g')"
+          sed -n "/^## \[${version_re}\]/,/^## \[/p" CHANGELOG.md | sed '$d' > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "::error::Extracted release notes for $version are empty."
+            exit 1
+          fi
+
+      - name: create annotated tag
+        env:
+          GIT_AUTHOR_NAME: github-actions[bot]
+          GIT_AUTHOR_EMAIL: github-actions[bot]@users.noreply.github.com
+          GIT_COMMITTER_NAME: github-actions[bot]
+          GIT_COMMITTER_EMAIL: github-actions[bot]@users.noreply.github.com
+        run: |
+          set -euo pipefail
+          tag="v${{ needs.validate.outputs.version }}"
+          sha="${{ needs.validate.outputs.sha }}"
+          git tag -a "$tag" -m "EtherFence $tag" "$sha"
+          git push origin "$tag"
+
+      - name: create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="v${{ needs.validate.outputs.version }}"
+          gh release create "$tag" \
+            --repo "${{ github.repository }}" \
+            --title "EtherFence $tag" \
+            --notes-file release-notes.md \
+            dist-release/etherfence-linux-x86_64.tar.gz \
+            dist-release/etherfence-windows-x86_64.zip

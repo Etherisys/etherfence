@@ -320,21 +320,38 @@ Linux:
 
 ```sh
 cargo build --release -p etherfence-cli
-mkdir -p dist/etherfence-v0.2.4-linux-x86_64
-cp target/release/etherfence dist/etherfence-v0.2.4-linux-x86_64/
-tar -C dist -czf dist/etherfence-linux-x86_64.tar.gz etherfence-v0.2.4-linux-x86_64
+mkdir -p dist/etherfence-v0.2.5-linux-x86_64
+cp target/release/etherfence dist/etherfence-v0.2.5-linux-x86_64/
+tar -C dist -czf dist/etherfence-linux-x86_64.tar.gz etherfence-v0.2.5-linux-x86_64
 ```
 
 Windows PowerShell:
 
 ```powershell
 cargo build --release -p etherfence-cli
-New-Item -ItemType Directory -Force -Path dist/etherfence-v0.2.4-windows-x86_64 | Out-Null
-Copy-Item target/release/etherfence.exe dist/etherfence-v0.2.4-windows-x86_64/
-Compress-Archive -Path dist/etherfence-v0.2.4-windows-x86_64 -DestinationPath dist/etherfence-windows-x86_64.zip -Force
+New-Item -ItemType Directory -Force -Path dist/etherfence-v0.2.5-windows-x86_64 | Out-Null
+Copy-Item target/release/etherfence.exe dist/etherfence-v0.2.5-windows-x86_64/
+Compress-Archive -Path dist/etherfence-v0.2.5-windows-x86_64 -DestinationPath dist/etherfence-windows-x86_64.zip -Force
 ```
 
 GitHub Actions builds and uploads matching Linux `tar.gz` and Windows `zip` artifacts for CI runs.
+
+## Release automation
+
+Releases are cut with a manual `workflow_dispatch` GitHub Actions workflow
+(`.github/workflows/release.yml`), not by hand. A maintainer dispatches it
+with a target version:
+
+```sh
+gh workflow run release.yml --ref main -f version=0.2.5
+```
+
+It validates release state (main ref, semver version, `Cargo.toml`/`CHANGELOG.md`
+match, tag/release not already present), re-runs the checks above on Linux and
+Windows, builds both release artifacts, and creates the tag and GitHub release.
+It never mutates existing releases or tags, never force-pushes, and fails
+closed if release state is ambiguous. See `docs/release-automation.md` for
+details and `docs/release-checklist.md` for the manual fallback process.
 
 ## Development checks
 
