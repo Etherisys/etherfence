@@ -9,6 +9,57 @@ one opt-in experimental runtime component: an MCP stdio boundary proxy.
 EtherFence still has no daemon mode, shell hooks, command interception,
 terminal-command scanning, or network interception.
 
+## [0.4.1] - 2026-07-09
+
+### Added
+
+- Unicode/homograph hardening for the experimental MCP stdio proxy. Suspicious
+  Unicode is rejected during policy parsing or denied at runtime before it can
+  confuse exact policy matching, audit review, or operator interpretation.
+- Safe Unicode reason categories: `unicode_bidi_control_detected`,
+  `unicode_zero_width_detected`, `unicode_non_ascii_method`,
+  `unicode_non_ascii_tool`, and `unicode_suspicious_path_value`.
+
+### Changed
+
+- Version bumped to 0.4.1.
+- MCP proxy policy parsing now rejects policy names, server scopes, path-rule
+  names, tool guard keys, method guard keys, path keys, and referenced path-rule
+  names containing bidi controls, zero-width/invisible format characters, or
+  non-ASCII identifier text. Method allow/deny entries must be ASCII.
+- Runtime method checks deny client→server and server→client method names that
+  contain non-ASCII, bidi, or zero-width characters before normal method-policy
+  matching.
+- Runtime `tools/call` checks deny tool names that contain non-ASCII, bidi, or
+  zero-width characters before normal tool-policy matching.
+- Configured path guards deny guarded path/URI values containing bidi or
+  zero-width characters before lexical path normalization/root comparison.
+
+### Security notes
+
+- Existing v0.4.0 path-aware policy behavior, v0.3.1 bidirectional method
+  policy, `tools/call` policy, `tools/list` filtering, audit redaction, and
+  fail-closed batch behavior are preserved.
+- Audit and JSON-RPC denial diagnostics use safe Unicode reason categories and
+  redacted placeholders for Unicode-denied method/tool names and suspicious
+  audit-visible argument/param key names. Raw paths, URIs, prompt text, message
+  bodies, resource/file contents, secrets, tokens, full params, and
+  argument/param values are still not logged.
+- EtherFence does not fold Unicode confusables into equivalent ASCII strings,
+  does not implement locale-specific path equivalence, and does not add broad
+  DLP, content inspection, URL filtering, network interception, a daemon, an API
+  service, a control plane, shell hooks, terminal-command scanning, endpoint
+  agents, or cloud dependencies.
+
+### Migration / compatibility
+
+- Policy schema remains `ef-mcp-policy/v0.1`. Existing valid ASCII policies
+  parse and behave unchanged.
+- Policies or runtime messages that previously used non-ASCII MCP method/tool
+  names or non-ASCII policy identifiers are now rejected/denied by design. This
+  release intentionally does not support internationalized MCP method or tool
+  names.
+
 ## [0.4.0] - 2026-07-09
 
 ### Added

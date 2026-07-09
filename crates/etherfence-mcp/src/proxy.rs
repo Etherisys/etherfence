@@ -652,6 +652,11 @@ fn batch_denied_response(reason: &str) -> String {
 }
 
 fn denied_error_response(request_id: &Value, tool_name: &str, reason: &str) -> String {
+    let tool_name = if reason.starts_with("unicode_") {
+        "<unicode-denied-tool>"
+    } else {
+        tool_name
+    };
     json!({
         "jsonrpc": "2.0",
         "id": request_id,
@@ -672,6 +677,11 @@ fn denied_error_response(request_id: &Value, tool_name: &str, reason: &str) -> S
 /// request. The method name and reason are included in `data` for
 /// diagnostics.
 fn method_denied_error_response(request_id: &Value, method: &str, reason: &str) -> String {
+    let method = if reason.starts_with("unicode_") {
+        "<unicode-denied-method>"
+    } else {
+        method
+    };
     json!({
         "jsonrpc": "2.0",
         "id": request_id,
@@ -1080,6 +1090,65 @@ deny = ["filesystem.read_secret", "shell.run"]
         assert!(matches!(inspected.action, ClientAction::Deny { .. }));
         let audit = inspected.audit.expect("audit record");
         assert!(audit.reason.contains("default deny"));
+    }
+
+    #[test]
+    fn client_to_server_non_ascii_method_is_denied_before_matching() {
+        let inspected = inspect_client_line(
+            &policy(),
+            "default",
+            r#"{"jsonrpc":"2.0","id":15,"method":"tοols/call","params":{"name":"filesystem.read","pro\u202empt":"value"}}"#,
+        );
+        let ClientAction::Deny {
+            response: Some(response),
+        } = inspected.action
+        else {
+            panic!("expected Unicode method deny");
+        };
+        let json: Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(json["error"]["data"]["method"], "<unicode-denied-method>");
+        assert_eq!(json["error"]["data"]["reason"], "unicode_non_ascii_method");
+        assert!(!response.contains("tοols/call"));
+        let audit = inspected.audit.expect("audit record");
+        assert_eq!(audit.reason, "unicode_non_ascii_method");
+        assert_eq!(audit.method.as_deref(), Some("<unicode-denied-method>"));
+        assert_eq!(audit.param_keys, vec!["<unicode-denied-key>", "name"]);
+        let audit_line = serde_json::to_string(&audit).unwrap();
+        assert!(!audit_line.contains("pro\u{202E}mpt"));
+        assert!(!audit_line.contains("pro\\u202empt"));
+    }
+
+    #[test]
+    fn tools_call_tool_name_with_zero_width_or_bidi_is_denied() {
+        let zero_width_line = format!(
+            r#"{{"jsonrpc":"2.0","id":16,"method":"tools/call","params":{{"name":"filesystem.{}read","arguments":{{"sec\u202eret":"value"}}}}}}"#,
+            "\u{200B}"
+        );
+        for (line, reason) in [
+            (zero_width_line.as_str(), "unicode_zero_width_detected"),
+            (
+                r#"{"jsonrpc":"2.0","id":17,"method":"tools/call","params":{"name":"filesystem.\u202eread","arguments":{"sec\u202eret":"value"}}}"#,
+                "unicode_bidi_control_detected",
+            ),
+        ] {
+            let inspected = inspect_client_line(&policy(), "default", line);
+            let ClientAction::Deny {
+                response: Some(response),
+            } = inspected.action
+            else {
+                panic!("expected Unicode tool deny");
+            };
+            let json: Value = serde_json::from_str(&response).unwrap();
+            assert_eq!(json["error"]["data"]["tool"], "<unicode-denied-tool>");
+            assert_eq!(json["error"]["data"]["reason"], reason);
+            let audit = inspected.audit.expect("audit record");
+            assert_eq!(audit.reason, reason);
+            assert_eq!(audit.tool.as_deref(), Some("<unicode-denied-tool>"));
+            assert_eq!(audit.argument_keys, vec!["<unicode-denied-key>"]);
+            let audit_line = serde_json::to_string(&audit).unwrap();
+            assert!(!audit_line.contains("sec\u{202E}ret"));
+            assert!(!audit_line.contains("sec\\u202eret"));
+        }
     }
 
     #[test]
@@ -1613,6 +1682,32 @@ deny = ["sampling/createMessage"]
         let audit = inspected.audit.expect("audit");
         assert_eq!(audit.decision, "allow");
         assert!(audit.reason.contains("wildcard"));
+    }
+
+    #[test]
+    fn server_to_client_non_ascii_method_is_denied_before_forwarding() {
+        let inspected = inspect_server_line(
+            &method_policy(),
+            "default",
+            &mut TrackedRequests::default(),
+            r#"{"jsonrpc":"2.0","id":"srv-unicode","method":"rοots/list","params":{"cursor":"secret cursor"}}"#,
+        );
+        let ServerAction::Deny {
+            response_to_server: Some(response),
+        } = inspected.action
+        else {
+            panic!("expected server-to-client Unicode method denial");
+        };
+        let json: Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(json["error"]["data"]["method"], "<unicode-denied-method>");
+        assert_eq!(json["error"]["data"]["reason"], "unicode_non_ascii_method");
+        assert!(!response.contains("rοots/list"));
+        assert!(!response.contains("secret cursor"));
+        let audit = inspected.audit.expect("audit");
+        assert_eq!(audit.direction.as_deref(), Some("server_to_client"));
+        assert_eq!(audit.method.as_deref(), Some("<unicode-denied-method>"));
+        assert_eq!(audit.reason, "unicode_non_ascii_method");
+        assert_eq!(audit.param_keys, vec!["cursor"]);
     }
 
     #[test]

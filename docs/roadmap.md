@@ -263,6 +263,29 @@
   shell hooks, terminal-command scanning, endpoint agent, generic policy
   language, content inspection, or DLP engine
 
+## v0.4.1 - MCP proxy Unicode/homograph hardening
+
+- Narrow Unicode hygiene module for the MCP stdio proxy; no broad confusable
+  folding or locale-specific path equivalence
+- Policy parsing rejects bidi controls, zero-width/invisible format characters,
+  and non-ASCII identifier text in policy names, server scopes, path-rule names,
+  tool/method guard keys, and path keys
+- Method allow/deny entries must be ASCII; runtime client→server and
+  server→client method names with non-ASCII, bidi, or zero-width characters are
+  denied before exact policy matching
+- Runtime `tools/call` tool names with non-ASCII, bidi, or zero-width
+  characters are denied before exact tool-policy matching
+- Configured path guards deny guarded path/URI values with bidi or zero-width
+  characters before lexical normalization and root comparison
+- Safe audit/error categories for Unicode denials, with redacted placeholders
+  for Unicode-denied method/tool names and no raw paths/URIs
+- Existing v0.4.0 path-aware policy behavior, v0.3.1 bidirectional method
+  policy, tools/call policy, tools/list filtering, fail-closed batches, schema
+  compatibility, and stdio-only scope are preserved
+- Not in scope: broad DLP/content inspection, URL filtering, network
+  interception, daemon/control plane/API service, shell hooks, terminal-command
+  scanning, endpoint agent, cloud dependency, or release tag creation
+
 ## v0.2.x ideas
 
 - Expand tested config schemas and platform paths

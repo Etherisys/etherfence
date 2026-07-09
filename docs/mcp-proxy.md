@@ -3,8 +3,8 @@
 `etherfence mcp-proxy` is the first prototype in the EtherFence v0.2.x+
 runtime-control line. It is a minimal MCP **stdio** boundary proxy
 that sits between an MCP client and an MCP server, inspects every
-client→server JSON-RPC method, enforces method-level, tool-level, and
-configured local path-aware argument/resource policy, filters tool
+client→server JSON-RPC method, enforces method-level, tool-level, configured
+local path-aware argument/resource policy, and Unicode/homograph hygiene, filters tool
 advertisements, and audits decisions deterministically using a small TOML
 policy.
 
@@ -46,6 +46,10 @@ The proxy:
    receive an error back toward the server; denied notifications are dropped.
 7. Applies configured v0.4.0 path guards to selected local path-like
    `tools/call` arguments and `resources/read` URI params before forwarding.
+8. Applies v0.4.1 Unicode/homograph hygiene before policy matching and path
+   comparison: suspicious Unicode in MCP method names, tool names, policy
+   identifiers, path guard keys, and guarded path-like values is rejected or
+   denied with safe reason categories.
 
 Example, wrapping a filesystem MCP server:
 
@@ -163,6 +167,42 @@ the `deny` list. Use this with caution.
 Per-server method scoping follows the same precedence as tool rules:
 global deny, server deny, server allow, global allow, then default deny.
 
+### Unicode/homograph hygiene (v0.4.1)
+
+v0.4.1 adds narrow Unicode hardening for MCP policy/runtime names and guarded
+path-like values. EtherFence does **not** normalize or fold Unicode
+confusables into ASCII. It detects suspicious Unicode and rejects/denies it
+instead, preserving exact-match policy semantics.
+
+Policy parsing rejects:
+
+- policy names, server-scope keys, path-rule names, referenced path-rule names,
+  tool guard keys, method guard keys, and path/URI key names containing bidi
+  controls, zero-width/invisible format characters, or non-ASCII identifier
+  text;
+- method allow/deny entries containing any non-ASCII character;
+- tool allow/deny entries containing non-ASCII, bidi, or zero-width characters.
+
+Runtime enforcement denies before normal policy matching:
+
+- client→server and server→client method names containing non-ASCII, bidi, or
+  zero-width characters;
+- `tools/call` tool names containing non-ASCII, bidi, or zero-width characters;
+- guarded path/URI values containing bidi or zero-width characters.
+
+Safe audit/error reason categories include
+`unicode_bidi_control_detected`, `unicode_zero_width_detected`,
+`unicode_non_ascii_method`, `unicode_non_ascii_tool`, and
+`unicode_suspicious_path_value`. Unicode-denied method/tool names are redacted
+to placeholders in audit/error metadata, and suspicious Unicode argument/param
+key names are logged as `<unicode-denied-key>`, so suspicious text is not
+reintroduced into operator review surfaces. Raw paths and URIs remain excluded
+from audit.
+
+Known Unicode limitations: v0.4.1 does not implement broad TR39 confusable
+mapping, locale-specific path equivalence, filesystem canonicalization,
+internationalized MCP method/tool-name support, content inspection, or DLP.
+
 ### Path-aware argument/resource policy (v0.4.0)
 
 v0.4.0 adds optional local path guards under the existing
@@ -233,6 +273,9 @@ Fail-closed cases:
   (fail closed); the proxy does not unpack mixed batches.
 - A configured path-like argument or URI param that is malformed, outside the
   allow roots, inside a deny root, or a non-`file://` URI -> denied before
+  forwarding.
+- A method/tool name with non-ASCII, bidi, or zero-width characters, or a
+  guarded path-like value with bidi/zero-width characters -> denied before
   forwarding.
 
 ## `tools/list` filtering
@@ -355,17 +398,20 @@ Fields:
 - `request_id_type`: JSON type of the request id (`number`, `string`,
   `bool`, `object`, `array`, `null`, or `missing`) (v0.3.0)
 - `tool`: tool name for tool-call decisions when it could be extracted
-- `argument_keys`: sorted tool-call argument **key names only**
+- `argument_keys`: sorted tool-call argument **key names only**; keys containing
+  bidi controls, zero-width/invisible characters, or non-ASCII text are logged
+  as `<unicode-denied-key>` rather than raw text
 - `param_keys`: sorted top-level `params` key names for method decisions
-  (v0.3.0)
+  (v0.3.0); the same Unicode key redaction is applied
 - `original_count`: original advertised tool count for `tools_list_filtered`
 - `filtered_count`: remaining advertised tool count for `tools_list_filtered`
 - `allowed_tools`: allowed tool names retained in a filtered `tools/list`
   response
-- `path_rule`, `path_key`, `path_classification`: optional v0.4.0 safe
-  path-guard metadata; classification is a category such as
-  `inside_allowed_root`, `outside_allowed_roots`, `inside_denied_root`, or
-  `path_parse_error`, never the raw path or URI
+- `path_rule`, `path_key`, `path_classification`: optional v0.4.0/v0.4.1 safe
+  metadata for configured path guards only. Classification is a category such
+  as `inside_allowed_root`, `outside_allowed_roots`, `inside_denied_root`,
+  `path_parse_error`, or `unicode_suspicious_path_value`, never the raw path or
+  URI
 - `decision`: `allow`, `deny`, or `policy_error`
 - `reason`: the policy or fail-safe reason for the decision
 

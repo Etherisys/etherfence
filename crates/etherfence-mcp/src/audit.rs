@@ -8,6 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::policy::Decision;
 use crate::policy::McpPolicyFile;
+use crate::unicode::inspect_policy_identifier;
 
 /// One JSONL audit record. Request metadata is redacted before it gets here:
 /// only tool-call argument key names and top-level params key names are
@@ -55,7 +56,11 @@ impl AuditRecord {
             method: Some("tools/call".to_string()),
             request_id,
             request_id_type,
-            tool: tool.map(str::to_string),
+            tool: if reason.starts_with("unicode_") {
+                Some("<unicode-denied-tool>".to_string())
+            } else {
+                tool.map(str::to_string)
+            },
             argument_keys,
             param_keys: Vec::new(),
             original_count: None,
@@ -120,7 +125,11 @@ impl AuditRecord {
             policy: Some(policy_name.to_string()),
             server: Some(server_name.to_string()),
             direction: Some(direction.to_string()),
-            method: Some(method.to_string()),
+            method: Some(if reason.starts_with("unicode_") {
+                "<unicode-denied-method>".to_string()
+            } else {
+                method.to_string()
+            }),
             request_id,
             request_id_type,
             tool: None,
@@ -342,7 +351,7 @@ impl AuditLog {
 pub fn redacted_argument_keys(arguments: Option<&Value>) -> Vec<String> {
     match arguments {
         Some(Value::Object(map)) => {
-            let mut keys: Vec<String> = map.keys().cloned().collect();
+            let mut keys: Vec<String> = map.keys().map(|key| redacted_audit_key(key)).collect();
             keys.sort();
             keys
         }
@@ -357,11 +366,19 @@ pub fn redacted_argument_keys(arguments: Option<&Value>) -> Vec<String> {
 pub fn redacted_param_keys(params: Option<&Value>) -> Vec<String> {
     match params {
         Some(Value::Object(map)) => {
-            let mut keys: Vec<String> = map.keys().cloned().collect();
+            let mut keys: Vec<String> = map.keys().map(|key| redacted_audit_key(key)).collect();
             keys.sort();
             keys
         }
         _ => Vec::new(),
+    }
+}
+
+fn redacted_audit_key(key: &str) -> String {
+    if inspect_policy_identifier(key).is_some() {
+        "<unicode-denied-key>".to_string()
+    } else {
+        key.to_string()
     }
 }
 
@@ -425,6 +442,36 @@ mod tests {
     }
 
     #[test]
+    fn argument_keys_redact_unicode_key_names() {
+        let bidi_key = "sec\u{202E}ret";
+        let zero_width_key = format!("pa{}th", "\u{200B}");
+        let non_ascii_key = "secre\u{0442}";
+        let arguments = json!({
+            "path": "/home/user/notes.txt",
+            bidi_key: "bidi",
+            zero_width_key.as_str(): "zero-width",
+            non_ascii_key: "non-ascii",
+        });
+
+        let keys = redacted_argument_keys(Some(&arguments));
+        assert_eq!(
+            keys,
+            vec![
+                "<unicode-denied-key>",
+                "<unicode-denied-key>",
+                "<unicode-denied-key>",
+                "path",
+            ]
+        );
+        let line = serde_json::to_string(&keys).unwrap();
+        assert!(!line.contains(bidi_key));
+        assert!(!line.contains(&zero_width_key));
+        assert!(!line.contains(non_ascii_key));
+        assert!(!line.contains("sec\\u202eret"));
+        assert!(!line.contains("pa\\u200bth"));
+    }
+
+    #[test]
     fn argument_keys_handle_missing_or_non_object() {
         assert!(redacted_argument_keys(None).is_empty());
         assert!(redacted_argument_keys(Some(&json!("string"))).is_empty());
@@ -439,6 +486,36 @@ mod tests {
         });
         let keys = redacted_param_keys(Some(&params));
         assert_eq!(keys, vec!["prompt", "uri"]);
+    }
+
+    #[test]
+    fn param_keys_redact_unicode_key_names() {
+        let bidi_key = "pro\u{202E}mpt";
+        let zero_width_key = format!("u{}ri", "\u{200B}");
+        let non_ascii_key = "ur\u{0456}";
+        let params = json!({
+            "uri": "file:///etc/passwd",
+            bidi_key: "bidi",
+            zero_width_key.as_str(): "zero-width",
+            non_ascii_key: "non-ascii",
+        });
+
+        let keys = redacted_param_keys(Some(&params));
+        assert_eq!(
+            keys,
+            vec![
+                "<unicode-denied-key>",
+                "<unicode-denied-key>",
+                "<unicode-denied-key>",
+                "uri",
+            ]
+        );
+        let line = serde_json::to_string(&keys).unwrap();
+        assert!(!line.contains(bidi_key));
+        assert!(!line.contains(&zero_width_key));
+        assert!(!line.contains(non_ascii_key));
+        assert!(!line.contains("pro\\u202empt"));
+        assert!(!line.contains("u\\u200bri"));
     }
 
     #[test]

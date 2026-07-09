@@ -9,6 +9,7 @@
 mod audit;
 mod policy;
 mod proxy;
+mod unicode;
 
 pub use audit::{redacted_argument_keys, redacted_param_keys, AuditLog, AuditRecord};
 pub use policy::{
