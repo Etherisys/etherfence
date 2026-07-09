@@ -110,6 +110,17 @@ component. Its trust boundary assumptions:
   `ef-mcp-policy/v0.1`-compatible, and experimental/pre-alpha. The
   `[methods]` section is optional; existing v0.2.x policies remain
   syntactically valid but will see stricter runtime behavior.
+- v0.4.0 adds local path-aware argument/resource guards for the stdio proxy.
+  Operators can bind exact tool argument keys or `resources/read` URI param
+  keys to named allow/deny root rules. The check is lexical and local-first:
+  `.`/`..` segments are collapsed before comparison, deny roots override allow
+  roots, malformed or relative configured path-like values fail closed, and
+  guarded non-`file://` URIs are denied. The proxy still does not inspect file
+  contents, resource contents, prompt/message bodies, terminal commands, shell
+  commands, network traffic, or arbitrary URLs. Audit records only safe
+  metadata: decision, reason category, method/direction/tool name, key names,
+  path rule name, and redacted path classification. Full paths and URIs are not
+  logged.
 
 ## Path handling and Semgrep path-traversal triage
 

@@ -1,0 +1,19 @@
+schema_version = "ef-mcp-policy/v0.1"
+name = "mcp-resources-project-only"
+
+# v0.4.0 example: allow MCP resource reads, but only file:// URIs that
+# resolve lexically under the configured project root.
+[methods]
+allow = ["tools/list", "tools/call", "resources/list", "resources/read"]
+deny = ["sampling/createMessage", "elicitation/create"]
+
+[tools]
+allow = ["filesystem.read"]
+
+[path_rules.project_readonly]
+allow_roots = ["/home/user/project"]
+deny_roots = ["/home/user/project/.git", "/home/user/project/secrets"]
+
+[methods."resources/read".params]
+uri_keys = ["uri"]
+path_rule = "project_readonly"

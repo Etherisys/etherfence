@@ -4,7 +4,7 @@ EtherFence is an open-source **AI Agent Security Posture & Runtime Control** pro
 
 One-line idea: **Tirith protects terminal commands; EtherFence governs agent access.**
 
-Status: **pre-alpha**. The v0.1.x foundation is scan-only posture discovery with remediation guidance, CI posture gates, baseline/diff support, versioned TOML policy profiles, built-in policy profiles, direct `scan --policy-profile <name>` selection, conservative Linux/Windows discovery helpers, hardened fixture-backed config parsing, SARIF 2.1.0 export, and Linux/Windows release packaging. v0.2.x keeps all of that unchanged and adds one **experimental** runtime component: a minimal MCP stdio boundary proxy (`etherfence mcp-proxy`). EtherFence is not production-ready.
+Status: **pre-alpha**. The v0.1.x foundation is scan-only posture discovery with remediation guidance, CI posture gates, baseline/diff support, versioned TOML policy profiles, built-in policy profiles, direct `scan --policy-profile <name>` selection, conservative Linux/Windows discovery helpers, hardened fixture-backed config parsing, SARIF 2.1.0 export, and Linux/Windows release packaging. v0.2.x and later keep all of that unchanged and add one **experimental** runtime component: a minimal local MCP stdio boundary proxy (`etherfence mcp-proxy`). EtherFence is not production-ready.
 
 ## What the scanner does (unchanged from v0.1.8)
 
@@ -32,14 +32,14 @@ Initial inventory targets:
 
 The parser intentionally uses conservative path discovery and fixture-backed config parsing. Missing files are skipped gracefully, malformed JSON/TOML config files are reported instead of aborting the scan, and unknown extra config fields are ignored. Fixture coverage exercises common shapes (minimal configs, multiple MCP servers, no MCP servers, malformed files, Linux- and Windows-style paths), but EtherFence does not claim complete support for every agent config format or install location. Findings are posture hints, not proof of exploitability.
 
-## Experimental: MCP boundary proxy (v0.2.4/v0.3.1)
+## Experimental: MCP boundary proxy (v0.2.4/v0.4.0)
 
 `etherfence mcp-proxy` is an **experimental prototype** that starts the v0.2
 runtime-control line. v0.3.0 hardened it from tool-call-only enforcement into
 method-level MCP/JSON-RPC policy enforcement; v0.3.1 extends that
-method-policy check to server→client MCP requests initiated by the server. It is a minimal MCP stdio
+method-policy check to server→client MCP requests initiated by the server; v0.4.0 adds local path-aware argument/resource guards. It is a minimal MCP stdio
 boundary proxy that sits between an MCP client and an MCP server, inspects
-client→server JSON-RPC methods and server→client MCP request methods, enforces method-level and tool-level
+client→server JSON-RPC methods and server→client MCP request methods, enforces method-level, tool-level, and configured path-like argument/resource constraints,
 allow/deny policy, and audits decisions deterministically using a small TOML
 policy:
 
@@ -57,8 +57,10 @@ Proxy policies use schema `ef-mcp-policy/v0.1` (see
 `examples/policies/mcp-github-readonly.toml`,
 `examples/policies/mcp-strict-tools-only.toml`,
 `examples/policies/mcp-readonly.toml`,
-`examples/policies/mcp-resources-denied.toml`, and
-`examples/policies/mcp-sampling-denied.toml`):
+`examples/policies/mcp-resources-denied.toml`,
+`examples/policies/mcp-sampling-denied.toml`,
+`examples/policies/mcp-filesystem-project-readonly.toml`, and
+`examples/policies/mcp-resources-project-only.toml`):
 
 ```toml
 schema_version = "ef-mcp-policy/v0.1"
@@ -71,6 +73,14 @@ deny = ["filesystem.read_secret", "shell.run"]
 [servers.filesystem.tools]
 allow = ["filesystem.read"]
 deny = ["filesystem.read_secret", "filesystem.write"]
+
+[path_rules.project_readonly]
+allow_roots = ["/home/user/project"]
+deny_roots = ["/home/user/project/.git", "/home/user/project/secrets"]
+
+[tools."filesystem.read".arguments]
+path_keys = ["path"]
+path_rule = "project_readonly"
 ```
 
 Behavior:
@@ -98,6 +108,12 @@ Behavior:
   deny, server-specific allow, global allow, then default deny.
   `--server-name <name>` selects the server scope and defaults to
   `default` when omitted.
+- v0.4.0 path guards can additionally mark specific `tools/call` argument
+  keys or `resources/read` URI params as path-like and bind them to explicit
+  allow/deny roots. Deny roots win over allow roots. A request is default-denied
+  only when a path guard is configured for that key; malformed paths, traversal
+  outside the allowed roots, denied roots, and non-`file://` URIs are denied
+  before forwarding.
 - Denied method or tool calls receive a safe JSON-RPC error and are never
   forwarded to the server.
 - `tools/list` responses for tracked `tools/list` requests are filtered with
@@ -107,16 +123,17 @@ Behavior:
 - The proxy **fails closed**: if the policy is missing or invalid, the MCP
   server is never started.
 - `--audit-log` appends JSONL decision records with timestamp, server name,
-  method, direction, decision, reason, request id type, and policy reason. Only
-  argument/param key names are logged — argument/param values (and therefore
-  secrets, prompt text, resource content, and message bodies) never reach the
-  audit log. Tool-list filter events record counts and allowed tool names, not
-  full schemas.
+  method, direction, decision, reason, request id type, policy reason, optional
+  path rule/key/classification metadata, and safe argument/param key names. It
+  never logs full paths, prompt text, message bodies, resource/file contents,
+  secrets, tokens, full params, or argument/param values. Tool-list filter
+  events record counts and allowed tool names, not full schemas.
 
 The proxy is stdio-only, exact-match-only, and covers client→server
 method-level + tool-level policy, server→client method policy for
-server-initiated MCP requests, plus `tools/list` advertisement filtering.
-It is not production-ready. See `docs/mcp-proxy.md` for details and limitations,
+server-initiated MCP requests, configured local path-aware argument/resource
+policy, plus `tools/list` advertisement filtering. It is not production-ready
+and is not a general content-inspection or DLP engine. See `docs/mcp-proxy.md` for details and limitations,
 and `docs/mcp-clients.md`
 plus `docs/examples/*.json` for client configuration templates. `docs/mcp-compatibility-matrix.md` records checked compatibility evidence and `docs/mcp-real-server-test-template.md` explains optional maintainer-run real-server smoke tests.
 

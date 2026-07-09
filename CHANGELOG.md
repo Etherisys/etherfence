@@ -9,6 +9,53 @@ one opt-in experimental runtime component: an MCP stdio boundary proxy.
 EtherFence still has no daemon mode, shell hooks, command interception,
 terminal-command scanning, or network interception.
 
+## [0.4.0] - 2026-07-09
+
+### Added
+
+- Local path-aware MCP argument/resource policy in `etherfence mcp-proxy` for
+  configured `tools/call` argument keys and `resources/read` URI params.
+- Optional `[path_rules.<name>]` sections under `ef-mcp-policy/v0.1` with
+  explicit `allow_roots` and `deny_roots`; deny roots take precedence over
+  allow roots.
+- Optional per-tool guards such as `[tools."filesystem.read".arguments]` with
+  `path_keys`, and per-method guards such as
+  `[methods."resources/read".params]` with `uri_keys`.
+- Redacted path audit metadata: `path_rule`, `path_key`, and
+  `path_classification` values such as `inside_allowed_root`,
+  `outside_allowed_roots`, `inside_denied_root`, and `path_parse_error`.
+- Example policies `mcp-filesystem-project-readonly.toml` and
+  `mcp-resources-project-only.toml`.
+
+### Changed
+
+- Version bumped to 0.4.0.
+- Requests with configured path-like keys are denied before forwarding when the
+  value is malformed, missing, non-string, relative, outside allowed roots,
+  under denied roots, or a guarded non-`file://` URI.
+- `file://` resource URIs are converted to local paths and lexically normalized
+  before root comparison. The proxy does not resolve symlinks or inspect file
+  contents.
+
+### Security notes
+
+- Existing v0.3.1 bidirectional method policy, `tools/call` allow/deny policy,
+  tracked `tools/list` response filtering, fail-closed batch behavior, and
+  audit redaction are preserved.
+- Audit continues to omit full paths, URIs, prompt text, message bodies,
+  resource/file contents, secrets, tokens, argument values, and full params.
+- v0.4.0 remains local-first and stdio-only. It does not add a server/control
+  plane, daemon, API service, network interception, shell hooks,
+  terminal-command scanning, endpoint agent, cloud dependency, generic policy
+  language, content inspection, or DLP engine.
+
+### Migration / compatibility
+
+- Policy schema remains `ef-mcp-policy/v0.1`; existing v0.3.1 policies without
+  path guards parse and behave as before.
+- Default deny for paths applies only when an operator explicitly configures a
+  path guard for that exact tool or method key.
+
 ## [0.3.1] - 2026-07-09
 
 ### Added
