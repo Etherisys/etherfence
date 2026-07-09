@@ -37,8 +37,13 @@ pub const MAX_BASELINE_FILE_BYTES: u64 = 25 * 1024 * 1024;
 /// explicit base directory and reject traversal before it ever reaches
 /// this helper.
 pub fn read_bounded_text_file(path: &Path, max_bytes: u64) -> io::Result<String> {
-    let file = fs::File::open(path)?;
-    let metadata = file.metadata()?;
+    // Checked via `fs::metadata` before `File::open` (rather than via
+    // `File::open` + `File::metadata`) so that non-regular paths are
+    // rejected with a consistent `InvalidInput` error on every platform.
+    // On Windows, `File::open`-ing a directory can itself fail with a
+    // platform-specific error (e.g. permission denied) before an
+    // `is_file()` check on the opened handle is ever reached.
+    let metadata = fs::metadata(path)?;
     if !metadata.is_file() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -46,6 +51,7 @@ pub fn read_bounded_text_file(path: &Path, max_bytes: u64) -> io::Result<String>
         ));
     }
 
+    let file = fs::File::open(path)?;
     let read_limit = max_bytes.saturating_add(1);
     let mut buf = Vec::new();
     file.take(read_limit).read_to_end(&mut buf)?;
