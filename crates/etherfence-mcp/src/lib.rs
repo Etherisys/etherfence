@@ -13,9 +13,10 @@ mod unicode;
 
 pub use audit::{redacted_argument_keys, redacted_param_keys, AuditLog, AuditRecord};
 pub use policy::{
-    decide_method, decide_tool_call, is_always_allowed_method, load_mcp_policy, parse_mcp_policy,
-    Decision, McpPolicyFile, MethodRules, PolicyDecision, ServerPolicy, ToolRules,
-    ALWAYS_ALLOWED_METHODS, DEFAULT_ALLOWED_METHODS, SUPPORTED_MCP_POLICY_SCHEMA_VERSION,
+    decide_method, decide_tool_argument_paths, decide_tool_call, is_always_allowed_method,
+    load_mcp_policy, parse_mcp_policy, Decision, McpPolicyFile, MethodRules, PolicyDecision,
+    ServerPolicy, ToolRules, ALWAYS_ALLOWED_METHODS, DEFAULT_ALLOWED_METHODS,
+    SUPPORTED_MCP_POLICY_SCHEMA_VERSION,
 };
 pub use proxy::exit_code;
 pub use proxy::{

@@ -1,0 +1,26 @@
+# Example EtherFence MCP proxy policy: strict method-only, explicit form.
+#
+# Unlike mcp-strict-tools-only.toml (which relies on the built-in default of
+# "only tools/list and tools/call" when no [methods] section is present),
+# this policy spells out every known non-tool method as an explicit deny so
+# the allowed method surface is visible directly in the policy file and
+# survives future built-in-default changes.
+schema_version = "ef-mcp-policy/v0.1"
+name = "strict-method-only"
+
+[methods]
+allow = ["tools/list", "tools/call"]
+deny = [
+  "resources/list",
+  "resources/read",
+  "prompts/list",
+  "prompts/get",
+  "completion/complete",
+  "roots/list",
+  "sampling/createMessage",
+  "elicitation/create",
+]
+
+[tools]
+allow = ["filesystem.read", "filesystem.list"]
+deny = ["filesystem.write", "filesystem.delete", "shell.run"]

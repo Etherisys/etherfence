@@ -286,6 +286,29 @@
   interception, daemon/control plane/API service, shell hooks, terminal-command
   scanning, endpoint agent, cloud dependency, or release tag creation
 
+## v0.5.0 - MCP proxy compatibility and smoke-test release
+
+- Fixture-backed compatibility smoke tests added for `resources/list` allow
+  and deny by method policy, alongside existing `initialize`, `tools/list`,
+  `tools/call` allow/deny, `resources/read` allow/deny, server→client
+  sampling/roots/elicitation policy behavior, and malformed/batch fail-closed
+  coverage
+- Optional `ETHERFENCE_REAL_MCP_POLICY` environment variable lets maintainers
+  point the optional real-server smoke test at a specific policy file instead
+  of the built-in compatibility policy; remains read-only and skipped by
+  default in CI (gated by `ETHERFENCE_REAL_MCP_CMD`)
+- New example policies: `mcp-filesystem-project-readonly-hardened.toml`
+  (project-root read-only with `deny_roots` expanded to common
+  credential-like paths) and `mcp-strict-method-only.toml` (explicit
+  `[methods]` allow/deny restricted to `tools/list` and `tools/call`)
+- Validation tests confirming the new example policies parse and enforce as
+  documented
+- `docs/mcp-compatibility-matrix.md` documents explicitly what MCP stdio
+  flows are tested and what remains untested, and states that compatibility
+  evidence is not production-readiness certification
+- No new enforcement semantics, schema changes, or runtime behavior changes;
+  proxy remains stdio-only, exact-match, experimental/pre-alpha
+
 ## v0.2.x ideas
 
 - Expand tested config schemas and platform paths

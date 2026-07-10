@@ -100,6 +100,9 @@ VS Code MCP settings may be nested under `mcp.servers`. Start from `docs/example
 
 - `examples/policies/mcp-filesystem-readonly.toml` demonstrates global deny plus `--server-name filesystem` server-scoped read-only allow rules.
 - `examples/policies/mcp-github-readonly.toml` demonstrates global deny plus `--server-name github` server-scoped read-only allow rules. GitHub MCP tool names vary; treat this as a template and verify exact names with your server's `tools/list` output.
+- `examples/policies/mcp-filesystem-project-readonly.toml` and `examples/policies/mcp-filesystem-project-readonly-hardened.toml` demonstrate path-aware, project-root-scoped read access; the hardened variant adds `deny_roots` entries for common credential-like paths (`.git`, `.env`, `secrets`, `.ssh`, `.aws`, `.npmrc`, `.netrc`, `.pypirc`, `credentials`, `id_rsa`).
+- `examples/policies/mcp-resources-project-only.toml` demonstrates a project-root-scoped `resources/read` guard for `file://` URIs.
+- `examples/policies/mcp-strict-method-only.toml` demonstrates an explicit `[methods]` allow/deny list that only allows `tools/list` and `tools/call`, as an auditable alternative to relying on the built-in default.
 
 ## Optional real-server smoke test
 
@@ -113,6 +116,8 @@ ETHERFENCE_REAL_MCP_CMD='["/absolute/path/to/server","--arg","value"]' \
 ```
 
 Using a JSON array avoids shell parsing inside the test harness. Do not include shell metacharacters expecting them to be interpreted; pass each argument as its own JSON string.
+
+Optionally set `ETHERFENCE_REAL_MCP_POLICY` to a policy file path (for example, one of the example policies above) to exercise that policy against the real server instead of the built-in compatibility policy. See `docs/mcp-real-server-test-template.md` for the full walkthrough. Both env vars are optional and this test is skipped by default in CI; passing it is compatibility evidence for the exercised server/policy combination, not production-readiness certification.
 
 ## Compatibility matrix
 

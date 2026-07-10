@@ -914,7 +914,22 @@ fn optional_real_mcp_stdio_smoke_test() {
         .expect("ETHERFENCE_REAL_MCP_CMD must be valid UTF-8 JSON");
     let server_command =
         parse_real_mcp_command(&command_json).expect("ETHERFENCE_REAL_MCP_CMD JSON argv array");
-    let policy = write_temp_policy("real-server", COMPAT_POLICY);
+    // Optional maintainer-supplied policy path. Falls back to the deterministic
+    // compatibility policy used by the fake-server tests so this smoke test
+    // does not require a second env var to run. Only the fallback temp file is
+    // ever deleted; a maintainer-supplied policy path is left untouched.
+    let (policy, temp_policy) = match std::env::var_os("ETHERFENCE_REAL_MCP_POLICY") {
+        Some(policy_path) => (PathBuf::from(policy_path), None),
+        None => {
+            let temp = write_temp_policy("real-server", COMPAT_POLICY);
+            (temp.clone(), Some(temp))
+        }
+    };
+    assert!(
+        policy.exists(),
+        "ETHERFENCE_REAL_MCP_POLICY path does not exist: {}",
+        policy.display()
+    );
     let audit_log = temp_path("real-server-audit", "jsonl");
     let run = run_proxy_with_command_for_server(
         &policy,
@@ -940,7 +955,9 @@ fn optional_real_mcp_stdio_smoke_test() {
         String::from_utf8_lossy(&run.output.stdout)
     );
 
-    let _ = std::fs::remove_file(&policy);
+    if let Some(temp_policy) = temp_policy {
+        let _ = std::fs::remove_file(&temp_policy);
+    }
     let _ = std::fs::remove_file(&run.audit_log);
 }
 
@@ -1432,6 +1449,74 @@ fn proxy_allowed_resources_read_is_forwarded() {
     let audit = std::fs::read_to_string(&run.audit_log).expect("audit log");
     assert!(audit.contains("\"resources/read\""));
     assert!(audit.contains("\"allow\""));
+
+    let _ = std::fs::remove_file(&policy);
+    let _ = std::fs::remove_file(&run.server_log);
+    let _ = std::fs::remove_file(&run.audit_log);
+}
+
+#[test]
+fn proxy_allowed_resources_list_is_forwarded() {
+    let policy = write_temp_policy("allow-res-list", METHOD_POLICY);
+    let run = run_proxy_with_input(
+        "allow-res-list",
+        &policy,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26"}}"#,
+            r#"{"jsonrpc":"2.0","id":2,"method":"resources/list","params":{}}"#,
+        ],
+    );
+    assert!(
+        run.output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&run.output.stderr)
+    );
+    let lines = stdout_json_lines(&run.output);
+
+    // resources/list reached the server and got a response.
+    let resp = lines
+        .iter()
+        .find(|l| l["id"] == 2)
+        .expect("resources/list response");
+    assert_eq!(resp["result"]["echo_method"], "resources/list");
+
+    let received = std::fs::read_to_string(&run.server_log).expect("server log");
+    assert!(received.contains("resources/list"));
+
+    let audit = std::fs::read_to_string(&run.audit_log).expect("audit log");
+    assert!(audit.contains("\"resources/list\""));
+    assert!(audit.contains("\"allow\""));
+
+    let _ = std::fs::remove_file(&policy);
+    let _ = std::fs::remove_file(&run.server_log);
+    let _ = std::fs::remove_file(&run.audit_log);
+}
+
+#[test]
+fn proxy_denied_resources_list_not_forwarded() {
+    // TEST_POLICY has no [methods] section — built-in default allows only
+    // tools/list and tools/call, so resources/list is denied by default.
+    let policy = write_temp_policy("deny-res-list", TEST_POLICY);
+    let run = run_proxy_with_input(
+        "deny-res-list",
+        &policy,
+        &[r#"{"jsonrpc":"2.0","id":1,"method":"resources/list","params":{}}"#],
+    );
+    assert!(
+        run.output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&run.output.stderr)
+    );
+    let lines = stdout_json_lines(&run.output);
+    let denied = lines
+        .iter()
+        .find(|l| l["id"] == 1)
+        .expect("denied resources/list response");
+    assert_eq!(denied["error"]["code"], -32000);
+    assert_eq!(denied["error"]["data"]["method"], "resources/list");
+
+    let received = std::fs::read_to_string(&run.server_log).unwrap_or_default();
+    assert!(!received.contains("resources/list"));
 
     let _ = std::fs::remove_file(&policy);
     let _ = std::fs::remove_file(&run.server_log);

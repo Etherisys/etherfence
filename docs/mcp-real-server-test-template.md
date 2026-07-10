@@ -4,6 +4,12 @@ Use this template when you want to add a real stdio MCP server row to `docs/mcp-
 
 This is optional maintainer validation. Normal CI remains deterministic and uses only the checked-in fake MCP server fixture. Do not use this workflow to add daemon mode, HTTP/SSE transport, network interception, shell hooks, terminal-command scanning, wildcard/prefix/regex matching, or new enforcement semantics.
 
+Running this test successfully is compatibility evidence for the specific
+server/version/flow you exercised. It is **not** production-readiness
+certification, and it does not extend to server behavior, tool/resource names,
+or flows you did not exercise. See `docs/mcp-compatibility-matrix.md` for the
+full list of flows covered by the deterministic fixture-backed CI tests.
+
 ## 1. Install or locate a stdio MCP server
 
 Record the server name and version using the server's own version command or package manager. Keep the command as an argv list, not a shell pipeline.
@@ -30,13 +36,27 @@ $env:ETHERFENCE_REAL_MCP_CMD = '["C:\\Path\\To\\server.exe","--arg","value"]'
 
 The value must be JSON argv. It is not a shell command; shell metacharacters are not interpreted.
 
+## 2b. Optionally set `ETHERFENCE_REAL_MCP_POLICY`
+
+By default the smoke test uses the same deterministic compatibility policy as
+the fake-server tests. To exercise a specific policy (for example, one of the
+example policies under `examples/policies/`) against the real server instead,
+point `ETHERFENCE_REAL_MCP_POLICY` at its file path:
+
+```sh
+export ETHERFENCE_REAL_MCP_POLICY=/absolute/path/to/examples/policies/mcp-filesystem-project-readonly-hardened.toml
+```
+
+This is optional. A maintainer-supplied policy path is only read, never
+modified or deleted, by the test.
+
 ## 3. Run the optional smoke test
 
 ```sh
 cargo test -p etherfence-cli optional_real_mcp_stdio_smoke_test -- --nocapture
 ```
 
-The test sends a minimal initialize / initialized notification / tools-list sequence through `etherfence mcp-proxy`. If `ETHERFENCE_REAL_MCP_CMD` is unset, the test skips with a clear message.
+The test sends a minimal initialize / initialized notification / tools-list sequence through `etherfence mcp-proxy`. If `ETHERFENCE_REAL_MCP_CMD` is unset, the test skips with a clear message and does not run in normal CI.
 
 ## 4. Collect audit output
 
