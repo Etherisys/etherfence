@@ -81,6 +81,45 @@ enum Command {
         #[command(subcommand)]
         command: McpPolicyCommand,
     },
+    /// Safely detect, plan, apply, rollback, and doctor local MCP proxy onboarding.
+    Setup {
+        #[command(subcommand)]
+        command: SetupCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum SetupCommand {
+    /// Detect known AI client MCP configs without modifying files.
+    Detect {
+        /// Setup root. Defaults to HOME. Intended for tests and controlled local onboarding.
+        #[arg(long, hide = true)]
+        root: Option<PathBuf>,
+    },
+    /// Show the redacted wrapping plan without modifying files.
+    Plan {
+        /// Setup root. Defaults to HOME. Intended for tests and controlled local onboarding.
+        #[arg(long, hide = true)]
+        root: Option<PathBuf>,
+    },
+    /// Back up supported configs, generate policies, and wrap eligible stdio MCP servers.
+    Apply {
+        /// Setup root. Defaults to HOME. Intended for tests and controlled local onboarding.
+        #[arg(long, hide = true)]
+        root: Option<PathBuf>,
+    },
+    /// Restore EtherFence-created setup backups.
+    Rollback {
+        /// Setup root. Defaults to HOME. Intended for tests and controlled local onboarding.
+        #[arg(long, hide = true)]
+        root: Option<PathBuf>,
+    },
+    /// Check setup health without starting MCP servers.
+    Doctor {
+        /// Setup root. Defaults to HOME. Intended for tests and controlled local onboarding.
+        #[arg(long, hide = true)]
+        root: Option<PathBuf>,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -275,6 +314,151 @@ fn main() -> Result<()> {
             server_command,
         } => run_mcp_proxy(&policy, audit_log.as_deref(), &server_name, &server_command),
         Command::McpPolicy { command } => run_mcp_policy_command(command),
+        Command::Setup { command } => run_setup_command(command),
+    }
+}
+
+fn run_setup_command(command: SetupCommand) -> Result<()> {
+    match command {
+        SetupCommand::Detect { root } => {
+            let root = setup_root(root);
+            let detections = etherfence_setup::detect(&root);
+            print!("{}", render_setup_detect(&root, &detections));
+            Ok(())
+        }
+        SetupCommand::Plan { root } => {
+            let root = setup_root(root);
+            let plan = etherfence_setup::plan(&root);
+            print!("{}", render_setup_plan(&plan));
+            Ok(())
+        }
+        SetupCommand::Apply { root } => etherfence_setup::apply(&setup_root(root)),
+        SetupCommand::Rollback { root } => etherfence_setup::rollback(&setup_root(root)),
+        SetupCommand::Doctor { root } => {
+            let root = setup_root(root);
+            let report = etherfence_setup::doctor(&root);
+            print!("{}", render_setup_doctor(&report));
+            Ok(())
+        }
+    }
+}
+
+fn setup_root(root: Option<PathBuf>) -> PathBuf {
+    root.unwrap_or_else(etherfence_inventory::default_scan_root)
+}
+
+fn render_setup_detect(root: &Path, detections: &[etherfence_setup::SetupDetection]) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    let _ = writeln!(out, "EtherFence setup detect");
+    let _ = writeln!(out, "Root: {}", root.display());
+    let _ = writeln!(
+        out,
+        "Mode: read-only; no configs, policies, backups, or state were modified."
+    );
+    if detections.is_empty() {
+        let _ = writeln!(out, "Known MCP configs: none detected");
+        return out;
+    }
+    for detection in detections {
+        let _ = writeln!(
+            out,
+            "- {} [{}] at {}",
+            detection.agent,
+            write_support_label(detection.write_support),
+            detection.config_path
+        );
+        if detection.servers.is_empty() {
+            let _ = writeln!(out, "  MCP servers: none");
+        }
+        for server in &detection.servers {
+            let _ = writeln!(
+                out,
+                "  - {} transport={} wrapped={}",
+                server.name,
+                transport_label(server.transport),
+                server.wrapped
+            );
+        }
+        for note in &detection.notes {
+            let _ = writeln!(out, "  note: {note}");
+        }
+    }
+    out
+}
+
+fn render_setup_plan(plan: &etherfence_setup::SetupPlan) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    let _ = writeln!(out, "EtherFence setup plan");
+    let _ = writeln!(out, "Root: {}", plan.root);
+    let _ = writeln!(out, "Mode: read-only; this is a redacted proposal only.");
+    if plan.actions.is_empty() {
+        let _ = writeln!(out, "Actions: none");
+        return out;
+    }
+    let _ = writeln!(out, "Actions:");
+    for action in &plan.actions {
+        let _ = writeln!(
+            out,
+            "- {}:{} -> {} ({})",
+            action.agent,
+            action.server_name,
+            action_kind_label(action.action),
+            action.reason
+        );
+        let _ = writeln!(out, "  config: {}", action.config_path);
+    }
+    out
+}
+
+fn render_setup_doctor(report: &etherfence_setup::DoctorReport) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    let _ = writeln!(out, "EtherFence setup doctor");
+    let _ = writeln!(out, "Root: {}", report.root);
+    let _ = writeln!(out, "Mode: read-only; MCP servers were not started.");
+    for check in &report.checks {
+        let _ = writeln!(
+            out,
+            "- {} {}: {}",
+            doctor_status_label(check.status),
+            check.subject,
+            check.message
+        );
+    }
+    out
+}
+
+fn write_support_label(value: etherfence_setup::WriteSupport) -> &'static str {
+    match value {
+        etherfence_setup::WriteSupport::Supported => "write-supported",
+        etherfence_setup::WriteSupport::AdvisoryOnly => "advisory-only",
+    }
+}
+
+fn transport_label(value: etherfence_setup::ServerTransport) -> &'static str {
+    match value {
+        etherfence_setup::ServerTransport::Stdio => "stdio",
+        etherfence_setup::ServerTransport::Remote => "remote",
+        etherfence_setup::ServerTransport::Unknown => "unknown",
+    }
+}
+
+fn action_kind_label(value: etherfence_setup::SetupActionKind) -> &'static str {
+    match value {
+        etherfence_setup::SetupActionKind::Wrap => "wrap",
+        etherfence_setup::SetupActionKind::SkipAlreadyWrapped => "skip-already-wrapped",
+        etherfence_setup::SetupActionKind::AdvisoryOnly => "advisory-only",
+        etherfence_setup::SetupActionKind::SkipNonStdio => "skip-non-stdio",
+    }
+}
+
+fn doctor_status_label(value: etherfence_setup::DoctorStatus) -> &'static str {
+    match value {
+        etherfence_setup::DoctorStatus::Ok => "OK",
+        etherfence_setup::DoctorStatus::Warn => "WARN",
+        etherfence_setup::DoctorStatus::Fail => "FAIL",
     }
 }
 

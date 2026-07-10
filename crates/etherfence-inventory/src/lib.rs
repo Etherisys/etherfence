@@ -4,6 +4,7 @@ use etherfence_core::{
     PARSE_ERROR_EVIDENCE_PREFIX,
 };
 use serde_json::Value as JsonValue;
+use std::collections::BTreeSet;
 use std::env;
 use std::path::{Path, PathBuf};
 use toml::Value as TomlValue;
@@ -297,6 +298,7 @@ struct ParsedServers {
 
 fn parse_json_mcp_servers(value: &JsonValue) -> ParsedServers {
     let mut parsed = ParsedServers::default();
+    let mut seen_servers = BTreeSet::new();
     match find_json_key(value, "mcpServers") {
         Some(JsonValue::Object(map)) => {
             for (name, server) in map {
@@ -305,7 +307,9 @@ fn parse_json_mcp_servers(value: &JsonValue) -> ParsedServers {
                         "mcpServers entry {name:?} is not a JSON object; recorded name only"
                     ));
                 }
-                parsed.servers.push(json_server(name, server));
+                if seen_servers.insert(name.clone()) {
+                    parsed.servers.push(json_server(name, server));
+                }
             }
         }
         Some(JsonValue::Null) | None => {}
@@ -313,7 +317,38 @@ fn parse_json_mcp_servers(value: &JsonValue) -> ParsedServers {
             .warnings
             .push("mcpServers present but not a JSON object; ignored".to_string()),
     }
+    match find_nested_mcp_servers(value) {
+        Some(JsonValue::Object(map)) => {
+            for (name, server) in map {
+                if !server.is_object() {
+                    parsed.warnings.push(format!(
+                        "mcp.servers entry {name:?} is not a JSON object; recorded name only"
+                    ));
+                }
+                if seen_servers.insert(name.clone()) {
+                    parsed.servers.push(json_server(name, server));
+                }
+            }
+        }
+        Some(JsonValue::Null) | None => {}
+        Some(_) => parsed
+            .warnings
+            .push("mcp.servers present but not a JSON object; ignored".to_string()),
+    }
     parsed
+}
+
+fn find_nested_mcp_servers(value: &JsonValue) -> Option<&JsonValue> {
+    match value {
+        JsonValue::Object(map) => {
+            if let Some(found) = map.get("mcp").and_then(|mcp| mcp.get("servers")) {
+                return Some(found);
+            }
+            map.values().find_map(find_nested_mcp_servers)
+        }
+        JsonValue::Array(values) => values.iter().find_map(find_nested_mcp_servers),
+        _ => None,
+    }
 }
 
 fn find_json_key<'a>(value: &'a JsonValue, key: &str) -> Option<&'a JsonValue> {

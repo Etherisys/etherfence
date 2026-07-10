@@ -256,6 +256,7 @@ active repository workflows — copy the one(s) you want into your own
 | [`docs/mcp-proxy.md`](docs/mcp-proxy.md) | `mcp-proxy` behavior, `ef-mcp-policy/v0.1` schema, limitations |
 | [`docs/mcp-proxy-operator-guide.md`](docs/mcp-proxy-operator-guide.md) | Practical operator walkthrough: before/after, flags, policy/`--server-name` mapping, dry-run and audit-log usage, failure modes, config examples |
 | [`docs/mcp-policy-ux.md`](docs/mcp-policy-ux.md) | `mcp-policy validate/explain/init/check` reference |
+| [`docs/setup-onboarding.md`](docs/setup-onboarding.md) | v1.1.0 safety contract for the planned `setup` onboarding command family |
 | [`docs/mcp-clients.md`](docs/mcp-clients.md) | Client configuration templates for wrapping a server with `mcp-proxy` |
 | [`docs/mcp-compatibility-matrix.md`](docs/mcp-compatibility-matrix.md) | What MCP stdio behavior is tested vs. untested |
 | [`docs/json-schema.md`](docs/json-schema.md) / [`docs/sarif.md`](docs/sarif.md) | `scan` JSON and SARIF output shapes |
