@@ -1,13 +1,14 @@
 # CI and team workflow integration
 
-Status: **pre-alpha, local-first**, same as the rest of EtherFence. Everything
+Status: **v1.0.0, local-first**, same as the rest of EtherFence. Everything
 in this document runs `etherfence scan` or `etherfence mcp-policy
 validate/explain/check` — local, read-only, scan-only or serverless-dry-run
 commands. Nothing here starts `etherfence mcp-proxy`, spawns or contacts an
 MCP server, executes a tool, installs a daemon, or intercepts network or
-terminal activity. EtherFence is not production-ready and these examples are
-not a certification that a policy or scan result is safe; they are checks
-worth running before merging.
+terminal activity. EtherFence v1.0.0 is production-ready for controlled
+local-first deployments of its defined scope, but these examples are not a
+universal certification that a policy or scan result is safe; they are
+checks worth running before merging.
 
 This page documents how to wire EtherFence into a CI pipeline or a team
 workflow: failing a PR on posture findings, failing only on *new* findings,

@@ -117,7 +117,7 @@ ETHERFENCE_REAL_MCP_CMD='["/absolute/path/to/server","--arg","value"]' \
 
 Using a JSON array avoids shell parsing inside the test harness. Do not include shell metacharacters expecting them to be interpreted; pass each argument as its own JSON string.
 
-Optionally set `ETHERFENCE_REAL_MCP_POLICY` to a policy file path (for example, one of the example policies above) to exercise that policy against the real server instead of the built-in compatibility policy. See `docs/mcp-real-server-test-template.md` for the full walkthrough. Both env vars are optional and this test is skipped by default in CI; passing it is compatibility evidence for the exercised server/policy combination, not production-readiness certification.
+Optionally set `ETHERFENCE_REAL_MCP_POLICY` to a policy file path (for example, one of the example policies above) to exercise that policy against the real server instead of the built-in compatibility policy. See `docs/mcp-real-server-test-template.md` for the full walkthrough. Both env vars are optional and this test is skipped by default in CI; passing it is compatibility evidence for the exercised server/policy combination, not a universal certification for that server or any other.
 
 ## Compatibility matrix
 

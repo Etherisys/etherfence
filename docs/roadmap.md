@@ -444,6 +444,43 @@
   production-readiness certification; all prior release behavior preserved
   unchanged; no git tag created or pushed for this release
 
+## v1.0.0 - stable local-first MCP boundary docs and release readiness
+
+- New `docs/mcp-proxy-operator-guide.md`: a practical, task-oriented guide
+  covering the before/after wrapping diagram, what goes before/after `--`,
+  what `--policy`/`--server-name`/`--audit-log` do, how policy sections map
+  to `--server-name`, how `tools/list` filtering works, how allowed/denied
+  `tools/call` requests flow, dry-running decisions with `mcp-policy check`,
+  inspecting audit logs, common failure modes and exit codes, and concrete
+  generic/filesystem/memory-notes config examples
+- README adds a short "How `mcp-proxy` fits into your MCP client config"
+  pointer to the new operator guide (no duplication of the full guide) and
+  updates its status line, `mcp-proxy` description, and example-policy count
+  to reflect a stable CLI/schema surface
+- `docs/mcp-proxy.md`, `docs/mcp-policy-ux.md`, and
+  `docs/mcp-compatibility-matrix.md` cross-link the operator guide and
+  reword status language to: EtherFence v1.0.0 is production-ready for
+  controlled local-first deployments of its defined scope (scan,
+  mcp-policy, and the stdio mcp-proxy boundary), with a stable CLI and
+  policy schema — not a universal certification for every MCP server, MCP
+  client, or deployment environment; no new compatibility claims and no
+  schema changes
+- `docs/install.md` and `docs/release-checklist.md` updated for the v1.0.0
+  version and the same production-ready-for-defined-scope framing
+- New docs-drift tests: operator guide referenced paths exist, its
+  documented `mcp-policy check` examples produce the exact ALLOW/DENY
+  decisions shown, README links to the operator guide, and the checked-in
+  example-policy count matches what README states
+- Version bumped to 1.0.0
+- No new runtime enforcement semantics, no `ef-mcp-policy/v0.1` schema
+  changes, no daemon/API/control plane, no package publishing/auto-update;
+  operators must still test their chosen MCP servers and policies and
+  monitor audit logs — this is not a universal certification; all prior
+  release behavior (v0.9.0 compatibility evidence, v0.8.0 install/release
+  docs, v0.7.0 CI examples, v0.6.x policy UX, v0.5.0 smoke tests, v0.4.x
+  path/Unicode hardening) preserved unchanged; no git tag created or
+  pushed for this release
+
 ## v0.2.x ideas
 
 - Expand tested config schemas and platform paths

@@ -2,12 +2,76 @@
 
 All notable changes to EtherFence are documented in this file.
 
-EtherFence is pre-alpha. The v0.1.x line is scan-only; nothing in v0.1.x
-performs runtime blocking, MCP proxying, daemon mode, shell hooks, command
-interception, terminal-command scanning, or network interception. v0.2.x adds
-one opt-in experimental runtime component: an MCP stdio boundary proxy.
-EtherFence still has no daemon mode, shell hooks, command interception,
-terminal-command scanning, or network interception.
+EtherFence v1.0.0 is production-ready for controlled local-first
+deployments of its defined scope: scan, mcp-policy, and the stdio
+mcp-proxy boundary. This is not a security certification for every MCP
+server, MCP client, or deployment environment; operators must still
+review policies, test their chosen servers, and monitor audit logs. The
+v0.1.x line is scan-only; nothing in v0.1.x performs runtime blocking, MCP
+proxying, daemon mode, shell hooks, command interception, terminal-command
+scanning, or network interception. v0.2.x adds one opt-in runtime
+component: an MCP stdio boundary proxy, whose CLI surface and
+`ef-mcp-policy/v0.1` policy schema are stable as of v1.0.0. EtherFence still
+has no daemon mode, shell hooks, command interception, terminal-command
+scanning, or network interception.
+
+## [1.0.0] - 2026-07-10
+
+### Added
+
+- New `docs/mcp-proxy-operator-guide.md`: a practical, task-oriented
+  operator guide for wrapping a real MCP server with `etherfence mcp-proxy`.
+  Covers the before/after wrapping diagram (`AI client -> MCP server` vs.
+  `AI client -> etherfence mcp-proxy -> MCP server`), what goes before and
+  after `--`, what `--policy`/`--server-name`/`--audit-log` each do, how
+  policy sections map to `--server-name`, how `tools/list` filtering works,
+  how allowed and denied `tools/call` requests flow, how to dry-run policy
+  decisions with `mcp-policy check`, how to inspect audit logs, a table of
+  common failure modes and exit codes, and concrete generic/filesystem/
+  memory-notes config examples
+- README adds a short "How `mcp-proxy` fits into your MCP client config"
+  pointer section linking to the new operator guide, without duplicating it
+- New docs-drift tests keeping the operator guide honest: every path it
+  references exists, its documented `mcp-policy check` examples produce the
+  exact `Decision: ALLOW`/`Decision: DENY` output shown, README links to the
+  guide, and the checked-in MCP example-policy count matches what README
+  states
+
+### Changed
+
+- Stability/wording pass for v1.0.0, with no behavior or schema changes:
+  `README.md`, `docs/mcp-proxy.md`, `docs/mcp-policy-ux.md`,
+  `docs/mcp-proxy-operator-guide.md`, `docs/mcp-compatibility-matrix.md`,
+  `docs/install.md`, `docs/release-checklist.md`, and `docs/roadmap.md`
+  reword status language to state that EtherFence v1.0.0 is
+  production-ready for controlled local-first deployments of its defined
+  scope (scan, mcp-policy, and the stdio mcp-proxy boundary) with a stable
+  CLI and policy schema, while making clear this is not a universal
+  certification for every MCP server, MCP client, or deployment
+  environment — operators must still test their chosen MCP servers and
+  policies and monitor audit logs
+- README's checked-in example-policy count corrected from ten to twelve
+  (it had drifted out of date since v0.9.0 added
+  `examples/policies/mcp-memory-notes-readonly.toml`)
+- Version bumped to 1.0.0
+
+### Not in scope
+
+- No new runtime enforcement semantics (no failing test surfaced a
+  correctness bug requiring one)
+- No `ef-mcp-policy/v0.1` schema changes
+- No daemon, API service, control plane, endpoint agent, shell hooks,
+  terminal-command scanning, network/TLS interception, DLP/content
+  inspection, marketplace action, PR bot, package publishing, or auto-update
+- Not a universal certification: EtherFence does not protect MCP servers
+  that are not wrapped by `mcp-proxy`, does not support HTTP/SSE MCP
+  transport, does not intercept network/TLS traffic, and does not perform
+  DLP/content inspection or certify any specific third-party MCP server
+- All prior release behavior (v0.9.0 compatibility evidence, v0.8.0
+  install/release docs, v0.7.0 CI examples, v0.6.x policy UX/test
+  hardening, v0.5.0 smoke tests, v0.4.x path/Unicode hardening) preserved
+  unchanged
+- No git tag created or pushed for this release
 
 ## [0.9.0] - 2026-07-10
 

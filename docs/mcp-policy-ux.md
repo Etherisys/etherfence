@@ -8,10 +8,13 @@ same parser and decision functions the live proxy uses. None of these commands
 start, contact, or assume anything about a running MCP server, and none of
 them execute a tool.
 
-Status: **pre-alpha**, same as the rest of EtherFence. Warnings emitted by
-`explain` are operator guidance, not proof that a policy is exploitable or
-safe — they highlight policy shapes worth a second look. Passing `validate`
-or `check` is not production-readiness certification.
+Status: as of v1.0.0, this CLI surface is **stable**, part of the same
+production-ready-for-defined-scope posture as the rest of EtherFence.
+Stable is not a universal certification. Warnings emitted by `explain` are
+operator guidance, not proof that a policy is exploitable or safe — they
+highlight policy shapes worth a second look. Passing `validate` or `check`
+is evidence for that one policy file, not a certification of any specific
+MCP server it will eventually be used with.
 
 ## Commands
 
@@ -157,4 +160,7 @@ enforcement surface and does not add:
 - any change to the `ef-mcp-policy/v0.1` schema
 
 See `docs/mcp-proxy.md` for the underlying policy schema and proxy behavior
-these commands read and dry-run against.
+these commands read and dry-run against, and
+[`docs/mcp-proxy-operator-guide.md`](mcp-proxy-operator-guide.md) for a
+practical walkthrough of wrapping a real MCP server, including where `check`
+fits into that workflow.
