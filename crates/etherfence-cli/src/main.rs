@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use etherfence_core::{
     read_bounded_text_file, BaselineComparison, BaselineFile, BaselineStatus, Finding,
-    PolicyMetadata, ScanReport, Severity, Summary, MAX_BASELINE_FILE_BYTES,
+    PolicyMetadata, ScanReport, Severity, Summary, MAX_BASELINE_FILE_BYTES, MAX_CONFIG_FILE_BYTES,
 };
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -74,7 +74,110 @@ enum Command {
         #[arg(last = true, required = true)]
         server_command: Vec<String>,
     },
+    /// Local, serverless MCP policy UX: validate, explain, generate, and
+    /// dry-run-check `ef-mcp-policy/v0.1` policies without starting an MCP
+    /// server or executing any tool.
+    McpPolicy {
+        #[command(subcommand)]
+        command: McpPolicyCommand,
+    },
 }
+
+#[derive(Debug, Subcommand)]
+enum McpPolicyCommand {
+    /// Parse and validate an MCP proxy policy file.
+    Validate {
+        /// TOML MCP proxy policy file (schema ef-mcp-policy/v0.1).
+        policy: PathBuf,
+    },
+    /// Print a deterministic human-readable summary of an MCP proxy policy,
+    /// including warnings for risky or confusing policy shapes.
+    Explain {
+        /// TOML MCP proxy policy file (schema ef-mcp-policy/v0.1).
+        policy: PathBuf,
+    },
+    /// Generate a starter MCP proxy policy from a built-in profile.
+    Init {
+        /// Built-in profile name. Run without `--output` to preview.
+        #[arg(long)]
+        profile: String,
+        /// Write the policy to this file instead of stdout.
+        #[arg(long)]
+        output: Option<PathBuf>,
+        /// Allow overwriting an existing `--output` file.
+        #[arg(long)]
+        overwrite: bool,
+    },
+    /// Dry-run one JSON-RPC request/notification against a policy without
+    /// starting or contacting an MCP server and without executing any tool.
+    Check {
+        /// TOML MCP proxy policy file (schema ef-mcp-policy/v0.1).
+        #[arg(long)]
+        policy: PathBuf,
+        /// A JSON-RPC request/notification, either inline JSON (starting with
+        /// `{` or `[`) or a path to a file containing it.
+        #[arg(long)]
+        request: String,
+        /// Logical MCP server policy scope. Defaults to `default`.
+        #[arg(long, default_value = "default")]
+        server_name: String,
+        /// Direction the request/notification travels.
+        #[arg(long, value_enum, default_value_t = CheckDirection::ClientToServer)]
+        direction: CheckDirection,
+    },
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum CheckDirection {
+    ClientToServer,
+    ServerToClient,
+}
+
+impl From<CheckDirection> for etherfence_mcp::MethodDirection {
+    fn from(value: CheckDirection) -> Self {
+        match value {
+            CheckDirection::ClientToServer => etherfence_mcp::MethodDirection::ClientToServer,
+            CheckDirection::ServerToClient => etherfence_mcp::MethodDirection::ServerToClient,
+        }
+    }
+}
+
+struct McpPolicyProfile {
+    name: &'static str,
+    description: &'static str,
+    content: &'static str,
+}
+
+const MCP_POLICY_PROFILES: &[McpPolicyProfile] = &[
+    McpPolicyProfile {
+        name: "minimal",
+        description: "Minimal global + per-server tool allow/deny boundary.",
+        content: include_str!("../../../examples/policies/mcp-minimal-boundary.toml"),
+    },
+    McpPolicyProfile {
+        name: "strict-method-only",
+        description: "Explicit [methods] allow/deny restricted to tools/list and tools/call.",
+        content: include_str!("../../../examples/policies/mcp-strict-method-only.toml"),
+    },
+    McpPolicyProfile {
+        name: "filesystem-project-readonly",
+        description: "Project-root read-only filesystem tool with a path guard.",
+        content: include_str!("../../../examples/policies/mcp-filesystem-project-readonly.toml"),
+    },
+    McpPolicyProfile {
+        name: "filesystem-project-readonly-hardened",
+        description:
+            "Project-root read-only filesystem tool with expanded credential-path deny_roots.",
+        content: include_str!(
+            "../../../examples/policies/mcp-filesystem-project-readonly-hardened.toml"
+        ),
+    },
+    McpPolicyProfile {
+        name: "resources-project-only",
+        description: "Project-root-only resources/read over file:// URIs, plus tool policy.",
+        content: include_str!("../../../examples/policies/mcp-resources-project-only.toml"),
+    },
+];
 
 #[derive(Debug, Subcommand)]
 enum PolicyCommand {
@@ -171,7 +274,279 @@ fn main() -> Result<()> {
             server_name,
             server_command,
         } => run_mcp_proxy(&policy, audit_log.as_deref(), &server_name, &server_command),
+        Command::McpPolicy { command } => run_mcp_policy_command(command),
     }
+}
+
+fn run_mcp_policy_command(command: McpPolicyCommand) -> Result<()> {
+    match command {
+        McpPolicyCommand::Validate { policy } => run_mcp_policy_validate(&policy),
+        McpPolicyCommand::Explain { policy } => run_mcp_policy_explain(&policy),
+        McpPolicyCommand::Init {
+            profile,
+            output,
+            overwrite,
+        } => run_mcp_policy_init(&profile, output.as_deref(), overwrite),
+        McpPolicyCommand::Check {
+            policy,
+            request,
+            server_name,
+            direction,
+        } => run_mcp_policy_check(&policy, &request, &server_name, direction),
+    }
+}
+
+fn run_mcp_policy_validate(policy_path: &Path) -> Result<()> {
+    let policy = etherfence_mcp::load_mcp_policy(policy_path)?;
+    println!(
+        "OK: {} is a valid MCP proxy policy (name={:?}, schema_version={:?}).",
+        policy_path.display(),
+        policy.name,
+        policy.schema_version
+    );
+    Ok(())
+}
+
+fn run_mcp_policy_explain(policy_path: &Path) -> Result<()> {
+    let policy = etherfence_mcp::load_mcp_policy(policy_path)?;
+    let explanation = etherfence_mcp::explain_policy(&policy);
+    print!("{}", render_mcp_policy_explanation(&explanation));
+    Ok(())
+}
+
+fn run_mcp_policy_init(profile: &str, output: Option<&Path>, overwrite: bool) -> Result<()> {
+    let profile_def = MCP_POLICY_PROFILES
+        .iter()
+        .find(|candidate| candidate.name == profile)
+        .with_context(|| {
+            let entries: Vec<String> = MCP_POLICY_PROFILES
+                .iter()
+                .map(|p| format!("{} ({})", p.name, p.description))
+                .collect();
+            format!(
+                "unknown MCP policy init profile {profile:?}; supported profiles: {}",
+                entries.join(", ")
+            )
+        })?;
+    match output {
+        Some(path) => {
+            if path.exists() && !overwrite {
+                anyhow::bail!(
+                    "refusing to overwrite existing file {} (pass --overwrite to replace it)",
+                    path.display()
+                );
+            }
+            fs::write(path, profile_def.content)
+                .with_context(|| format!("writing MCP policy init output {}", path.display()))?;
+            println!("Wrote MCP policy profile {profile:?} to {}", path.display());
+        }
+        None => {
+            print!("{}", profile_def.content);
+        }
+    }
+    Ok(())
+}
+
+fn run_mcp_policy_check(
+    policy_path: &Path,
+    request: &str,
+    server_name: &str,
+    direction: CheckDirection,
+) -> Result<()> {
+    let policy = etherfence_mcp::load_mcp_policy(policy_path)?;
+    let raw_request = load_mcp_check_request(request)?;
+    serde_json::from_str::<serde_json::Value>(&raw_request)
+        .context("--request is not valid JSON")?;
+    let outcome =
+        etherfence_mcp::dry_run_check(&policy, server_name, direction.into(), &raw_request);
+    print!("{}", render_mcp_check_outcome(&outcome));
+    Ok(())
+}
+
+// `request` is an explicit, trusted-operator CLI input (`mcp-policy check
+// --request`); see the doc comment on `read_bounded_text_file` for the
+// CLI-vs-future-API path trust model this crate follows.
+fn load_mcp_check_request(request: &str) -> Result<String> {
+    let trimmed = request.trim_start();
+    if trimmed.starts_with('{') || trimmed.starts_with('[') {
+        Ok(request.to_string())
+    } else {
+        read_bounded_text_file(Path::new(request), MAX_CONFIG_FILE_BYTES)
+            .with_context(|| format!("reading --request input file {request}"))
+    }
+}
+
+fn render_mcp_policy_explanation(explanation: &etherfence_mcp::PolicyExplanation) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    let _ = writeln!(out, "Policy name: {}", explanation.name);
+    let _ = writeln!(out, "Schema version: {}", explanation.schema_version);
+    let _ = writeln!(out);
+
+    let _ = writeln!(out, "Global methods:");
+    if explanation.global_methods.configured {
+        let _ = writeln!(
+            out,
+            "  allow: {}",
+            format_list(&explanation.global_methods.allow)
+        );
+        let _ = writeln!(
+            out,
+            "  deny: {}",
+            format_list(&explanation.global_methods.deny)
+        );
+    } else {
+        let _ = writeln!(
+            out,
+            "  (not configured; built-in default allows only tools/list and tools/call)"
+        );
+    }
+    let _ = writeln!(out);
+
+    let _ = writeln!(out, "Global tools:");
+    let _ = writeln!(
+        out,
+        "  allow: {}",
+        format_list(&explanation.global_tools.allow)
+    );
+    let _ = writeln!(
+        out,
+        "  deny: {}",
+        format_list(&explanation.global_tools.deny)
+    );
+    let _ = writeln!(out);
+
+    if explanation.servers.is_empty() {
+        let _ = writeln!(out, "Server scopes: (none configured)");
+    } else {
+        let _ = writeln!(out, "Server scopes:");
+        for server in &explanation.servers {
+            let _ = writeln!(out, "  [{}]", server.name);
+            let _ = writeln!(out, "    tools.allow: {}", format_list(&server.tools.allow));
+            let _ = writeln!(out, "    tools.deny: {}", format_list(&server.tools.deny));
+            match &server.methods {
+                Some(methods) => {
+                    let _ = writeln!(out, "    methods.allow: {}", format_list(&methods.allow));
+                    let _ = writeln!(out, "    methods.deny: {}", format_list(&methods.deny));
+                }
+                None => {
+                    let _ = writeln!(
+                        out,
+                        "    methods: (not configured; falls back to global policy/built-in default)"
+                    );
+                }
+            }
+        }
+    }
+    let _ = writeln!(out);
+
+    if explanation.path_rules.is_empty() {
+        let _ = writeln!(out, "Path rules: (none configured)");
+    } else {
+        let _ = writeln!(out, "Path rules:");
+        for rule in &explanation.path_rules {
+            let _ = writeln!(out, "  [{}]", rule.name);
+            let _ = writeln!(out, "    allow_roots: {}", format_list(&rule.allow_roots));
+            let _ = writeln!(out, "    deny_roots: {}", format_list(&rule.deny_roots));
+        }
+    }
+    let _ = writeln!(out);
+
+    if explanation.guards.is_empty() {
+        let _ = writeln!(out, "Guarded keys: (none configured)");
+    } else {
+        let _ = writeln!(out, "Guarded keys:");
+        for guard in &explanation.guards {
+            let scope_label = match &guard.server_name {
+                Some(server) => format!("{} (server={server})", guard.scope.as_str()),
+                None => guard.scope.as_str().to_string(),
+            };
+            let keys: Vec<&str> = guard
+                .path_keys
+                .iter()
+                .chain(guard.uri_keys.iter())
+                .map(String::as_str)
+                .collect();
+            let _ = writeln!(
+                out,
+                "  {scope_label} {:?} -> path_rule={:?} keys={}",
+                guard.key,
+                guard.path_rule,
+                format_list(&keys)
+            );
+        }
+    }
+    let _ = writeln!(out);
+
+    let _ = writeln!(
+        out,
+        "Unicode/homograph hardening: always enabled (v0.4.1) -- bidi controls, zero-width/invisible characters, and non-ASCII policy/runtime identifiers are rejected at parse time or denied at runtime before matching."
+    );
+    let _ = writeln!(
+        out,
+        "Audit redaction posture: when --audit-log is used, only decisions, reasons, method/tool names, safe path classification, and argument/param key names are recorded; argument/param values, full paths, and URIs are never logged."
+    );
+    let _ = writeln!(out);
+
+    if explanation.warnings.is_empty() {
+        let _ = writeln!(out, "Warnings: (none)");
+    } else {
+        let _ = writeln!(out, "Warnings:");
+        for warning in &explanation.warnings {
+            let _ = writeln!(out, "  - {warning}");
+        }
+    }
+    out
+}
+
+fn format_list<S: AsRef<str>>(items: &[S]) -> String {
+    if items.is_empty() {
+        "(none)".to_string()
+    } else {
+        items
+            .iter()
+            .map(|item| item.as_ref())
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+}
+
+fn render_mcp_check_outcome(outcome: &etherfence_mcp::CheckOutcome) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    let _ = writeln!(out, "Decision: {}", outcome.decision.to_uppercase());
+    let _ = writeln!(
+        out,
+        "Would be forwarded: {}",
+        if outcome.forwarded { "yes" } else { "no" }
+    );
+    let _ = writeln!(
+        out,
+        "Inspected by policy: {}",
+        if outcome.inspected { "yes" } else { "no" }
+    );
+    let _ = writeln!(out, "Category: {}", outcome.event);
+    if let Some(method) = &outcome.method {
+        let _ = writeln!(out, "Method: {method}");
+    }
+    if let Some(tool) = &outcome.tool {
+        let _ = writeln!(out, "Tool: {tool}");
+    }
+    if let Some(rule) = &outcome.path_rule {
+        let _ = writeln!(
+            out,
+            "Path decision: rule={:?} key={:?} classification={:?}",
+            rule,
+            outcome.path_key.as_deref().unwrap_or("<none>"),
+            outcome.path_classification.as_deref().unwrap_or("<none>")
+        );
+    }
+    let _ = writeln!(out, "Reason: {}", outcome.reason);
+    let _ = writeln!(
+        out,
+        "Note: this is a local, serverless dry run. No MCP server was started or contacted and no tool was executed."
+    );
+    out
 }
 
 fn run_mcp_proxy(

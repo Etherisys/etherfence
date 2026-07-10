@@ -4,7 +4,7 @@ EtherFence is an open-source **AI Agent Security Posture & Runtime Control** pro
 
 One-line idea: **Tirith protects terminal commands; EtherFence governs agent access.**
 
-Status: **pre-alpha**. The v0.1.x foundation is scan-only posture discovery with remediation guidance, CI posture gates, baseline/diff support, versioned TOML policy profiles, built-in policy profiles, direct `scan --policy-profile <name>` selection, conservative Linux/Windows discovery helpers, hardened fixture-backed config parsing, SARIF 2.1.0 export, and Linux/Windows release packaging. v0.2.x and later keep all of that unchanged and add one **experimental** runtime component: a minimal local MCP stdio boundary proxy (`etherfence mcp-proxy`). v0.4.1 is a narrow Unicode/homograph hardening release for that proxy; v0.5.0 is a compatibility and smoke-test release that adds no new enforcement behavior. EtherFence is not production-ready.
+Status: **pre-alpha**. The v0.1.x foundation is scan-only posture discovery with remediation guidance, CI posture gates, baseline/diff support, versioned TOML policy profiles, built-in policy profiles, direct `scan --policy-profile <name>` selection, conservative Linux/Windows discovery helpers, hardened fixture-backed config parsing, SARIF 2.1.0 export, and Linux/Windows release packaging. v0.2.x and later keep all of that unchanged and add one **experimental** runtime component: a minimal local MCP stdio boundary proxy (`etherfence mcp-proxy`). v0.4.1 is a narrow Unicode/homograph hardening release for that proxy; v0.5.0 is a compatibility and smoke-test release that adds no new enforcement behavior; v0.6.0 adds local, serverless MCP policy UX commands (`etherfence mcp-policy validate/explain/init/check`) with no new enforcement behavior. EtherFence is not production-ready.
 
 ## What the scanner does (unchanged from v0.1.8)
 
@@ -150,6 +150,43 @@ and is not a general content-inspection or DLP engine. See `docs/mcp-proxy.md` f
 and `docs/mcp-clients.md`
 plus `docs/examples/*.json` for client configuration templates. `docs/mcp-compatibility-matrix.md` records checked compatibility evidence and states what is tested versus untested, and `docs/mcp-real-server-test-template.md` explains optional maintainer-run real-server smoke tests gated by `ETHERFENCE_REAL_MCP_CMD` (and optional `ETHERFENCE_REAL_MCP_POLICY`), skipped by default in CI. Compatibility evidence from these fixture-backed or optional real-server tests is not production-readiness certification.
 
+## MCP policy UX: validate, explain, init, check (v0.6.0)
+
+`etherfence mcp-policy` is a local, **serverless** command group that helps
+author and review `ef-mcp-policy/v0.1` policies without starting an MCP
+server or executing a tool:
+
+```sh
+etherfence mcp-policy validate mcp-boundary.toml
+etherfence mcp-policy explain mcp-boundary.toml
+etherfence mcp-policy init --profile filesystem-project-readonly-hardened --output mcp-boundary.toml
+etherfence mcp-policy check \
+  --policy mcp-boundary.toml \
+  --request '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"filesystem.read","arguments":{"path":"/home/user/project/README.md"}}}'
+```
+
+- `validate` parses and validates a policy with the same loader `mcp-proxy`
+  uses, printing a clear success message or an actionable parser error.
+- `explain` prints a deterministic summary of methods, tools, server scopes,
+  path rules, and guarded keys, plus warnings for risky or confusing shapes
+  (wildcard method allow, no `[methods]` section, no tool allowed anywhere,
+  unused path rules, guards referencing an undefined rule, broad
+  `allow_roots`, empty `deny_roots`). Warnings are operator guidance, not a
+  security verdict.
+- `init --profile <name>` generates a starter policy from one of five
+  built-in profiles (`minimal`, `strict-method-only`,
+  `filesystem-project-readonly`, `filesystem-project-readonly-hardened`,
+  `resources-project-only`); `--output` refuses to overwrite an existing file
+  unless `--overwrite` is also passed.
+- `check --policy <file> --request <json>` dry-runs one JSON-RPC
+  request/notification through the exact same decision functions the live
+  proxy uses. It never starts or contacts an MCP server, never executes a
+  tool, and never writes an audit log; JSON-RPC batches are reported as
+  denied fail-closed, and only safe method/tool/decision/reason and path
+  classification metadata are printed — never raw argument/param values,
+  full paths, or URIs.
+
+See `docs/mcp-policy-ux.md` for the full command reference.
 
 ## Linux and Windows usage
 
@@ -365,8 +402,10 @@ boundary proxy above and nothing else. v0.3.0 hardens the proxy with
 method-level policy enforcement. v0.4.1 adds narrow Unicode/homograph hygiene
 inside MCP policy/runtime names and guarded path-like values. v0.5.0 adds
 compatibility smoke tests, example policies, and documentation only, with no
-new enforcement behavior. EtherFence does
-**not** implement:
+new enforcement behavior. v0.6.0 adds local, serverless MCP policy UX
+commands (`etherfence mcp-policy validate/explain/init/check`) that read and
+dry-run against policies only, with no new enforcement behavior. EtherFence
+does **not** implement:
 
 - daemon mode
 - network interception

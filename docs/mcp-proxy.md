@@ -529,6 +529,26 @@ See `docs/mcp-clients.md` and the checked JSON templates under
 client configuration examples. They all use placeholders and must be adjusted
 for local paths, server commands, and exact tool names.
 
+## Policy UX: validate, explain, init, check (v0.6.0)
+
+`etherfence mcp-policy` adds local, serverless commands for authoring and
+reviewing `ef-mcp-policy/v0.1` policies without starting an MCP server:
+
+- `etherfence mcp-policy validate <policy.toml>` parses and validates a policy
+  with the same loader `mcp-proxy --policy` uses.
+- `etherfence mcp-policy explain <policy.toml>` prints a deterministic summary
+  of methods, tools, server scopes, path rules, guarded keys, and warnings for
+  risky or confusing policy shapes.
+- `etherfence mcp-policy init --profile <name> [--output <file>]` generates a
+  starter policy from a built-in profile.
+- `etherfence mcp-policy check --policy <policy.toml> --request <json>`
+  dry-runs one JSON-RPC request/notification against the same decision
+  functions the live proxy uses, without starting or contacting a server or
+  executing a tool.
+
+See `docs/mcp-policy-ux.md` for full command reference, warning semantics, and
+non-goals.
+
 ## Limitations
 
 - stdio transport only; HTTP/SSE MCP transports are not supported.
