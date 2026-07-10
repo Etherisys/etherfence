@@ -714,7 +714,7 @@ fn run_scan(options: ScanOptions) -> Result<()> {
         schema_version: "ef-scan-report/v0.1.1".to_string(),
         tool: "etherfence".to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
-        status: "pre-alpha-scan-only".to_string(),
+        status: "stable-local-scan".to_string(),
         scanned_root,
         inventory,
         findings: display_findings,

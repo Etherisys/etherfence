@@ -17,7 +17,7 @@ CLI filtering with `--severity-threshold` changes which findings are included in
 | `schema_version` | string | stable within v0.1.x | Versioned report shape identifier. |
 | `tool` | string | stable | Tool name, currently `etherfence`. |
 | `version` | string | stable | EtherFence package version. |
-| `status` | string | stable | Product status, currently `pre-alpha-scan-only`. |
+| `status` | string | stable | Scan command status, currently `stable-local-scan`. |
 | `scanned_root` | string | stable | Root used for conservative config discovery. |
 | `inventory` | array | additive | Discovered agent config inventory. |
 | `findings` | array | additive | Displayed findings after severity threshold and optional baseline comparison. |

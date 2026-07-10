@@ -481,6 +481,20 @@
   path/Unicode hardening) preserved unchanged; no git tag created or
   pushed for this release
 
+## v1.0.1 - scan output status wording fix
+
+- Fixed stale v0.1-era `scan` status/note wording left in human, JSON,
+  Markdown, and SARIF output after v1.0.0: `status` changes from
+  `pre-alpha-scan-only` to `stable-local-scan`, and the note is now scoped
+  to the `scan` command ("This scan command is read-only posture
+  discovery... Runtime MCP boundary enforcement is available separately
+  through `etherfence mcp-proxy`.") instead of describing all of EtherFence
+  as pre-alpha and scan-only
+- Messaging/status-only patch: no scanner detection logic, finding IDs,
+  severities, fingerprints, `ef-scan-report/v0.1.1` schema, or baseline
+  comparison changes; no `mcp-proxy` enforcement or `ef-mcp-policy/v0.1`
+  changes; no git tag created or pushed for this release
+
 ## v0.2.x ideas
 
 - Expand tested config schemas and platform paths

@@ -129,7 +129,7 @@ etherfence scan --format sarif > etherfence.sarif
 EtherFence scan report
 ======================
 Schema: ef-scan-report/v0.1.1
-Status: pre-alpha-scan-only
+Status: stable-local-scan
 Summary: 7 inventory item(s), 24 finding(s): high=12, medium=8, low=4, info=0
 
 HIGH
