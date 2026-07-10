@@ -9,6 +9,84 @@ one opt-in experimental runtime component: an MCP stdio boundary proxy.
 EtherFence still has no daemon mode, shell hooks, command interception,
 terminal-command scanning, or network interception.
 
+## [0.5.0] - 2026-07-10
+
+### Added
+
+- Fixture-backed compatibility smoke tests for the experimental MCP stdio
+  proxy covering `resources/list` allow and deny by method policy, in
+  addition to the existing `initialize`, `tools/list`, `tools/call`
+  allow/deny, `resources/read` allow/deny, server→client
+  sampling/roots/elicitation policy behavior, and malformed/batch
+  fail-closed coverage.
+- Optional `ETHERFENCE_REAL_MCP_POLICY` environment variable for the
+  maintainer-run real-server smoke test (`optional_real_mcp_stdio_smoke_test`),
+  letting a specific policy file be exercised against a real stdio MCP server
+  instead of the built-in compatibility policy. Only read, never modified or
+  deleted by the test. Remains skipped by default in CI; only
+  `ETHERFENCE_REAL_MCP_CMD` gates whether the test runs at all.
+- New example policies:
+  - `examples/policies/mcp-filesystem-project-readonly-hardened.toml`: the
+    existing project-root read-only policy with `deny_roots` expanded to
+    cover common credential-like paths (`.env`, `.env.local`, `.ssh`, `.aws`,
+    `.npmrc`, `.netrc`, `.pypirc`, `credentials`, `id_rsa`) in addition to
+    `.git` and `secrets`.
+  - `examples/policies/mcp-strict-method-only.toml`: an explicit `[methods]`
+    allow/deny list restricted to `tools/list` and `tools/call`, as an
+    auditable alternative to relying on the built-in method-policy default.
+- Validation tests confirming the new example policies parse and behave as
+  documented (credential-like paths denied, non-tool methods denied).
+- `## What is tested` / `## What remains untested` sections in
+  `docs/mcp-compatibility-matrix.md` stating explicitly which MCP stdio flows
+  are covered by the deterministic fixture-backed CI tests, which are not
+  (other transports, real third-party servers, specific client applications,
+  internationalized method/tool names, performance/concurrency), and that
+  passing these tests is not production-readiness certification.
+
+### Changed
+
+- Version bumped to 0.5.0.
+- `docs/mcp-compatibility-matrix.md`, `docs/mcp-real-server-test-template.md`,
+  `docs/mcp-clients.md`, `docs/mcp-proxy.md`, and `README.md` updated to
+  describe the new smoke tests, new example policies, and
+  `ETHERFENCE_REAL_MCP_POLICY`, and to state explicitly that compatibility
+  evidence from fixture-backed or optional real-server tests is not
+  production-readiness certification.
+
+### Security notes
+
+- No proxy enforcement, policy schema, or audit behavior changed in this
+  release. All v0.4.1 Unicode/homograph hardening, v0.4.0 path-aware policy,
+  v0.3.1 bidirectional method policy, v0.3.0 method-level policy, `tools/list`
+  filtering, request tracking, audit redaction, and fail-closed batch
+  behavior are preserved unchanged and continue to be exercised by regression
+  tests.
+- No raw paths, URIs, prompt text, message bodies, file/resource contents,
+  secrets, tokens, full params, argument values, or Unicode-suspicious key
+  names are logged by the new tests or example policies.
+- No daemon, API service, control plane, endpoint agent, shell hooks,
+  terminal-command scanning, network interception, TLS interception, cloud
+  dependency, DLP, content inspection, or broad URL filtering was added.
+  Arbitrary MCP tool execution was not added.
+
+### Compatibility notes
+
+- Policy schema remains `ef-mcp-policy/v0.1`. Existing valid policies parse
+  and behave unchanged; the new example policies use the same schema and
+  mechanisms (`path_rules`/`deny_roots`, `[methods]` allow/deny) documented
+  since v0.4.0/v0.3.0.
+- `docs/mcp-compatibility-matrix.md` now documents explicitly what is tested
+  and what remains untested for this release. Compatibility evidence from the
+  checked-in fake MCP server fixture or from an optional maintainer-run
+  real-server smoke test is not production-readiness certification and does
+  not extend to server behavior, tool/resource names, or flows not
+  exercised.
+
+### Migration / compatibility
+
+- No schema or runtime behavior changes. Existing policies, CI pipelines, and
+  client configurations continue to work unchanged.
+
 ## [0.4.1] - 2026-07-09
 
 ### Added

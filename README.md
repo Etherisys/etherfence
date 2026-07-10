@@ -4,7 +4,7 @@ EtherFence is an open-source **AI Agent Security Posture & Runtime Control** pro
 
 One-line idea: **Tirith protects terminal commands; EtherFence governs agent access.**
 
-Status: **pre-alpha**. The v0.1.x foundation is scan-only posture discovery with remediation guidance, CI posture gates, baseline/diff support, versioned TOML policy profiles, built-in policy profiles, direct `scan --policy-profile <name>` selection, conservative Linux/Windows discovery helpers, hardened fixture-backed config parsing, SARIF 2.1.0 export, and Linux/Windows release packaging. v0.2.x and later keep all of that unchanged and add one **experimental** runtime component: a minimal local MCP stdio boundary proxy (`etherfence mcp-proxy`). v0.4.1 is a narrow Unicode/homograph hardening release for that proxy. EtherFence is not production-ready.
+Status: **pre-alpha**. The v0.1.x foundation is scan-only posture discovery with remediation guidance, CI posture gates, baseline/diff support, versioned TOML policy profiles, built-in policy profiles, direct `scan --policy-profile <name>` selection, conservative Linux/Windows discovery helpers, hardened fixture-backed config parsing, SARIF 2.1.0 export, and Linux/Windows release packaging. v0.2.x and later keep all of that unchanged and add one **experimental** runtime component: a minimal local MCP stdio boundary proxy (`etherfence mcp-proxy`). v0.4.1 is a narrow Unicode/homograph hardening release for that proxy; v0.5.0 is a compatibility and smoke-test release that adds no new enforcement behavior. EtherFence is not production-ready.
 
 ## What the scanner does (unchanged from v0.1.8)
 
@@ -32,12 +32,12 @@ Initial inventory targets:
 
 The parser intentionally uses conservative path discovery and fixture-backed config parsing. Missing files are skipped gracefully, malformed JSON/TOML config files are reported instead of aborting the scan, and unknown extra config fields are ignored. Fixture coverage exercises common shapes (minimal configs, multiple MCP servers, no MCP servers, malformed files, Linux- and Windows-style paths), but EtherFence does not claim complete support for every agent config format or install location. Findings are posture hints, not proof of exploitability.
 
-## Experimental: MCP boundary proxy (v0.2.4/v0.4.1)
+## Experimental: MCP boundary proxy (v0.2.4/v0.4.1/v0.5.0)
 
 `etherfence mcp-proxy` is an **experimental prototype** that starts the v0.2
 runtime-control line. v0.3.0 hardened it from tool-call-only enforcement into
 method-level MCP/JSON-RPC policy enforcement; v0.3.1 extends that
-method-policy check to server→client MCP requests initiated by the server; v0.4.0 adds local path-aware argument/resource guards; v0.4.1 rejects or denies suspicious Unicode in MCP policy/runtime names and guarded path-like values. It is a minimal MCP stdio
+method-policy check to server→client MCP requests initiated by the server; v0.4.0 adds local path-aware argument/resource guards; v0.4.1 rejects or denies suspicious Unicode in MCP policy/runtime names and guarded path-like values; v0.5.0 adds fixture-backed compatibility smoke tests, additional example policies, and honest compatibility documentation without changing enforcement behavior. It is a minimal MCP stdio
 boundary proxy that sits between an MCP client and an MCP server, inspects
 client→server JSON-RPC methods and server→client MCP request methods, enforces method-level, tool-level, and configured path-like argument/resource constraints,
 allow/deny policy, and audits decisions deterministically using a small TOML
@@ -148,7 +148,7 @@ policy, Unicode/homograph hygiene for policy/runtime names and guarded
 path-like values, plus `tools/list` advertisement filtering. It is not production-ready
 and is not a general content-inspection or DLP engine. See `docs/mcp-proxy.md` for details and limitations,
 and `docs/mcp-clients.md`
-plus `docs/examples/*.json` for client configuration templates. `docs/mcp-compatibility-matrix.md` records checked compatibility evidence and `docs/mcp-real-server-test-template.md` explains optional maintainer-run real-server smoke tests.
+plus `docs/examples/*.json` for client configuration templates. `docs/mcp-compatibility-matrix.md` records checked compatibility evidence and states what is tested versus untested, and `docs/mcp-real-server-test-template.md` explains optional maintainer-run real-server smoke tests gated by `ETHERFENCE_REAL_MCP_CMD` (and optional `ETHERFENCE_REAL_MCP_POLICY`), skipped by default in CI. Compatibility evidence from these fixture-backed or optional real-server tests is not production-readiness certification.
 
 
 ## Linux and Windows usage
@@ -363,7 +363,9 @@ JSON output uses the documented `ef-scan-report/v0.1.1` shape with `schema_versi
 EtherFence v0.1.x is scan-only. v0.2.x adds the experimental MCP stdio
 boundary proxy above and nothing else. v0.3.0 hardens the proxy with
 method-level policy enforcement. v0.4.1 adds narrow Unicode/homograph hygiene
-inside MCP policy/runtime names and guarded path-like values. EtherFence does
+inside MCP policy/runtime names and guarded path-like values. v0.5.0 adds
+compatibility smoke tests, example policies, and documentation only, with no
+new enforcement behavior. EtherFence does
 **not** implement:
 
 - daemon mode

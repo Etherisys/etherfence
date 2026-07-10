@@ -107,6 +107,14 @@ Examples live at:
 - `examples/policies/mcp-sampling-denied.toml` (v0.3.0)
 - `examples/policies/mcp-filesystem-project-readonly.toml` (v0.4.0)
 - `examples/policies/mcp-resources-project-only.toml` (v0.4.0)
+- `examples/policies/mcp-filesystem-project-readonly-hardened.toml` (v0.5.0):
+  same project-only read tool as above, with `deny_roots` expanded to cover
+  common credential-like paths (`.env`, `.ssh`, `.aws`, `.npmrc`, `.netrc`,
+  `.pypirc`, `credentials`, `id_rsa`) in addition to `.git` and `secrets`
+- `examples/policies/mcp-strict-method-only.toml` (v0.5.0): explicit
+  `[methods]` allow/deny form of the strict tools-only posture, so the
+  allowed method surface is visible in the policy file instead of relying on
+  the built-in default
 
 Decision rules for tool names, in exact order:
 
@@ -449,19 +457,31 @@ The tests verify request/response id preservation, `tools/list` filtering,
 server error passthrough, fail-safe malformed `tools/list` handling, and that
 denied tool calls and batch arrays are not forwarded to the server fixture.
 
+v0.5.0 adds dedicated fixture-backed smoke coverage for allowed/denied
+`resources/list`, allowed `resources/read` over `file://`, denied
+`resources/read` outside the allowed root and for non-`file://` URIs, and
+server→client `sampling/createMessage`/`roots/list`/`elicitation/create`
+policy behavior, alongside the existing malformed and batch fail-closed
+coverage. See `docs/mcp-compatibility-matrix.md` for the full list of tested
+flows and what remains untested.
+
 Maintainers can optionally smoke-test any locally installed real stdio MCP
 server by setting `ETHERFENCE_REAL_MCP_CMD` to a JSON argv array. It is not a
-shell command and is intentionally not parsed by a shell:
+shell command and is intentionally not parsed by a shell. An optional
+`ETHERFENCE_REAL_MCP_POLICY` may point at a policy file to use instead of the
+built-in compatibility policy:
 
 ```sh
 ETHERFENCE_REAL_MCP_CMD='["/absolute/path/to/server","--arg","value"]' \
+ETHERFENCE_REAL_MCP_POLICY='/absolute/path/to/policy.toml' \
   cargo test -p etherfence-cli optional_real_mcp_stdio_smoke_test -- --nocapture
 ```
 
 If `ETHERFENCE_REAL_MCP_CMD` is absent, the optional test skips with a clear
 message. This keeps CI deterministic while allowing maintainers to validate
 that EtherFence can sit between a client-like test harness and a real stdio
-MCP server.
+MCP server. Passing this test is compatibility evidence for the tested flows
+only — it is not production-readiness certification.
 
 ## Request tracking behavior
 

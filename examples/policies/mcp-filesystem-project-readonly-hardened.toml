@@ -1,0 +1,31 @@
+schema_version = "ef-mcp-policy/v0.1"
+name = "mcp-filesystem-project-readonly-hardened"
+
+# v0.5.0 example: like mcp-filesystem-project-readonly.toml, but the deny_roots
+# list is expanded beyond .git and secrets to cover common credential-like
+# paths so a single project-scoped read tool cannot be used to read them.
+# This is still exact lexical root matching, not a generic secret/content
+# scanner: add any additional project-specific credential paths you use.
+[tools]
+allow = ["filesystem.read"]
+deny = ["filesystem.write", "filesystem.delete", "shell.run"]
+
+[path_rules.project_readonly_hardened]
+allow_roots = ["/home/user/project"]
+deny_roots = [
+  "/home/user/project/.git",
+  "/home/user/project/.env",
+  "/home/user/project/.env.local",
+  "/home/user/project/secrets",
+  "/home/user/project/.ssh",
+  "/home/user/project/.aws",
+  "/home/user/project/.npmrc",
+  "/home/user/project/.netrc",
+  "/home/user/project/.pypirc",
+  "/home/user/project/credentials",
+  "/home/user/project/id_rsa",
+]
+
+[tools."filesystem.read".arguments]
+path_keys = ["path"]
+path_rule = "project_readonly_hardened"
