@@ -1,6 +1,6 @@
 # MCP compatibility matrix
 
-This matrix records MCP stdio compatibility checks for EtherFence's `mcp-proxy` (CLI surface and `ef-mcp-policy/v0.1` schema are stable as of v1.0.0). It is evidence for common JSON-RPC stdio flows, not a conformance suite and not production-readiness evidence.
+This matrix records MCP stdio compatibility checks for EtherFence's `mcp-proxy` (CLI surface and `ef-mcp-policy/v0.1` schema are stable as of v1.0.0, and the proxy is production-ready for controlled local-first deployments of its defined scope). It is evidence for common JSON-RPC stdio flows, not a conformance suite and not a universal certification for every MCP server.
 
 ## What is tested
 
@@ -48,8 +48,9 @@ The checked-in fake MCP server fixture, run through `cargo test --workspace` on 
 
 Passing these tests is evidence that the proxy behaves correctly against a
 deterministic, checked-in fixture for the flows listed above. It is **not**
-production-readiness certification and does not certify compatibility with
-any specific real-world MCP server.
+a universal certification and does not certify compatibility with any
+specific real-world MCP server — operators must still test their own
+chosen MCP server and policy.
 
 Scope guard:
 
@@ -111,4 +112,4 @@ not a real-server-verified result.
 2. Capture the server package/version, OS/platform, exact command template, policy file, and audit-log summary.
 3. Add a new row to the matrix without changing proxy enforcement semantics.
 4. Keep tool names exact; if a server changes names between versions, create a separate row for each tested version.
-5. Label the row's notes/limitations clearly as compatibility evidence for the tested flows, not production-readiness certification.
+5. Label the row's notes/limitations clearly as compatibility evidence for the tested flows, not a universal certification for that server or any other.

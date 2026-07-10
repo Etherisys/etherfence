@@ -1,10 +1,14 @@
 # EtherFence v1.0.0 Release Checklist
 
-Status: pre-alpha overall; as of v1.0.0 the CLI surface and
-`ef-mcp-policy/v0.1` schema are stable. Scan commands are scan-only; v0.2.x+
+Status: EtherFence v1.0.0 is production-ready for controlled local-first
+deployments of its defined scope: scan, mcp-policy, and the stdio
+mcp-proxy boundary, with a stable CLI and policy schema. This is not a
+security certification for every MCP server, MCP client, or deployment
+environment; operators must still review policies, test their chosen
+servers, and monitor audit logs. Scan commands are scan-only; v0.2.x+
 additionally ships the `etherfence mcp-proxy` stdio boundary proxy. This
-checklist prepares Linux and Windows CLI artifacts without claiming
-production readiness or security certification.
+checklist prepares Linux and Windows CLI artifacts without claiming a
+universal certification.
 
 ## Primary release path: the release workflow
 
@@ -37,10 +41,11 @@ Confirm the release does not add:
 - network interception
 - Tirith terminal detection duplication
 
-Confirm the MCP proxy is described as a stable, locally-run stdio proxy (not
-a production-readiness or security certification), fails closed on invalid
-policy, supports stdio method/tool/path policy enforcement plus tracked
-`tools/list` filtering, and is the only runtime component.
+Confirm the MCP proxy is described as production-ready for controlled
+local-first deployments of its defined scope, with a stable CLI and policy
+schema (not a universal certification for every MCP server), fails closed
+on invalid policy, supports stdio method/tool/path policy enforcement plus
+tracked `tools/list` filtering, and is the only runtime component.
 
 ## Required local checks
 
@@ -181,9 +186,10 @@ them.
 
 ## Release notes reminders
 
-- Describe the MCP proxy as a stable, locally-run stdio proxy — stable CLI
-  surface and policy schema, not a production-readiness or security
-  certification for any specific MCP server.
+- Describe the MCP proxy as production-ready for controlled local-first
+  deployments of its defined scope — stable CLI surface and policy schema,
+  not a universal certification for every MCP server, MCP client, or
+  deployment environment.
 - Point to `docs/mcp-proxy-operator-guide.md` for how to wrap a real MCP
   server with the proxy.
 - Describe Windows support as conservative config discovery, not complete endpoint coverage.

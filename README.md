@@ -5,13 +5,15 @@
 One-line idea: **Tirith protects terminal commands; EtherFence governs agent
 access.**
 
-> **Status: v1.0.0 — stable local-first CLI and policy schema.** Stable does
-> not mean certified: nothing here is a production-readiness or security
-> certification for any specific MCP server. `etherfence scan` is
-> conservative, read-only posture discovery. `etherfence mcp-proxy` is an
-> opt-in local MCP stdio boundary proxy built on the stable
-> `ef-mcp-policy/v0.1` schema. `etherfence mcp-policy` is a local, serverless
-> policy-authoring/dry-run tool. See
+> **Status: v1.0.0 — production-ready for controlled local-first
+> deployments of its defined scope: `scan`, `mcp-policy`, and the stdio
+> `mcp-proxy` boundary.** This is not a security certification for every MCP
+> server, MCP client, or deployment environment; operators must still
+> review policies, test their chosen servers, and monitor audit logs.
+> `etherfence scan` is conservative, read-only posture discovery.
+> `etherfence mcp-proxy` is an opt-in local MCP stdio boundary proxy built
+> on the stable `ef-mcp-policy/v0.1` schema. `etherfence mcp-policy` is a
+> local, serverless policy-authoring/dry-run tool. See
 > [Security model / non-goals](#security-model--non-goals) below for what is
 > explicitly out of scope.
 
@@ -269,11 +271,14 @@ on the stable `ef-mcp-policy/v0.1` schema as of v1.0.0) adds method-level,
 tool-level, and path-aware policy enforcement for exactly one wrapped server
 at a time; v0.4.1 adds narrow Unicode/homograph hygiene inside policy/runtime
 names and guarded path-like values. `mcp-policy` (v0.6.0+) adds local,
-serverless policy UX with no new enforcement behavior. A stable CLI and
-policy schema is not a production-readiness or security certification for
-any specific MCP server — see
-[`docs/mcp-compatibility-matrix.md`](docs/mcp-compatibility-matrix.md) for
-exactly what is tested. EtherFence does **not** implement:
+serverless policy UX with no new enforcement behavior. EtherFence v1.0.0 is
+production-ready for controlled local-first deployments of its defined
+scope — `scan`, `mcp-policy`, and the stdio `mcp-proxy` boundary — with a
+stable CLI and policy schema. This is not a universal certification for
+every MCP server, MCP client, or deployment environment: operators must
+still test their chosen MCP servers and policies and monitor audit logs —
+see [`docs/mcp-compatibility-matrix.md`](docs/mcp-compatibility-matrix.md)
+for exactly what is tested. EtherFence does **not** implement:
 
 - daemon mode, an API service, a control plane, or an endpoint agent
 - network or TLS interception
@@ -284,6 +289,10 @@ exactly what is tested. EtherFence does **not** implement:
 - DLP, content inspection, or arbitrary MCP tool execution
 - a marketplace GitHub Action, central dashboard, remote policy service, or
   automatic PR-commenting bot
+- package-registry publishing, an auto-update system, or central/fleet
+  management
+- certification of any specific third-party MCP server, MCP client, or
+  deployment environment
 
 Tirith is treated as complementary terminal-command protection. See
 [`docs/threat-model.md`](docs/threat-model.md) for the full threat model.

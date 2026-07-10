@@ -6,9 +6,11 @@ and behavior details, see [`docs/mcp-proxy.md`](mcp-proxy.md). For authoring
 and dry-running policies without a server, see
 [`docs/mcp-policy-ux.md`](mcp-policy-ux.md).
 
-Status: `mcp-proxy` is a local, stdio-only MCP boundary proxy. It is not a
-daemon, not a network service, and not a production-readiness or security
-certification for any specific MCP server — see
+Status: `mcp-proxy` is a local, stdio-only MCP boundary proxy, production-ready
+for controlled local-first deployments of its defined scope. It is not a
+daemon, not a network service, and not a universal certification for every
+MCP server, MCP client, or deployment environment — operators must still
+test their chosen MCP servers and policies and monitor audit logs. See
 [Security model / non-goals](../README.md#security-model--non-goals) in the
 README and [`docs/mcp-compatibility-matrix.md`](mcp-compatibility-matrix.md)
 for what is actually tested.

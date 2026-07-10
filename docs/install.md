@@ -1,10 +1,13 @@
 # Install
 
-Status: **v1.0.0, stable local-first CLI and policy schema** — not a
-production-readiness or security certification, same as the rest of
-EtherFence (see the [README status line](../README.md)). Installing
-EtherFence gives you a single local CLI binary; nothing here installs a
-daemon, service, or background agent.
+Status: **v1.0.0 — production-ready for controlled local-first deployments
+of its defined scope** (`scan`, `mcp-policy`, and the stdio `mcp-proxy`
+boundary) with a stable CLI and policy schema — not a universal
+certification for every MCP server, MCP client, or deployment environment,
+same as the rest of EtherFence (see the
+[README status line](../README.md)). Installing EtherFence gives you a
+single local CLI binary; nothing here installs a daemon, service, or
+background agent.
 
 There are three ways to get `etherfence`:
 

@@ -459,22 +459,27 @@
   to reflect a stable CLI/schema surface
 - `docs/mcp-proxy.md`, `docs/mcp-policy-ux.md`, and
   `docs/mcp-compatibility-matrix.md` cross-link the operator guide and
-  reword "experimental prototype" status language to "stable CLI surface
-  and `ef-mcp-policy/v0.1` schema as of v1.0.0" — no new compatibility
-  claims and no schema changes
+  reword status language to: EtherFence v1.0.0 is production-ready for
+  controlled local-first deployments of its defined scope (scan,
+  mcp-policy, and the stdio mcp-proxy boundary), with a stable CLI and
+  policy schema — not a universal certification for every MCP server, MCP
+  client, or deployment environment; no new compatibility claims and no
+  schema changes
 - `docs/install.md` and `docs/release-checklist.md` updated for the v1.0.0
-  version and stable-but-not-certified framing
+  version and the same production-ready-for-defined-scope framing
 - New docs-drift tests: operator guide referenced paths exist, its
   documented `mcp-policy check` examples produce the exact ALLOW/DENY
   decisions shown, README links to the operator guide, and the checked-in
   example-policy count matches what README states
 - Version bumped to 1.0.0
 - No new runtime enforcement semantics, no `ef-mcp-policy/v0.1` schema
-  changes, no daemon/API/control plane, no package publishing/auto-update,
-  no production-certification claim; all prior release behavior (v0.9.0
-  compatibility evidence, v0.8.0 install/release docs, v0.7.0 CI examples,
-  v0.6.x policy UX, v0.5.0 smoke tests, v0.4.x path/Unicode hardening)
-  preserved unchanged; no git tag created or pushed for this release
+  changes, no daemon/API/control plane, no package publishing/auto-update;
+  operators must still test their chosen MCP servers and policies and
+  monitor audit logs — this is not a universal certification; all prior
+  release behavior (v0.9.0 compatibility evidence, v0.8.0 install/release
+  docs, v0.7.0 CI examples, v0.6.x policy UX, v0.5.0 smoke tests, v0.4.x
+  path/Unicode hardening) preserved unchanged; no git tag created or
+  pushed for this release
 
 ## v0.2.x ideas
 

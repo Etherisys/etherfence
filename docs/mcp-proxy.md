@@ -8,11 +8,15 @@ local path-aware argument/resource policy, and Unicode/homograph hygiene, filter
 advertisements, and audits decisions deterministically using a small TOML
 policy.
 
-Status: as of v1.0.0, the CLI surface and the `ef-mcp-policy/v0.1` policy
-schema are **stable**. Stable does not mean certified: `mcp-proxy` is not
-production-ready in the sense of a security certification for any specific
-MCP server, it is not a daemon or endpoint agent, and it does not replace the
-v0.1.x scan-only posture commands, which are unchanged. See
+Status: as of v1.0.0, `mcp-proxy`'s CLI surface and the `ef-mcp-policy/v0.1`
+policy schema are **stable**, and the proxy is production-ready for
+controlled local-first deployments of its defined scope: exactly one
+wrapped stdio MCP server at a time, policed by an operator-authored policy.
+This is not a universal certification for every MCP server, MCP client, or
+deployment environment — operators must still test their chosen MCP
+servers and policies and monitor audit logs. `mcp-proxy` is not a daemon or
+endpoint agent, and it does not replace the v0.1.x scan-only posture
+commands, which are unchanged. See
 [`docs/mcp-proxy-operator-guide.md`](mcp-proxy-operator-guide.md) for a
 practical, task-oriented walkthrough of wrapping a real MCP server, and
 [`docs/mcp-compatibility-matrix.md`](mcp-compatibility-matrix.md) for exactly
@@ -504,7 +508,8 @@ If `ETHERFENCE_REAL_MCP_CMD` is absent, the optional test skips with a clear
 message. This keeps CI deterministic while allowing maintainers to validate
 that EtherFence can sit between a client-like test harness and a real stdio
 MCP server. Passing this test is compatibility evidence for the tested flows
-only — it is not production-readiness certification.
+only — it is not a certification of that server, or of any other MCP
+server; operators must still test their own chosen MCP server and policy.
 
 ## Request tracking behavior
 

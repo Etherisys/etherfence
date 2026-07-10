@@ -2,14 +2,18 @@
 
 All notable changes to EtherFence are documented in this file.
 
-EtherFence is pre-alpha overall. The v0.1.x line is scan-only; nothing in
-v0.1.x performs runtime blocking, MCP proxying, daemon mode, shell hooks,
-command interception, terminal-command scanning, or network interception.
-v0.2.x adds one opt-in runtime component: an MCP stdio boundary proxy. As of
-v1.0.0, that proxy's CLI surface and `ef-mcp-policy/v0.1` policy schema are
-stable — stable is not a production-readiness or security certification.
-EtherFence still has no daemon mode, shell hooks, command interception,
-terminal-command scanning, or network interception.
+EtherFence v1.0.0 is production-ready for controlled local-first
+deployments of its defined scope: scan, mcp-policy, and the stdio
+mcp-proxy boundary. This is not a security certification for every MCP
+server, MCP client, or deployment environment; operators must still
+review policies, test their chosen servers, and monitor audit logs. The
+v0.1.x line is scan-only; nothing in v0.1.x performs runtime blocking, MCP
+proxying, daemon mode, shell hooks, command interception, terminal-command
+scanning, or network interception. v0.2.x adds one opt-in runtime
+component: an MCP stdio boundary proxy, whose CLI surface and
+`ef-mcp-policy/v0.1` policy schema are stable as of v1.0.0. EtherFence still
+has no daemon mode, shell hooks, command interception, terminal-command
+scanning, or network interception.
 
 ## [1.0.0] - 2026-07-10
 
@@ -37,11 +41,15 @@ terminal-command scanning, or network interception.
 
 - Stability/wording pass for v1.0.0, with no behavior or schema changes:
   `README.md`, `docs/mcp-proxy.md`, `docs/mcp-policy-ux.md`,
-  `docs/mcp-compatibility-matrix.md`, `docs/install.md`, and
-  `docs/release-checklist.md` reword "experimental prototype" status
-  language to describe a stable CLI surface and `ef-mcp-policy/v0.1` schema,
-  while continuing to state plainly that this is not a production-readiness
-  or security certification for any specific MCP server
+  `docs/mcp-proxy-operator-guide.md`, `docs/mcp-compatibility-matrix.md`,
+  `docs/install.md`, `docs/release-checklist.md`, and `docs/roadmap.md`
+  reword status language to state that EtherFence v1.0.0 is
+  production-ready for controlled local-first deployments of its defined
+  scope (scan, mcp-policy, and the stdio mcp-proxy boundary) with a stable
+  CLI and policy schema, while making clear this is not a universal
+  certification for every MCP server, MCP client, or deployment
+  environment — operators must still test their chosen MCP servers and
+  policies and monitor audit logs
 - README's checked-in example-policy count corrected from ten to twelve
   (it had drifted out of date since v0.9.0 added
   `examples/policies/mcp-memory-notes-readonly.toml`)
@@ -55,8 +63,10 @@ terminal-command scanning, or network interception.
 - No daemon, API service, control plane, endpoint agent, shell hooks,
   terminal-command scanning, network/TLS interception, DLP/content
   inspection, marketplace action, PR bot, package publishing, or auto-update
-- No production-certification claim for any real-world MCP server — this
-  release states CLI/schema stability, not a security guarantee
+- Not a universal certification: EtherFence does not protect MCP servers
+  that are not wrapped by `mcp-proxy`, does not support HTTP/SSE MCP
+  transport, does not intercept network/TLS traffic, and does not perform
+  DLP/content inspection or certify any specific third-party MCP server
 - All prior release behavior (v0.9.0 compatibility evidence, v0.8.0
   install/release docs, v0.7.0 CI examples, v0.6.x policy UX/test
   hardening, v0.5.0 smoke tests, v0.4.x path/Unicode hardening) preserved
