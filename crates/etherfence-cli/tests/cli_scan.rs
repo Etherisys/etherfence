@@ -54,8 +54,8 @@ fn scan_fixture_json_has_stable_top_level_schema() {
 
     assert_eq!(json["schema_version"], "ef-scan-report/v0.1.1");
     assert_eq!(json["tool"], "etherfence");
-    assert_eq!(json["version"], "1.0.0");
-    assert_eq!(json["status"], "pre-alpha-scan-only");
+    assert_eq!(json["version"], "1.0.1");
+    assert_eq!(json["status"], "stable-local-scan");
     assert!(json.get("scanned_root").is_some());
     assert!(json["inventory"].is_array());
     assert!(json["findings"].is_array());
@@ -149,6 +149,27 @@ fn scan_fixture_human_groups_by_severity_and_guidance() {
 }
 
 #[test]
+fn scan_fixture_human_status_and_note_are_v1_compatible() {
+    let root = fixture_root("home");
+    let output = run(&["scan", "--root", &root]);
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(stdout.contains("Status: stable-local-scan"));
+    assert!(!stdout.to_lowercase().contains("pre-alpha"));
+    assert!(!stdout.contains("EtherFence is scan-only"));
+
+    assert!(stdout.contains("This scan command is read-only posture discovery"));
+    assert!(stdout.contains("Runtime MCP boundary enforcement is available separately through"));
+    assert!(stdout.contains("`etherfence mcp-proxy`"));
+}
+
+#[test]
 fn severity_threshold_high_displays_only_high_findings() {
     let root = fixture_root("home");
     let output = run(&["scan", "--root", &root, "--severity-threshold", "high"]);
@@ -207,6 +228,10 @@ fn markdown_output_has_review_headings_and_guidance() {
     assert!(stdout.contains("- Rationale:"));
     assert!(stdout.contains("- Impact:"));
     assert!(stdout.contains("- Recommendation:"));
+    assert!(stdout.contains("- Status: `stable-local-scan`"));
+    assert!(!stdout.to_lowercase().contains("pre-alpha"));
+    assert!(stdout.contains("This scan command is read-only posture discovery"));
+    assert!(stdout.contains("Runtime MCP boundary enforcement is available separately through"));
 }
 
 #[test]
@@ -864,7 +889,7 @@ fn sarif_output_is_valid_and_maps_severity_levels() {
     );
     let driver = &json["runs"][0]["tool"]["driver"];
     assert_eq!(driver["name"], "etherfence");
-    assert_eq!(driver["version"], "1.0.0");
+    assert_eq!(driver["version"], "1.0.1");
 
     let rules = sarif_rules(&json);
     let rule_ids: Vec<&str> = rules

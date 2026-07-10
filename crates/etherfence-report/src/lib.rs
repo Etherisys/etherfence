@@ -146,7 +146,7 @@ pub fn to_human(report: &ScanReport) -> String {
     out.push('\n');
     append_human_inventory(&mut out, report);
     append_human_findings(&mut out, report);
-    out.push_str("\nNote: EtherFence is scan-only pre-alpha posture discovery. It does not block, proxy, hook, or intercept runtime activity. Findings are posture risks/hints, not confirmed exploitability.\n");
+    out.push_str("\nNote: This scan command is read-only posture discovery. It does not block, proxy, hook, or intercept runtime activity. Runtime MCP boundary enforcement is available separately through `etherfence mcp-proxy`. Findings are posture risks/hints, not confirmed exploitability.\n");
     out
 }
 
@@ -252,7 +252,7 @@ pub fn to_markdown(report: &ScanReport) -> String {
             }
         }
     }
-    out.push_str("_Scan-only pre-alpha output. Findings are posture risks/hints, not confirmed exploitability._\n");
+    out.push_str("_This scan command is read-only posture discovery. It does not block, proxy, hook, or intercept runtime activity. Runtime MCP boundary enforcement is available separately through `etherfence mcp-proxy`. Findings are posture risks/hints, not confirmed exploitability._\n");
     out
 }
 
@@ -358,7 +358,7 @@ mod tests {
             schema_version: "ef-scan-report/v0.1.1".to_string(),
             tool: "etherfence".to_string(),
             version: "0.1.3".to_string(),
-            status: "pre-alpha-scan-only".to_string(),
+            status: "stable-local-scan".to_string(),
             scanned_root: "/home/user".to_string(),
             inventory: Vec::new(),
             findings: Vec::new(),
@@ -367,7 +367,13 @@ mod tests {
             baseline: None,
         };
         let rendered = to_human(&report);
-        assert!(rendered.contains("scan-only"));
+        assert!(rendered.contains("Status: stable-local-scan"));
+        assert!(!rendered.to_lowercase().contains("pre-alpha"));
+        assert!(!rendered.contains("EtherFence is scan-only"));
+        assert!(rendered.contains("This scan command is read-only posture discovery"));
+        assert!(
+            rendered.contains("Runtime MCP boundary enforcement is available separately through")
+        );
         assert!(rendered.contains("Schema: ef-scan-report/v0.1.1"));
     }
 
@@ -377,7 +383,7 @@ mod tests {
             schema_version: "ef-scan-report/v0.1.1".to_string(),
             tool: "etherfence".to_string(),
             version: "0.1.3".to_string(),
-            status: "pre-alpha-scan-only".to_string(),
+            status: "stable-local-scan".to_string(),
             scanned_root: "/home/user".to_string(),
             inventory: Vec::new(),
             findings: Vec::new(),
@@ -389,6 +395,9 @@ mod tests {
         assert!(rendered.contains("# EtherFence Scan Report"));
         assert!(rendered.contains("## Summary"));
         assert!(rendered.contains("## Findings"));
+        assert!(rendered.contains("- Status: `stable-local-scan`"));
+        assert!(!rendered.to_lowercase().contains("pre-alpha"));
+        assert!(rendered.contains("This scan command is read-only posture discovery"));
     }
 
     #[test]
@@ -425,7 +434,7 @@ mod tests {
             schema_version: "ef-scan-report/v0.1.1".to_string(),
             tool: "etherfence".to_string(),
             version: "0.1.8".to_string(),
-            status: "pre-alpha-scan-only".to_string(),
+            status: "stable-local-scan".to_string(),
             scanned_root: "/home/user".to_string(),
             inventory: Vec::new(),
             findings: vec![finding],

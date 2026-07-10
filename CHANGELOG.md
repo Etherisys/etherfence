@@ -15,6 +15,27 @@ component: an MCP stdio boundary proxy, whose CLI surface and
 has no daemon mode, shell hooks, command interception, terminal-command
 scanning, or network interception.
 
+## [1.0.1] - 2026-07-10
+
+### Fixed
+
+- Fixed stale v0.1-era `scan` output wording left over from before v1.0.0.
+  The human, JSON, Markdown, and SARIF `status` field said
+  `pre-alpha-scan-only`, and the human/Markdown note said "EtherFence is
+  scan-only pre-alpha posture discovery. It does not block, proxy, hook, or
+  intercept runtime activity...", both inaccurate now that v1.0.0 ships a
+  stable local-first `mcp-policy` and `mcp-proxy` alongside `scan`. `status`
+  is now `stable-local-scan`. The note is now scoped to the `scan` command
+  specifically: "This scan command is read-only posture discovery. It does
+  not block, proxy, hook, or intercept runtime activity. Runtime MCP
+  boundary enforcement is available separately through `etherfence
+  mcp-proxy`. Findings are posture risks/hints, not confirmed
+  exploitability." Messaging/status-only change: no scanner detection
+  logic, finding IDs, severities, fingerprints, `ef-scan-report/v0.1.1`
+  JSON schema, baseline comparison behavior, `mcp-proxy` enforcement, or
+  `ef-mcp-policy/v0.1` changes. No git tag created or pushed for this
+  release.
+
 ## [1.0.0] - 2026-07-10
 
 ### Added
