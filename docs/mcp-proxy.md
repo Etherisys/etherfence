@@ -1,16 +1,22 @@
-# MCP Boundary Proxy (experimental)
+# MCP Boundary Proxy
 
-`etherfence mcp-proxy` is the first prototype in the EtherFence v0.2.x+
-runtime-control line. It is a minimal MCP **stdio** boundary proxy
+`etherfence mcp-proxy` is the runtime-control component of EtherFence
+(introduced in v0.2.x). It is a minimal MCP **stdio** boundary proxy
 that sits between an MCP client and an MCP server, inspects every
 client→server JSON-RPC method, enforces method-level, tool-level, configured
 local path-aware argument/resource policy, and Unicode/homograph hygiene, filters tool
 advertisements, and audits decisions deterministically using a small TOML
 policy.
 
-Status: **experimental prototype**. It is not production-ready, it is not a
-daemon or endpoint agent, and it does not replace the v0.1.x scan-only
-posture commands, which are unchanged.
+Status: as of v1.0.0, the CLI surface and the `ef-mcp-policy/v0.1` policy
+schema are **stable**. Stable does not mean certified: `mcp-proxy` is not
+production-ready in the sense of a security certification for any specific
+MCP server, it is not a daemon or endpoint agent, and it does not replace the
+v0.1.x scan-only posture commands, which are unchanged. See
+[`docs/mcp-proxy-operator-guide.md`](mcp-proxy-operator-guide.md) for a
+practical, task-oriented walkthrough of wrapping a real MCP server, and
+[`docs/mcp-compatibility-matrix.md`](mcp-compatibility-matrix.md) for exactly
+what compatibility evidence exists today.
 
 ## Usage
 

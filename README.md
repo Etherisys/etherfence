@@ -5,11 +5,13 @@
 One-line idea: **Tirith protects terminal commands; EtherFence governs agent
 access.**
 
-> **Status: pre-alpha, pre-v1.** EtherFence is not production-ready and
-> nothing here is a security certification. `etherfence scan` is
+> **Status: v1.0.0 — stable local-first CLI and policy schema.** Stable does
+> not mean certified: nothing here is a production-readiness or security
+> certification for any specific MCP server. `etherfence scan` is
 > conservative, read-only posture discovery. `etherfence mcp-proxy` is an
-> **experimental** opt-in local MCP stdio boundary proxy. `etherfence
-> mcp-policy` is a local, serverless policy-authoring/dry-run tool. See
+> opt-in local MCP stdio boundary proxy built on the stable
+> `ef-mcp-policy/v0.1` schema. `etherfence mcp-policy` is a local, serverless
+> policy-authoring/dry-run tool. See
 > [Security model / non-goals](#security-model--non-goals) below for what is
 > explicitly out of scope.
 
@@ -32,10 +34,12 @@ Three local commands, each with a distinct job:
   impact, and remediation guidance. Supports baselines, TOML policy
   profiles, `--fail-on`/`--fail-on-new` CI gates, and JSON/Markdown/SARIF
   output.
-- **`etherfence mcp-proxy`** — a local MCP runtime boundary. An
-  **experimental** stdio proxy that sits between an MCP client and one MCP
-  server, enforces method-level, tool-level, and path-aware allow/deny
-  policy, and audits decisions. Fails closed on any policy problem.
+- **`etherfence mcp-proxy`** — a local MCP runtime boundary. A stdio proxy
+  that sits between an MCP client and one MCP server, enforces
+  method-level, tool-level, and path-aware allow/deny policy, and audits
+  decisions. Fails closed on any policy problem. See the
+  [operator guide](docs/mcp-proxy-operator-guide.md) for how to wrap a real
+  server with it.
 - **`etherfence mcp-policy`** — policy authoring, validation, explanation,
   and dry-run. `validate`/`explain`/`init`/`check` read and reason about an
   `mcp-proxy` policy file without ever starting or contacting an MCP server.
@@ -108,7 +112,7 @@ cargo build --release -p etherfence-cli
 | `etherfence scan` | Posture discovery / CI gate | Local, read-only, scan-only |
 | `etherfence policy list` / `show <name>` | Inspect built-in scan-only policy profiles | Local, read-only |
 | `etherfence mcp-policy validate/explain/init/check` | Author, validate, explain, and dry-run MCP proxy policies | Local, serverless |
-| `etherfence mcp-proxy` | Experimental MCP stdio boundary proxy | Opt-in, experimental runtime |
+| `etherfence mcp-proxy` | MCP stdio boundary proxy | Opt-in, local runtime |
 
 ## `scan` example
 
@@ -166,6 +170,15 @@ etherfence mcp-proxy \
   -- npx -y @modelcontextprotocol/server-filesystem /home/user/projects
 ```
 
+**How `mcp-proxy` fits into your MCP client config:** replace the server
+command in your client's config with `etherfence mcp-proxy` plus its flags,
+then move the original server command and args after `--` — nothing about
+the wrapped server itself changes. See
+**[`docs/mcp-proxy-operator-guide.md`](docs/mcp-proxy-operator-guide.md)**
+for the full before/after diagram, flag reference, `tools/list`
+filtering/allow-deny flow, dry-run and audit-log walkthroughs, common
+failure modes, and filesystem/memory-notes config examples.
+
 Policies use schema `ef-mcp-policy/v0.1`:
 
 ```toml
@@ -188,12 +201,14 @@ path_rule = "project_readonly"
 The proxy inspects every client→server and server→client JSON-RPC method,
 enforces method/tool/path policy, filters `tools/list` advertisements, and
 **fails closed**: a missing or invalid policy means the MCP server is never
-started. Ten checked-in example policies live under
+started. Twelve checked-in example policies live under
 [`examples/policies/`](examples/policies). Full behavior, the Unicode/
 homograph hardening added in v0.4.1, and current compatibility evidence are
 documented in [`docs/mcp-proxy.md`](docs/mcp-proxy.md),
-[`docs/mcp-clients.md`](docs/mcp-clients.md) (client configuration
-templates), and [`docs/mcp-compatibility-matrix.md`](docs/mcp-compatibility-matrix.md).
+[`docs/mcp-proxy-operator-guide.md`](docs/mcp-proxy-operator-guide.md)
+(practical wrapping walkthrough), [`docs/mcp-clients.md`](docs/mcp-clients.md)
+(client configuration templates), and
+[`docs/mcp-compatibility-matrix.md`](docs/mcp-compatibility-matrix.md).
 
 ## CI and team workflow integration
 
@@ -237,6 +252,7 @@ active repository workflows — copy the one(s) you want into your own
 | [`docs/ci.md`](docs/ci.md) | CI/team workflow integration in full |
 | [`docs/policy.md`](docs/policy.md) | `ef-policy/v0.1` scan-only policy schema and built-in profiles |
 | [`docs/mcp-proxy.md`](docs/mcp-proxy.md) | `mcp-proxy` behavior, `ef-mcp-policy/v0.1` schema, limitations |
+| [`docs/mcp-proxy-operator-guide.md`](docs/mcp-proxy-operator-guide.md) | Practical operator walkthrough: before/after, flags, policy/`--server-name` mapping, dry-run and audit-log usage, failure modes, config examples |
 | [`docs/mcp-policy-ux.md`](docs/mcp-policy-ux.md) | `mcp-policy validate/explain/init/check` reference |
 | [`docs/mcp-clients.md`](docs/mcp-clients.md) | Client configuration templates for wrapping a server with `mcp-proxy` |
 | [`docs/mcp-compatibility-matrix.md`](docs/mcp-compatibility-matrix.md) | What MCP stdio behavior is tested vs. untested |
@@ -248,13 +264,16 @@ active repository workflows — copy the one(s) you want into your own
 
 ## Security model / non-goals
 
-EtherFence v0.1.x is scan-only. The experimental MCP stdio boundary proxy
-(v0.2.x+) adds method-level, tool-level, and path-aware policy enforcement
-for exactly one wrapped server at a time; v0.4.1 adds narrow Unicode/
-homograph hygiene inside policy/runtime names and guarded path-like values.
-`mcp-policy` (v0.6.0+) adds local, serverless policy UX with no new
-enforcement behavior. None of this is a production-readiness or security
-certification. EtherFence does **not** implement:
+EtherFence v0.1.x is scan-only. The MCP stdio boundary proxy (v0.2.x+, built
+on the stable `ef-mcp-policy/v0.1` schema as of v1.0.0) adds method-level,
+tool-level, and path-aware policy enforcement for exactly one wrapped server
+at a time; v0.4.1 adds narrow Unicode/homograph hygiene inside policy/runtime
+names and guarded path-like values. `mcp-policy` (v0.6.0+) adds local,
+serverless policy UX with no new enforcement behavior. A stable CLI and
+policy schema is not a production-readiness or security certification for
+any specific MCP server — see
+[`docs/mcp-compatibility-matrix.md`](docs/mcp-compatibility-matrix.md) for
+exactly what is tested. EtherFence does **not** implement:
 
 - daemon mode, an API service, a control plane, or an endpoint agent
 - network or TLS interception
@@ -283,7 +302,7 @@ Releases are cut with a manual `workflow_dispatch` GitHub Actions workflow
 (`.github/workflows/release.yml`), never automatically:
 
 ```sh
-gh workflow run release.yml --ref main -f version=0.8.0
+gh workflow run release.yml --ref main -f version=1.0.0
 ```
 
 It re-runs the checks above on Linux and Windows, builds and checksums both

@@ -1,9 +1,10 @@
 # Install
 
-Status: **pre-alpha, pre-v1**, same as the rest of EtherFence (see the
-[README status section](../README.md#status)). Installing EtherFence gives
-you a single local CLI binary; nothing here installs a daemon, service, or
-background agent.
+Status: **v1.0.0, stable local-first CLI and policy schema** — not a
+production-readiness or security certification, same as the rest of
+EtherFence (see the [README status line](../README.md)). Installing
+EtherFence gives you a single local CLI binary; nothing here installs a
+daemon, service, or background agent.
 
 There are three ways to get `etherfence`:
 
@@ -28,7 +29,7 @@ Download both files for the release you want, then:
 sha256sum -c etherfence-linux-x86_64.tar.gz.sha256
 
 # Extract. The archive contains a versioned directory, e.g.
-# etherfence-v0.9.0-linux-x86_64/{etherfence,README.md,LICENSE}.
+# etherfence-v1.0.0-linux-x86_64/{etherfence,README.md,LICENSE}.
 tar -xzf etherfence-linux-x86_64.tar.gz
 
 # Run it in place...
@@ -58,7 +59,7 @@ $actual = (Get-FileHash etherfence-windows-x86_64.zip -Algorithm SHA256).Hash
 if ($actual -ne $expected.ToUpper()) { throw "checksum mismatch" }
 
 # Extract. The archive contains a versioned directory, e.g.
-# etherfence-v0.9.0-windows-x86_64\{etherfence.exe,README.md,LICENSE}.
+# etherfence-v1.0.0-windows-x86_64\{etherfence.exe,README.md,LICENSE}.
 Expand-Archive etherfence-windows-x86_64.zip -DestinationPath .
 
 # Run it in place...
@@ -101,7 +102,7 @@ etherfence --version
 ```
 
 should print `etherfence <version>` matching the release or checkout you
-installed (`0.9.0` for this release).
+installed (`1.0.0` for this release).
 
 ## Run your first scan
 

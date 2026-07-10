@@ -1,19 +1,20 @@
-# EtherFence v0.2.5 Release Checklist
+# EtherFence v1.0.0 Release Checklist
 
-Status: pre-alpha. Scan commands are scan-only; v0.2.x additionally ships the
-experimental `etherfence mcp-proxy` stdio boundary proxy prototype. This
-checklist prepares Linux and Windows CLI artifacts without claiming production
-readiness.
+Status: pre-alpha overall; as of v1.0.0 the CLI surface and
+`ef-mcp-policy/v0.1` schema are stable. Scan commands are scan-only; v0.2.x+
+additionally ships the `etherfence mcp-proxy` stdio boundary proxy. This
+checklist prepares Linux and Windows CLI artifacts without claiming
+production readiness or security certification.
 
 ## Primary release path: the release workflow
 
-Starting with v0.2.5, the primary and preferred way to cut a release is the
+The primary and preferred way to cut a release is the
 manual `workflow_dispatch` GitHub Actions workflow in
 `.github/workflows/release.yml`, documented in full in
 `docs/release-automation.md`:
 
 ```sh
-gh workflow run release.yml --ref main -f version=0.2.5
+gh workflow run release.yml --ref main -f version=1.0.0
 ```
 
 It validates release state, runs the same checks listed below on
@@ -36,9 +37,10 @@ Confirm the release does not add:
 - network interception
 - Tirith terminal detection duplication
 
-Confirm the MCP proxy is described as an experimental stdio prototype, fails
-closed on invalid policy, supports only stdio `tools/call` enforcement plus
-tracked `tools/list` filtering, and is the only runtime component.
+Confirm the MCP proxy is described as a stable, locally-run stdio proxy (not
+a production-readiness or security certification), fails closed on invalid
+policy, supports stdio method/tool/path policy enforcement plus tracked
+`tools/list` filtering, and is the only runtime component.
 
 ## Required local checks
 
@@ -58,9 +60,9 @@ On Linux:
 
 ```sh
 cargo build --release -p etherfence-cli
-mkdir -p dist/etherfence-v0.2.5-linux-x86_64
-cp target/release/etherfence dist/etherfence-v0.2.5-linux-x86_64/
-tar -C dist -czf dist/etherfence-linux-x86_64.tar.gz etherfence-v0.2.5-linux-x86_64
+mkdir -p dist/etherfence-v1.0.0-linux-x86_64
+cp target/release/etherfence dist/etherfence-v1.0.0-linux-x86_64/
+tar -C dist -czf dist/etherfence-linux-x86_64.tar.gz etherfence-v1.0.0-linux-x86_64
 (cd dist && sha256sum etherfence-linux-x86_64.tar.gz > etherfence-linux-x86_64.tar.gz.sha256)
 ```
 
@@ -79,9 +81,9 @@ On Windows PowerShell:
 
 ```powershell
 cargo build --release -p etherfence-cli
-New-Item -ItemType Directory -Force -Path dist/etherfence-v0.2.5-windows-x86_64 | Out-Null
-Copy-Item target/release/etherfence.exe dist/etherfence-v0.2.5-windows-x86_64/
-Compress-Archive -Path dist/etherfence-v0.2.5-windows-x86_64 -DestinationPath dist/etherfence-windows-x86_64.zip -Force
+New-Item -ItemType Directory -Force -Path dist/etherfence-v1.0.0-windows-x86_64 | Out-Null
+Copy-Item target/release/etherfence.exe dist/etherfence-v1.0.0-windows-x86_64/
+Compress-Archive -Path dist/etherfence-v1.0.0-windows-x86_64 -DestinationPath dist/etherfence-windows-x86_64.zip -Force
 $hash = (Get-FileHash dist/etherfence-windows-x86_64.zip -Algorithm SHA256).Hash.ToLower()
 "$hash  etherfence-windows-x86_64.zip" | Set-Content -NoNewline -Path dist/etherfence-windows-x86_64.zip.sha256
 ```
@@ -96,9 +98,11 @@ Smoke check:
 
 ## MCP compatibility matrix checks
 
-For v0.2.5 and later, confirm:
+For v1.0.0 and later, confirm:
 
 - `docs/mcp-compatibility-matrix.md` exists and includes the fake MCP server row.
+- `docs/mcp-proxy-operator-guide.md` exists, is linked from README.md and
+  `docs/mcp-proxy.md`, and its referenced example paths exist.
 - `docs/mcp-real-server-test-template.md` documents `ETHERFENCE_REAL_MCP_CMD` as JSON argv.
 - Compatibility records do not claim daemon mode, HTTP/SSE transport, network interception, shell hooks, terminal-command scanning, wildcard/prefix/regex matching, or new enforcement semantics.
 - Checked JSON client examples and example MCP proxy TOML policies are covered by tests.
@@ -151,17 +155,17 @@ smoke-tested:
 ```sh
 git checkout main
 git pull origin main
-git tag -a v0.2.5 -m "EtherFence v0.2.5: manual GitHub Actions release workflow"
-git push origin v0.2.5
+git tag -a v1.0.0 -m "EtherFence v1.0.0: stable local-first MCP boundary release"
+git push origin v1.0.0
 ```
 
 Then create the GitHub release from the tag and attach the CI-built
 `etherfence-linux-x86_64.tar.gz` and `etherfence-windows-x86_64.zip`:
 
 ```sh
-gh release create v0.2.5 \
-  --title "EtherFence v0.2.5" \
-  --notes-file <(sed -n '/^## \[0.2.5\]/,/^## /p' CHANGELOG.md | sed '$d') \
+gh release create v1.0.0 \
+  --title "EtherFence v1.0.0" \
+  --notes-file <(sed -n '/^## \[1.0.0\]/,/^## /p' CHANGELOG.md | sed '$d') \
   dist-ci/etherfence-linux-x86_64/etherfence-linux-x86_64.tar.gz \
   dist-ci/etherfence-linux-x86_64/etherfence-linux-x86_64.tar.gz.sha256 \
   dist-ci/etherfence-windows-x86_64/etherfence-windows-x86_64.zip \
@@ -177,7 +181,11 @@ them.
 
 ## Release notes reminders
 
-- Describe the MCP proxy as an experimental stdio prototype, not production-ready runtime enforcement.
+- Describe the MCP proxy as a stable, locally-run stdio proxy — stable CLI
+  surface and policy schema, not a production-readiness or security
+  certification for any specific MCP server.
+- Point to `docs/mcp-proxy-operator-guide.md` for how to wrap a real MCP
+  server with the proxy.
 - Describe Windows support as conservative config discovery, not complete endpoint coverage.
 - Mention that missing `USERPROFILE`, `APPDATA`, or `LOCALAPPDATA` is handled gracefully.
 - Mention that path separators are normalized for stable evidence/fingerprints.

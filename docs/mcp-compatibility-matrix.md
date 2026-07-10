@@ -1,6 +1,6 @@
 # MCP compatibility matrix
 
-This matrix records MCP stdio compatibility checks for EtherFence's experimental `mcp-proxy`. It is evidence for common JSON-RPC stdio flows, not a conformance suite and not production-readiness evidence.
+This matrix records MCP stdio compatibility checks for EtherFence's `mcp-proxy` (CLI surface and `ef-mcp-policy/v0.1` schema are stable as of v1.0.0). It is evidence for common JSON-RPC stdio flows, not a conformance suite and not production-readiness evidence.
 
 ## What is tested
 
