@@ -9,6 +9,52 @@ one opt-in experimental runtime component: an MCP stdio boundary proxy.
 EtherFence still has no daemon mode, shell hooks, command interception,
 terminal-command scanning, or network interception.
 
+## [0.9.0] - 2026-07-10
+
+### Added
+
+- Fixture-backed compatibility tests for more realistic MCP protocol shapes,
+  still against the checked-in fake MCP server fixture and with no proxy
+  enforcement behavior changes:
+  - a richer `tools/list` response with a nested `inputSchema` (nested
+    object property, an array-of-strings property, and a `required` list),
+    proving the filtered response preserves an allowed tool's schema
+    structure unchanged, not just its name
+  - realistic `resources/list` entries (`uri`/`name`/`mimeType`) and a
+    `resources/read` `contents` array shape (`uri`/`mimeType`/`text`)
+  - `completion/complete` denied by method policy (in addition to the
+    existing `prompts/get` and `sampling/createMessage` denial coverage)
+- New example policy `examples/policies/mcp-memory-notes-readonly.toml` for
+  a memory/notes-style (knowledge-graph or notes store) MCP server, using
+  the existing global-deny-plus-server-scoped-allow shape
+- `docs/mcp-compatibility-matrix.md` adds a "Realistic MCP server categories"
+  status table (filesystem-style, GitHub/API-style, memory/notes-style,
+  resources/read-capable, and server→client feature servers), each pointing
+  at a recommended starting policy and stating plainly that no real-server
+  row exists yet for that category
+- `docs/mcp-real-server-test-template.md` documents choosing a starting
+  policy by server category before running the optional, env-var-gated
+  real-server smoke test
+- Version bumped to 0.9.0
+
+### Not in scope
+
+- No `ef-mcp-policy/v0.1` schema changes and no MCP proxy runtime
+  enforcement behavior changes
+- No daemon, API service, control plane, endpoint agent, shell hooks,
+  terminal-command scanning, network/TLS interception, DLP/content
+  inspection, marketplace action, PR bot, or package publishing
+- No real third-party MCP server is started by default in CI; the optional
+  real-server smoke test remains skipped unless a maintainer sets
+  `ETHERFENCE_REAL_MCP_CMD`
+- This release is compatibility evidence for the tested flows and
+  categories above; it is **not** production-readiness certification for
+  any real-world MCP server
+- All prior release behavior (v0.8.0 install/release docs, v0.7.0 CI
+  examples, v0.6.x policy UX, v0.5.0 smoke tests, v0.4.x path/Unicode
+  hardening) is preserved unchanged
+- No git tag created or pushed for this release
+
 ## [0.8.0] - 2026-07-10
 
 ### Added

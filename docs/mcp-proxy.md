@@ -115,6 +115,9 @@ Examples live at:
   `[methods]` allow/deny form of the strict tools-only posture, so the
   allowed method surface is visible in the policy file instead of relying on
   the built-in default
+- `examples/policies/mcp-memory-notes-readonly.toml` (v0.9.0): global deny plus
+  `--server-name memory` server-scoped read-only allow rules for a
+  memory/notes-style (knowledge-graph or notes store) MCP server
 
 Decision rules for tool names, in exact order:
 
@@ -462,8 +465,22 @@ v0.5.0 adds dedicated fixture-backed smoke coverage for allowed/denied
 `resources/read` outside the allowed root and for non-`file://` URIs, and
 server→client `sampling/createMessage`/`roots/list`/`elicitation/create`
 policy behavior, alongside the existing malformed and batch fail-closed
-coverage. See `docs/mcp-compatibility-matrix.md` for the full list of tested
-flows and what remains untested.
+coverage.
+
+v0.9.0 adds fixture-backed coverage for more realistic MCP protocol shapes,
+still against the same checked-in fake MCP server: a richer `tools/list`
+response with a nested `inputSchema` (nested object property, an
+array-of-strings property, and a `required` list) that is preserved unchanged
+for an allowed tool after filtering; realistic `resources/list` entries
+(`uri`/`name`/`mimeType`) and a `resources/read` `contents` array shape
+(`uri`/`mimeType`/`text`); and `completion/complete` denied by method policy.
+It also documents compatibility-evidence status for realistic MCP server
+categories (filesystem-style, GitHub/API-style, memory/notes-style,
+resources/read-capable, and server→client feature servers) and adds an
+example policy for a memory/notes-style server,
+`examples/policies/mcp-memory-notes-readonly.toml`. See
+`docs/mcp-compatibility-matrix.md` for the full list of tested flows, the
+server-category status table, and what remains untested.
 
 Maintainers can optionally smoke-test any locally installed real stdio MCP
 server by setting `ETHERFENCE_REAL_MCP_CMD` to a JSON argv array. It is not a

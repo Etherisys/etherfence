@@ -18,7 +18,7 @@ schema_version = "ef-mcp-policy/v0.1"
 name = "compat-mcp-boundary"
 
 [tools]
-allow = ["compat.allowed", "compat.server_error"]
+allow = ["compat.allowed", "compat.server_error", "compat.rich_tool"]
 deny = ["compat.denied"]
 "#;
 
@@ -1707,6 +1707,164 @@ fn proxy_default_policy_denies_resources_read() {
 
     let received = std::fs::read_to_string(&run.server_log).expect("server log");
     assert!(!received.contains("resources/read"));
+
+    let _ = std::fs::remove_file(&policy);
+    let _ = std::fs::remove_file(&run.server_log);
+    let _ = std::fs::remove_file(&run.audit_log);
+}
+
+// --- v0.9.0 realistic MCP server shape compatibility tests ---
+//
+// These exercise richer, more realistic JSON-RPC shapes (nested tool
+// `inputSchema` fields, structured resource list/read entries) against the
+// same deterministic fake MCP server fixture used above, plus method-policy
+// denial of `completion/complete`. They are compatibility evidence only: no
+// proxy enforcement behavior changes, no schema changes.
+
+#[test]
+fn proxy_tools_list_rich_nested_schema_preserved_after_filtering() {
+    let policy = write_temp_policy("rich-schema", COMPAT_POLICY);
+    let run = run_proxy_with_input(
+        "rich-schema",
+        &policy,
+        &[r#"{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"fixture":"rich"}}"#],
+    );
+    assert!(
+        run.output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&run.output.stderr)
+    );
+    let lines = stdout_json_lines(&run.output);
+    let response = response_with_id(&lines, 1);
+    let tools = response["result"]["tools"].as_array().expect("tools array");
+
+    // The denied tool is filtered out; only the allowed rich tool remains.
+    assert_eq!(tools.len(), 1);
+    let tool = &tools[0];
+    assert_eq!(tool["name"], "compat.rich_tool");
+
+    // The nested inputSchema structure survives tools/list filtering
+    // unchanged: a nested object property with its own nested object and
+    // array-of-strings property, not just the top-level tool name.
+    assert_eq!(tool["inputSchema"]["type"], "object");
+    assert_eq!(tool["inputSchema"]["required"][0], "path");
+    assert_eq!(
+        tool["inputSchema"]["properties"]["options"]["properties"]["recursive"]["type"],
+        "boolean"
+    );
+    assert_eq!(
+        tool["inputSchema"]["properties"]["options"]["properties"]["filters"]["items"]["type"],
+        "string"
+    );
+    assert!(!response.to_string().contains("compat.denied"));
+
+    let _ = std::fs::remove_file(&policy);
+    let _ = std::fs::remove_file(&run.server_log);
+    let _ = std::fs::remove_file(&run.audit_log);
+}
+
+#[test]
+fn proxy_resources_list_returns_realistic_resource_objects() {
+    let policy = write_temp_policy("rich-res-list", METHOD_POLICY);
+    let run = run_proxy_with_input(
+        "rich-res-list",
+        &policy,
+        &[r#"{"jsonrpc":"2.0","id":1,"method":"resources/list","params":{"fixture":"rich"}}"#],
+    );
+    assert!(
+        run.output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&run.output.stderr)
+    );
+    let lines = stdout_json_lines(&run.output);
+    let response = response_with_id(&lines, 1);
+    let resources = response["result"]["resources"]
+        .as_array()
+        .expect("resources array");
+    assert_eq!(resources.len(), 2);
+    assert_eq!(resources[0]["uri"], "file:///project/README.md");
+    assert_eq!(resources[0]["name"], "README");
+    assert_eq!(resources[0]["mimeType"], "text/markdown");
+    assert_eq!(resources[1]["uri"], "file:///project/src/lib.rs");
+    assert_eq!(resources[1]["mimeType"], "text/x-rust");
+
+    let audit = std::fs::read_to_string(&run.audit_log).expect("audit log");
+    assert!(audit.contains("\"resources/list\""));
+    assert!(audit.contains("\"allow\""));
+
+    let _ = std::fs::remove_file(&policy);
+    let _ = std::fs::remove_file(&run.server_log);
+    let _ = std::fs::remove_file(&run.audit_log);
+}
+
+#[test]
+fn proxy_resources_read_returns_realistic_content_shape() {
+    let policy = write_temp_policy("rich-res-read", METHOD_POLICY);
+    let run = run_proxy_with_input(
+        "rich-res-read",
+        &policy,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"file:///project/README.md","fixture":"rich"}}"#,
+        ],
+    );
+    assert!(
+        run.output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&run.output.stderr)
+    );
+    let lines = stdout_json_lines(&run.output);
+    let response = response_with_id(&lines, 1);
+    let contents = response["result"]["contents"]
+        .as_array()
+        .expect("contents array");
+    assert_eq!(contents.len(), 1);
+    assert_eq!(contents[0]["uri"], "file:///project/README.md");
+    assert_eq!(contents[0]["mimeType"], "text/plain");
+    assert_eq!(contents[0]["text"], "fixture resource contents");
+
+    let _ = std::fs::remove_file(&policy);
+    let _ = std::fs::remove_file(&run.server_log);
+    let _ = std::fs::remove_file(&run.audit_log);
+}
+
+#[test]
+fn proxy_denied_completion_complete_not_forwarded() {
+    // METHOD_POLICY has a [methods] section that does not list
+    // completion/complete in either allow or deny, so it is denied by
+    // default (a [methods] section exists but the method is unlisted).
+    let policy = write_temp_policy("deny-completion", METHOD_POLICY);
+    let run = run_proxy_with_input(
+        "deny-completion",
+        &policy,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26"}}"#,
+            r#"{"jsonrpc":"2.0","id":2,"method":"completion/complete","params":{"ref":{"type":"ref/prompt","name":"secret_prompt"},"argument":{"name":"query","value":"do not leak this"}}}"#,
+        ],
+    );
+    assert!(
+        run.output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&run.output.stderr)
+    );
+    let lines = stdout_json_lines(&run.output);
+
+    let denied = lines
+        .iter()
+        .find(|l| l["id"] == 2)
+        .expect("denied completion/complete response");
+    assert_eq!(denied["error"]["code"], -32000);
+    assert_eq!(denied["error"]["data"]["method"], "completion/complete");
+    assert!(!denied.to_string().contains("do not leak this"));
+
+    let received = std::fs::read_to_string(&run.server_log).expect("server log");
+    assert!(!received.contains("completion/complete"));
+    assert!(!received.contains("do not leak this"));
+
+    let audit = std::fs::read_to_string(&run.audit_log).expect("audit log");
+    assert!(audit.contains("\"completion/complete\""));
+    assert!(audit.contains("\"deny\""));
+    assert!(!audit.contains("do not leak this"));
+    assert!(!audit.contains("secret_prompt"));
 
     let _ = std::fs::remove_file(&policy);
     let _ = std::fs::remove_file(&run.server_log);
