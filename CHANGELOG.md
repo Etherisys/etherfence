@@ -9,6 +9,27 @@ one opt-in experimental runtime component: an MCP stdio boundary proxy.
 EtherFence still has no daemon mode, shell hooks, command interception,
 terminal-command scanning, or network interception.
 
+## [0.6.1] - 2026-07-10
+
+### Fixed
+
+- Hardened the previously flaky `cli_mcp_proxy` integration test
+  `proxy_denies_server_to_client_sampling_before_client_and_answers_server`.
+  The test helper closed the client's stdin after a fixed
+  `Duration::from_millis(50)` wait, guessing at how long the proxy needed to
+  receive a server→client `sampling/createMessage` request, deny it by
+  policy, and write the denial back onto the fake server's stdin before the
+  client EOF path closed that same pipe. Under slow child-process startup
+  (notably Windows-toolchain `cargo` against a WSL-mounted filesystem), the
+  guess could be wrong and the denial write would lose the race, dropping it
+  silently and failing the test's assertions on the fake server's receive
+  log. The helper now polls the fake server's receive log for the denial
+  marker (bounded by a 10-second timeout that fails the test with a clear
+  message instead of hanging) and only closes the client's stdin once the
+  marker is observed, which proves the race window has already passed. This
+  is test-only: MCP proxy policy semantics, JSON-RPC behavior, and audit
+  behavior are unchanged.
+
 ## [0.6.0] - 2026-07-10
 
 ### Added

@@ -68,11 +68,48 @@ fn run_proxy_with_input_for_server(
     )
 }
 
-fn run_proxy_with_input_delay_before_close(
+/// Poll `path` until its contents contain `marker`, or panic once `timeout`
+/// has elapsed. Used instead of a fixed sleep to wait for a specific,
+/// observable side effect (a line landing in a log file) rather than
+/// guessing how long that side effect takes.
+fn wait_for_file_to_contain(path: &PathBuf, marker: &str, timeout: Duration) {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        if std::fs::read_to_string(path)
+            .map(|content| content.contains(marker))
+            .unwrap_or(false)
+        {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "timed out after {timeout:?} waiting for {} to contain {marker:?}",
+            path.display()
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// Run the proxy, write `input_lines` to its stdin, then wait until the fake
+/// server's receive log contains `server_log_marker` before closing the
+/// client's stdin.
+///
+/// This is needed for tests where a client request triggers a server→client
+/// request that the proxy denies: the proxy's policy-deny response is written
+/// back into the fake server's stdin by a background pump thread, racing the
+/// main thread's handling of client EOF (which closes that same stdin pipe).
+/// Closing the client's stdin before the pump thread's write lands would
+/// silently drop the deny response and the fake server would never observe
+/// it. Waiting for the marker to actually appear in the server's receive log
+/// proves the write already happened, so closing stdin afterwards cannot
+/// race it. A fixed sleep here previously guessed at this timing and was
+/// flaky under slow child-process startup (e.g. Windows-toolchain cargo
+/// against a WSL-mounted filesystem).
+fn run_proxy_with_input_wait_for_server_log(
     name: &str,
     policy_path: &PathBuf,
     input_lines: &[&str],
-    delay: Duration,
+    server_log_marker: &str,
 ) -> ProxyRun {
     let server_log = temp_path(&format!("{name}-server-received"), "jsonl");
     let audit_log = temp_path(&format!("{name}-audit"), "jsonl");
@@ -99,7 +136,9 @@ fn run_proxy_with_input_delay_before_close(
             writeln!(stdin, "{line}").expect("write to proxy stdin");
         }
         stdin.flush().expect("flush proxy stdin");
-        std::thread::sleep(delay);
+        wait_for_file_to_contain(&server_log, server_log_marker, Duration::from_secs(10));
+        // `stdin` closes here, sending EOF to the proxy only after the marker
+        // above proves the race window has already passed.
     }
     let output = child.wait_with_output().expect("wait for proxy");
     ProxyRun {
@@ -645,14 +684,14 @@ path_rule = "project_readonly"
 #[test]
 fn proxy_denies_server_to_client_sampling_before_client_and_answers_server() {
     let policy = write_temp_policy("server-sampling", SERVER_TO_CLIENT_POLICY);
-    let run = run_proxy_with_input_delay_before_close(
+    let run = run_proxy_with_input_wait_for_server_log(
         "server-sampling",
         &policy,
         &[
             r#"{"jsonrpc":"2.0","id":1,"method":"fixture/server_sampling","params":{}}"#,
             r#"{"jsonrpc":"2.0","id":2,"method":"initialize","params":{"protocolVersion":"2025-03-26"}}"#,
         ],
-        Duration::from_millis(50),
+        "EtherFence MCP proxy denied this method by policy",
     );
     assert!(
         run.output.status.success(),
