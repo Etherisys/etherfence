@@ -7,6 +7,7 @@ members = [
     "crates/etherfence-mcp",
     "crates/etherfence-policy",
     "crates/etherfence-report",
+    "crates/etherfence-setup",
 ]
 resolver = "2"
 
@@ -21,5 +22,6 @@ anyhow = "1.0"
 clap = { version = "4.5", features = ["derive"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+sha2 = "0.10"
 toml = "0.8"
 regex = "1.10"
