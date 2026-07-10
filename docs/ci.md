@@ -130,11 +130,36 @@ etherfence mcp-policy check \
 # Decision: DENY
 ```
 
-This is useful as a regression check: commit one or more JSON-RPC request
-fixtures that represent requests you expect to be allowed or denied, and
-assert the `Decision:` line in CI so a policy edit that accidentally widens
-or narrows access is caught before it reaches `etherfence mcp-proxy`. The
-example requests under
+**`mcp-policy check` exits `0` for both an `ALLOW` and a `DENY` decision** —
+it is a dry-run/inspection command, not a pass/fail gate by itself. Checking
+its exit code alone in CI proves nothing about which decision was made; a
+policy edit that accidentally turns an expected `DENY` into an `ALLOW` would
+still exit `0` and pass a CI step that only checks the exit code.
+
+To use `check` as an actual CI gate, capture its stdout and assert the
+printed `Decision:` line matches what you expect, for example with `tee` and
+`grep`:
+
+```sh
+./target/release/etherfence mcp-policy check \
+  --policy docs/examples/ci/mcp-policy.toml \
+  --request docs/examples/ci/requests/denied-tool-call.json \
+  | tee /tmp/etherfence-mcp-check-denied.txt
+grep -q '^Decision: DENY$' /tmp/etherfence-mcp-check-denied.txt
+```
+
+`tee` keeps the full dry-run output visible in CI logs for a human reviewer,
+while `grep -q` (as the last command in the step) is what actually fails the
+job when the decision does not match — not the `mcp-policy check` invocation
+itself. This is useful as a regression check: commit one or more JSON-RPC
+request fixtures that represent requests you expect to be allowed or denied,
+and assert the `Decision:` line in CI, with `grep` or equivalent, so a policy
+edit that accidentally widens or narrows access is caught before it reaches
+`etherfence mcp-proxy`. See
+[`docs/examples/workflows/mcp-policy-gate.yml`](examples/workflows/mcp-policy-gate.yml)
+and
+[`docs/examples/workflows/pr-security-gate.yml`](examples/workflows/pr-security-gate.yml)
+for full examples using this pattern. The example requests under
 [`docs/examples/ci/requests/`](examples/ci/requests) are covered by an
 automated test asserting their expected decision
 (`crates/etherfence-cli/tests/ci_examples.rs`); mirror that pattern for your

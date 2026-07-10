@@ -64,6 +64,13 @@ jobs:
       # 3. Validate the MCP proxy policy this team uses and dry-run-check a
       #    known-denied request, so a policy typo or accidental widening
       #    fails the PR before it ever reaches `etherfence mcp-proxy`.
+      #
+      #    `mcp-policy check` exits 0 for both ALLOW and DENY decisions — it
+      #    is a dry-run/inspection command, not a gate by itself. This step
+      #    fails the job because it greps the printed `Decision:` line for
+      #    `DENY`, not merely because the command ran. If a policy edit
+      #    accidentally turns this expected DENY into an ALLOW, the grep
+      #    fails and the job fails.
       - name: Validate MCP policy
         run: |
           ./target/release/etherfence mcp-policy validate \
@@ -73,4 +80,6 @@ jobs:
         run: |
           ./target/release/etherfence mcp-policy check \
             --policy docs/examples/ci/mcp-policy.toml \
-            --request docs/examples/ci/requests/denied-tool-call.json
+            --request docs/examples/ci/requests/denied-tool-call.json \
+            | tee /tmp/etherfence-mcp-check-denied.txt
+          grep -q '^Decision: DENY$' /tmp/etherfence-mcp-check-denied.txt

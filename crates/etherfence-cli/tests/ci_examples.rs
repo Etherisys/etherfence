@@ -263,6 +263,58 @@ fn ci_example_workflows_reference_existing_files() {
     }
 }
 
+fn workflow_content(name: &str) -> &'static str {
+    WORKFLOW_FILES
+        .iter()
+        .find(|(candidate, _)| *candidate == name)
+        .map(|(_, content)| *content)
+        .unwrap_or_else(|| panic!("{name} missing from WORKFLOW_FILES"))
+}
+
+// `mcp-policy check` exits 0 for both an ALLOW and a DENY decision (it is a
+// dry-run/inspection command, not a gate by itself). A workflow step that
+// only runs `mcp-policy check` without asserting the printed `Decision:`
+// line would still pass CI after an expected DENY silently became an ALLOW.
+// These example workflows must grep (or equivalent) for the exact expected
+// decision so that regression is actually caught.
+#[test]
+fn ci_example_workflows_assert_mcp_policy_check_decisions() {
+    let mcp_gate = workflow_content("mcp-policy-gate.yml");
+    assert!(
+        mcp_gate.contains("grep -q '^Decision: ALLOW$'"),
+        "mcp-policy-gate.yml should assert the allowed request decides ALLOW, \
+         not just run `mcp-policy check`"
+    );
+    assert!(
+        mcp_gate.contains("grep -q '^Decision: DENY$'"),
+        "mcp-policy-gate.yml should assert the denied request decides DENY, \
+         not just run `mcp-policy check`"
+    );
+
+    let pr_gate = workflow_content("pr-security-gate.yml");
+    assert!(
+        pr_gate.contains("grep -q '^Decision: DENY$'"),
+        "pr-security-gate.yml should assert the denied request decides DENY, \
+         not just run `mcp-policy check`"
+    );
+
+    // Every `mcp-policy check` invocation in these two workflows must be
+    // followed somewhere in the same file by a matching decision assertion,
+    // so a future edit that adds a new unchecked `check` step is also
+    // caught.
+    for name in ["mcp-policy-gate.yml", "pr-security-gate.yml"] {
+        let content = workflow_content(name);
+        let check_steps = content.matches("/etherfence mcp-policy check").count();
+        let decision_asserts = content.matches("grep -q '^Decision:").count();
+        assert_eq!(
+            check_steps, decision_asserts,
+            "{name} has {check_steps} `mcp-policy check` invocation(s) but \
+             {decision_asserts} `Decision:` grep assertion(s); every check \
+             step must assert its expected decision"
+        );
+    }
+}
+
 #[test]
 fn ci_docs_reference_valid_subcommands_and_flags() {
     let ci_doc = include_str!("../../../docs/ci.md");
@@ -278,6 +330,8 @@ fn ci_docs_reference_valid_subcommands_and_flags() {
         "etherfence mcp-policy check",
         "--policy",
         "--request",
+        "exits `0` for both an `ALLOW` and a `DENY` decision",
+        "grep -q '^Decision: DENY$'",
     ] {
         assert!(
             ci_doc.contains(expected),
