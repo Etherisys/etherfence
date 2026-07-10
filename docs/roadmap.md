@@ -389,6 +389,38 @@
   validate/explain/init/check, v0.5.0 compatibility smoke tests, and v0.4.1
   Unicode hardening/v0.4.0 path guards are all preserved unchanged
 
+## v0.8.0 - packaging, install docs, and README refresh
+
+- New `docs/install.md`: Linux/Windows release-artifact install flows,
+  build-from-source, local `cargo install --path crates/etherfence-cli
+  --bin etherfence`, `etherfence --version` verification, a first-scan
+  walkthrough, a release-artifact table, SHA-256 checksum verification
+  steps for Linux and Windows, and a Linux/Windows smoke-test checklist
+- SHA-256 checksum generation added to the manual release workflow
+  (`.github/workflows/release.yml`): `.sha256` files for both the Linux
+  `tar.gz` and Windows `zip` artifacts, uploaded and attached to the GitHub
+  release alongside the existing archives; release creation stays manual,
+  explicit, and `workflow_dispatch`-only
+- `docs/release-automation.md` and `docs/release-checklist.md` updated to
+  document the new checksum artifacts and manual-fallback checksum steps
+- README.md restructured for readability (one-line positioning, pre-v1
+  status, what it does/does not do, quickstart, install/build, command
+  overview table, focused scan/mcp-policy/mcp-proxy examples, CI summary,
+  docs-links table, security model/non-goals, development/verification,
+  license) with no command, schema, or enforcement content changes
+- New tests (`crates/etherfence-cli/tests/install_docs.rs`) keeping
+  `docs/install.md` and README install/quickstart content honest: example
+  paths exist, `mcp-policy init/validate/check` commands shown in the docs
+  succeed end to end, README command snippets use real subcommands, and
+  `--version` output matches the workspace version
+- Version bumped to 0.8.0
+- No production `mcp-proxy` enforcement behavior changes, no
+  `ef-mcp-policy/v0.1` schema changes, no daemon/API/control plane, no
+  installer/MSI, no package-registry publishing, no auto-update system; all
+  prior release behavior, CI/team workflow examples, `mcp-policy` UX, and
+  proxy hardening are preserved unchanged; no git tag created or pushed for
+  this release
+
 ## v0.2.x ideas
 
 - Expand tested config schemas and platform paths

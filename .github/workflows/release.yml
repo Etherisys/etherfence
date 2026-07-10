@@ -154,6 +154,7 @@ jobs:
           cp target/release/etherfence "$stage"/
           cp README.md LICENSE "$stage"/
           tar -C dist -czf dist/etherfence-linux-x86_64.tar.gz "etherfence-v${version}-linux-x86_64"
+          (cd dist && sha256sum etherfence-linux-x86_64.tar.gz > etherfence-linux-x86_64.tar.gz.sha256)
 
       - name: package windows release artifact
         if: runner.os == 'Windows'
@@ -166,13 +167,17 @@ jobs:
           Copy-Item README.md $stage/
           Copy-Item LICENSE $stage/
           Compress-Archive -Path $stage -DestinationPath dist/etherfence-windows-x86_64.zip -Force
+          $hash = (Get-FileHash dist/etherfence-windows-x86_64.zip -Algorithm SHA256).Hash.ToLower()
+          "$hash  etherfence-windows-x86_64.zip" | Set-Content -NoNewline -Path dist/etherfence-windows-x86_64.zip.sha256
 
       - name: upload linux artifact
         if: runner.os == 'Linux'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: etherfence-linux-x86_64
-          path: dist/etherfence-linux-x86_64.tar.gz
+          path: |
+            dist/etherfence-linux-x86_64.tar.gz
+            dist/etherfence-linux-x86_64.tar.gz.sha256
           if-no-files-found: error
 
       - name: upload windows artifact
@@ -180,7 +185,9 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: etherfence-windows-x86_64
-          path: dist/etherfence-windows-x86_64.zip
+          path: |
+            dist/etherfence-windows-x86_64.zip
+            dist/etherfence-windows-x86_64.zip.sha256
           if-no-files-found: error
 
   release:
@@ -262,4 +269,6 @@ jobs:
             --title "EtherFence $tag" \
             --notes-file release-notes.md \
             dist-release/etherfence-linux-x86_64.tar.gz \
-            dist-release/etherfence-windows-x86_64.zip
+            dist-release/etherfence-linux-x86_64.tar.gz.sha256 \
+            dist-release/etherfence-windows-x86_64.zip \
+            dist-release/etherfence-windows-x86_64.zip.sha256

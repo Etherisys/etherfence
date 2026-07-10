@@ -58,7 +58,11 @@ Runs, on both platforms, against the exact commit validated above:
 Then packages and uploads:
 
 - `etherfence-linux-x86_64.tar.gz` (Linux binary + `README.md` + `LICENSE`)
+- `etherfence-linux-x86_64.tar.gz.sha256` (its SHA-256 checksum, in standard
+  `sha256sum` format)
 - `etherfence-windows-x86_64.zip` (Windows binary + `README.md` + `LICENSE`)
+- `etherfence-windows-x86_64.zip.sha256` (its SHA-256 checksum, one line:
+  hash then filename)
 
 Unlike `ci.yml`, this job uses `fail-fast: true`: if either platform fails
 verification or build, the release is not created.
@@ -69,12 +73,18 @@ Only this job can write to the repository. It:
 
 - re-checks tag/release absence immediately before acting (closes the race
   between `validate` and this job)
-- downloads both artifacts built in step 2 (never local artifacts)
+- downloads both artifacts (and their `.sha256` checksum files) built in
+  step 2 (never local artifacts)
 - extracts release notes from the matching `CHANGELOG.md` section
 - creates an annotated tag `v<version>` on the exact commit validated in
   step 1 and pushes it
-- creates the GitHub release `v<version>` from that tag with both
-  artifacts attached
+- creates the GitHub release `v<version>` from that tag with the two
+  archives and their two `.sha256` checksum files attached (four assets
+  total)
+
+See [`docs/install.md`](install.md#verifying-checksums) for how a user
+verifies these checksum files against the downloaded archive on Linux and
+Windows.
 
 ## Safety guarantees
 
