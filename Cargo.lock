@@ -121,7 +121,7 @@ checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
 
 [[package]]
 name = "etherfence-cli"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -132,25 +132,26 @@ dependencies = [
  "etherfence-policy",
  "etherfence-report",
  "serde_json",
+ "serde_yaml",
 ]
 
 [[package]]
 name = "etherfence-core"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "etherfence-detectors"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "etherfence-core",
 ]
 
 [[package]]
 name = "etherfence-inventory"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "etherfence-core",
@@ -160,7 +161,7 @@ dependencies = [
 
 [[package]]
 name = "etherfence-mcp"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "etherfence-core",
@@ -171,7 +172,7 @@ dependencies = [
 
 [[package]]
 name = "etherfence-policy"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "etherfence-core",
@@ -182,7 +183,7 @@ dependencies = [
 
 [[package]]
 name = "etherfence-report"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "etherfence-core",
@@ -283,6 +284,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
+name = "ryu"
+version = "1.0.23"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
+
+[[package]]
 name = "serde"
 version = "1.0.228"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -332,6 +339,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bf41e0cfaf7226dca15e8197172c295a782857fcb97fad1808a166870dee75a3"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "serde_yaml"
+version = "0.9.34+deprecated"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6a8b1a1a2ebf674015cc02edccce75287f1a0130d394307b36743c2f5d504b47"
+dependencies = [
+ "indexmap",
+ "itoa",
+ "ryu",
+ "serde",
+ "unsafe-libyaml",
 ]
 
 [[package]]
@@ -397,6 +417,12 @@ name = "unicode-ident"
 version = "1.0.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
+
+[[package]]
+name = "unsafe-libyaml"
+version = "0.2.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "673aac59facbab8a9007c7f6108d11f63b603f7cabff99fabf650fea5c32b861"
 
 [[package]]
 name = "utf8parse"
