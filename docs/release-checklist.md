@@ -61,6 +61,7 @@ cargo build --release -p etherfence-cli
 mkdir -p dist/etherfence-v0.2.5-linux-x86_64
 cp target/release/etherfence dist/etherfence-v0.2.5-linux-x86_64/
 tar -C dist -czf dist/etherfence-linux-x86_64.tar.gz etherfence-v0.2.5-linux-x86_64
+(cd dist && sha256sum etherfence-linux-x86_64.tar.gz > etherfence-linux-x86_64.tar.gz.sha256)
 ```
 
 Smoke check:
@@ -81,6 +82,8 @@ cargo build --release -p etherfence-cli
 New-Item -ItemType Directory -Force -Path dist/etherfence-v0.2.5-windows-x86_64 | Out-Null
 Copy-Item target/release/etherfence.exe dist/etherfence-v0.2.5-windows-x86_64/
 Compress-Archive -Path dist/etherfence-v0.2.5-windows-x86_64 -DestinationPath dist/etherfence-windows-x86_64.zip -Force
+$hash = (Get-FileHash dist/etherfence-windows-x86_64.zip -Algorithm SHA256).Hash.ToLower()
+"$hash  etherfence-windows-x86_64.zip" | Set-Content -NoNewline -Path dist/etherfence-windows-x86_64.zip.sha256
 ```
 
 Smoke check:
@@ -160,8 +163,17 @@ gh release create v0.2.5 \
   --title "EtherFence v0.2.5" \
   --notes-file <(sed -n '/^## \[0.2.5\]/,/^## /p' CHANGELOG.md | sed '$d') \
   dist-ci/etherfence-linux-x86_64/etherfence-linux-x86_64.tar.gz \
-  dist-ci/etherfence-windows-x86_64/etherfence-windows-x86_64.zip
+  dist-ci/etherfence-linux-x86_64/etherfence-linux-x86_64.tar.gz.sha256 \
+  dist-ci/etherfence-windows-x86_64/etherfence-windows-x86_64.zip \
+  dist-ci/etherfence-windows-x86_64/etherfence-windows-x86_64.zip.sha256
 ```
+
+Since v0.8.0, attach the `.sha256` checksum files alongside each archive so
+release consumers can verify downloads (see
+[`docs/install.md#verifying-checksums`](install.md#verifying-checksums)).
+Generate them locally with the same commands shown in the Linux/Windows
+release build steps above if the CI-built artifacts don't already include
+them.
 
 ## Release notes reminders
 

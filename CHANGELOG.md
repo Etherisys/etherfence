@@ -9,6 +9,77 @@ one opt-in experimental runtime component: an MCP stdio boundary proxy.
 EtherFence still has no daemon mode, shell hooks, command interception,
 terminal-command scanning, or network interception.
 
+## [0.8.0] - 2026-07-10
+
+### Added
+
+- New `docs/install.md`: Linux and Windows release-artifact install flows,
+  a build-from-source flow, a local `cargo install --path
+  crates/etherfence-cli --bin etherfence` flow, `etherfence --version`
+  verification, a first-scan walkthrough, a release artifact table, SHA-256
+  checksum verification steps for Linux (`sha256sum -c`) and Windows
+  (`Get-FileHash`), and a Linux/Windows release-artifact smoke-test
+  checklist covering `--version`, `scan`, `policy list`, `mcp-policy
+  init/validate/check`, and an optional `mcp-proxy` fail-closed check.
+- SHA-256 checksum generation in the manual release workflow
+  (`.github/workflows/release.yml`): the Linux job now produces
+  `etherfence-linux-x86_64.tar.gz.sha256` (via `sha256sum`) and the Windows
+  job now produces `etherfence-windows-x86_64.zip.sha256` (via
+  `Get-FileHash`), both uploaded as build artifacts and attached to the
+  GitHub release alongside the existing two archives. Release creation
+  remains manual, explicit, and `workflow_dispatch`-only; no change to which
+  ref can be released, tag/release validation, or `fail-fast` behavior.
+- New CLI integration tests
+  (`crates/etherfence-cli/tests/install_docs.rs`) so `docs/install.md` and
+  the README's install/quickstart sections cannot silently drift: every
+  referenced doc/example path exists, `mcp-policy init --profile minimal`
+  followed by `validate` and `check` (with the exact inline JSON request
+  shown in the docs) succeeds end to end, `cargo install --path
+  crates/etherfence-cli --bin etherfence` is documented with the
+  fake-mcp-server-exclusion flag, README command snippets use real `clap`
+  subcommands, and `--version` output matches the current workspace
+  version.
+
+### Changed
+
+- Version bumped to 0.8.0.
+- README.md restructured for readability: one-line positioning, a pre-v1
+  status callout, "what it does" / "what it does not do", a quickstart
+  (install → first scan → validate an MCP policy → dry-run a decision →
+  optionally wrap a server with `mcp-proxy`), an install/build section
+  pointing at `docs/install.md`, a command-overview table, then focused
+  `scan`/`mcp-policy`/`mcp-proxy` examples, the existing CI/team workflow
+  summary, a documentation-links table, security model/non-goals, and
+  development/verification, ending with license. No command behavior,
+  schema, or enforcement content changed — only structure, tables, and
+  prose.
+- `docs/release-automation.md` documents the two new `.sha256` checksum
+  artifacts and links to the new verification steps in `docs/install.md`.
+- `docs/release-checklist.md` documents generating the same checksum files
+  locally for the manual fallback release path and attaching all four
+  files (two archives, two checksums) to a manually created GitHub release.
+- `docs/roadmap.md` records v0.8.0 as a packaging/install/README-polish
+  release.
+
+### Notes
+
+- No production `mcp-proxy` enforcement behavior changes and no
+  `ef-mcp-policy/v0.1` schema changes.
+- No daemon, API service, control plane, endpoint agent, shell hooks,
+  terminal-command scanning, network/TLS interception, DLP/content
+  inspection, marketplace GitHub Action, PR bot, package-registry
+  publishing, installer/MSI, or auto-update system added.
+- Release creation stays fully manual and explicit
+  (`gh workflow run release.yml --ref main -f version=<x.y.z>`); the only
+  change to `.github/workflows/release.yml` is generating and attaching
+  SHA-256 checksum files for the two existing artifacts.
+- Existing `scan`, `policy`, `mcp-proxy`, and `mcp-policy` behavior; v0.7.0
+  CI/team workflow examples; v0.6.1 subprocess test hardening; v0.6.0
+  `mcp-policy` validate/explain/init/check; v0.5.0 compatibility smoke
+  tests; and v0.4.1 Unicode hardening/v0.4.0 path guards are all preserved
+  unchanged.
+- No git tag created or pushed for this release.
+
 ## [0.7.0] - 2026-07-10
 
 ### Added
