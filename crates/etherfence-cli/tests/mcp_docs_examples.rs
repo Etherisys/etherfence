@@ -87,6 +87,10 @@ fn mcp_policy_examples_parse() {
             "strict-method-only",
             include_str!("../../../examples/policies/mcp-strict-method-only.toml"),
         ),
+        (
+            "memory-notes-readonly",
+            include_str!("../../../examples/policies/mcp-memory-notes-readonly.toml"),
+        ),
     ] {
         let policy = etherfence_mcp::parse_mcp_policy(content)
             .unwrap_or_else(|error| panic!("{name} policy should parse: {error}"));
@@ -138,6 +142,7 @@ fn mcp_compatibility_matrix_documents_fake_fixture_row() {
         "../../examples/policies/mcp-resources-project-only.toml",
         "../../examples/policies/mcp-filesystem-project-readonly-hardened.toml",
         "../../examples/policies/mcp-strict-method-only.toml",
+        "../../examples/policies/mcp-memory-notes-readonly.toml",
     ] {
         assert!(
             manifest_dir.join(policy).exists(),

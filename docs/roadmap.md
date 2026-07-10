@@ -421,6 +421,29 @@
   proxy hardening are preserved unchanged; no git tag created or pushed for
   this release
 
+## v0.9.0 - real-world MCP compatibility expansion
+
+- Fixture-backed compatibility tests for more realistic MCP protocol shapes
+  against the checked-in fake MCP server: a richer `tools/list` response
+  with a nested `inputSchema` (nested object property, array-of-strings
+  property, `required` list) preserved unchanged after filtering; realistic
+  `resources/list` (`uri`/`name`/`mimeType`) and `resources/read`
+  (`contents` array) shapes; `completion/complete` denied by method policy
+- New example policy `examples/policies/mcp-memory-notes-readonly.toml` for
+  a memory/notes-style MCP server
+- `docs/mcp-compatibility-matrix.md` adds a status table for realistic MCP
+  server categories (filesystem-style, GitHub/API-style, memory/notes-style,
+  resources/read-capable, server→client feature servers), each with a
+  recommended starting policy and an honest "no real-server row yet" status
+- `docs/mcp-real-server-test-template.md` documents choosing a starting
+  policy by server category for the existing optional, env-var-gated
+  real-server smoke test
+- No `ef-mcp-policy/v0.1` schema changes, no MCP proxy runtime enforcement
+  behavior changes, no daemon/API/control plane, no real third-party MCP
+  server started by default in CI; compatibility evidence only, not
+  production-readiness certification; all prior release behavior preserved
+  unchanged; no git tag created or pushed for this release
+
 ## v0.2.x ideas
 
 - Expand tested config schemas and platform paths

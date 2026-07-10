@@ -1,0 +1,33 @@
+# Example EtherFence MCP proxy policy for a memory/notes-style MCP server
+# (a knowledge-graph or note-taking server exposing tools such as create,
+# search, and read operations over a local memory/notes store).
+# Template only: adjust exact tool names to the server version you run.
+schema_version = "ef-mcp-policy/v0.1"
+name = "mcp-memory-notes-readonly"
+
+# Global rules apply to every --server-name scope.
+# Matching is exact: no wildcards, prefixes, or regular expressions.
+[tools]
+allow = []
+deny = [
+  "memory.delete_entities",
+  "memory.delete_observations",
+  "memory.delete_relations",
+]
+
+# Server-scoped rules apply only when the proxy is run with:
+#   --server-name memory
+[servers.memory.tools]
+allow = [
+  "memory.read_graph",
+  "memory.search_nodes",
+  "memory.open_nodes",
+]
+deny = [
+  "memory.delete_entities",
+  "memory.delete_observations",
+  "memory.delete_relations",
+  "memory.create_entities",
+  "memory.create_relations",
+  "memory.add_observations",
+]

@@ -36,7 +36,30 @@ $env:ETHERFENCE_REAL_MCP_CMD = '["C:\\Path\\To\\server.exe","--arg","value"]'
 
 The value must be JSON argv. It is not a shell command; shell metacharacters are not interpreted.
 
-## 2b. Optionally set `ETHERFENCE_REAL_MCP_POLICY`
+## 2b. Choosing a starting policy by server category
+
+`docs/mcp-compatibility-matrix.md` tracks compatibility evidence status for
+several realistic MCP server categories, each with a recommended starting
+policy under `examples/policies/`:
+
+- Filesystem-style server: `mcp-filesystem-readonly.toml` or
+  `mcp-filesystem-project-readonly-hardened.toml`
+- GitHub/API-style server: `mcp-github-readonly.toml` (the server's own API
+  credentials are configured on the server command itself, never passed
+  through or read by EtherFence)
+- Memory/notes-style server: `mcp-memory-notes-readonly.toml`
+- Resources/read-capable server: `mcp-resources-project-only.toml` or
+  `mcp-readonly.toml`
+- Server→client feature server (sampling/roots/elicitation): use
+  `mcp-sampling-denied.toml` or `mcp-strict-method-only.toml` as a starting
+  point, then explicitly allow only the server→client methods you intend to
+  support
+
+Copy the recommended file, adjust exact tool names to match the real
+server's own `tools/list` output, and point `ETHERFENCE_REAL_MCP_POLICY` at
+your copy (see below).
+
+## 2c. Optionally set `ETHERFENCE_REAL_MCP_POLICY`
 
 By default the smoke test uses the same deterministic compatibility policy as
 the fake-server tests. To exercise a specific policy (for example, one of the

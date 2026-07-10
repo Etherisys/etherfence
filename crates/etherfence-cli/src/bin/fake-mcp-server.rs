@@ -98,6 +98,45 @@ fn main() {
                     "result": {"tools": "not-an-array"},
                 })
             }
+            Some("tools/list")
+                if message.pointer("/params/fixture").and_then(Value::as_str) == Some("rich") =>
+            {
+                // Realistic nested inputSchema shape (object properties with a
+                // nested object and an array-of-strings property), similar to
+                // filesystem/search-style real MCP servers. Used to prove
+                // tools/list filtering preserves an allowed tool's full schema
+                // structure unchanged rather than only its name.
+                json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": {
+                        "tools": [
+                            {
+                                "name": "compat.rich_tool",
+                                "description": "Tool with a realistic nested inputSchema",
+                                "inputSchema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "path": {"type": "string"},
+                                        "options": {
+                                            "type": "object",
+                                            "properties": {
+                                                "recursive": {"type": "boolean"},
+                                                "filters": {
+                                                    "type": "array",
+                                                    "items": {"type": "string"}
+                                                }
+                                            }
+                                        }
+                                    },
+                                    "required": ["path"]
+                                }
+                            },
+                            {"name": "compat.denied", "description": "Denied compatibility fixture tool", "inputSchema": {"type":"object","properties": {}}}
+                        ]
+                    },
+                })
+            }
             Some("tools/list") => json!({
                 "jsonrpc": "2.0",
                 "id": id,
@@ -149,6 +188,43 @@ fn main() {
                     "jsonrpc": "2.0",
                     "id": id,
                     "error": {"code": -32042, "message": "fixture tool failed", "data": {"fixture": true}},
+                })
+            }
+            Some("resources/list")
+                if message.pointer("/params/fixture").and_then(Value::as_str) == Some("rich") =>
+            {
+                // Realistic resources/list shape (uri/name/mimeType entries),
+                // similar to a filesystem- or notes-style MCP resource
+                // listing, rather than the bare echo used elsewhere.
+                json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": {
+                        "resources": [
+                            {"uri": "file:///project/README.md", "name": "README", "mimeType": "text/markdown"},
+                            {"uri": "file:///project/src/lib.rs", "name": "lib.rs", "mimeType": "text/x-rust"}
+                        ]
+                    },
+                })
+            }
+            Some("resources/read")
+                if message.pointer("/params/fixture").and_then(Value::as_str) == Some("rich") =>
+            {
+                // Realistic resources/read content shape (a contents array
+                // with uri/mimeType/text), echoing the requested uri back so
+                // the test can assert it was forwarded unchanged.
+                json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": {
+                        "contents": [
+                            {
+                                "uri": message.pointer("/params/uri").cloned().unwrap_or(json!(null)),
+                                "mimeType": "text/plain",
+                                "text": "fixture resource contents"
+                            }
+                        ]
+                    },
                 })
             }
             // v0.3.0: respond to non-tool methods so integration tests can
