@@ -9,6 +9,68 @@ one opt-in experimental runtime component: an MCP stdio boundary proxy.
 EtherFence still has no daemon mode, shell hooks, command interception,
 terminal-command scanning, or network interception.
 
+## [0.6.0] - 2026-07-10
+
+### Added
+
+- New `etherfence mcp-policy` command group: local, serverless MCP policy UX
+  that reuses the existing `ef-mcp-policy/v0.1` parser and proxy decision
+  functions.
+  - `etherfence mcp-policy validate <policy.toml>` parses and validates a
+    policy, printing a clear success message or the existing parser's
+    actionable error (unsupported schema version, empty name, empty
+    `allow_roots`, malformed TOML, suspicious Unicode, etc.).
+  - `etherfence mcp-policy explain <policy.toml>` prints a deterministic
+    human-readable summary: policy name, schema version, global and
+    per-server method/tool allow/deny lists, path rules, guarded tool/method
+    keys, the always-on Unicode-hardening and audit-redaction posture, and a
+    warnings section for risky or confusing policy shapes (wildcard method
+    allow, no `[methods]` section anywhere, no tool allowed anywhere, unused
+    path rules, guards referencing an undefined path rule, broad
+    `allow_roots` such as `/` or a drive root, and empty `deny_roots`).
+  - `etherfence mcp-policy init --profile <name> [--output <file>]
+    [--overwrite]` generates a starter policy from one of five built-in
+    profiles: `minimal`, `strict-method-only`,
+    `filesystem-project-readonly`, `filesystem-project-readonly-hardened`,
+    and `resources-project-only`. Prints to stdout by default; refuses to
+    overwrite an existing `--output` file unless `--overwrite` is passed.
+  - `etherfence mcp-policy check --policy <policy.toml> --request <json>
+    [--server-name <name>] [--direction client-to-server|server-to-client]`
+    dry-runs one JSON-RPC request/notification through the exact same
+    `inspect_client_line`/`inspect_server_line` functions the live proxy
+    uses. Reports the method decision, the tool decision for `tools/call`,
+    the path decision when a guard applies, the reason/category, and whether
+    the request would be forwarded. JSON-RPC batch input is reported as
+    denied fail-closed. Never starts or contacts an MCP server, never
+    executes a tool, and never writes an audit log; never prints raw
+    argument/param values, full paths, or URIs.
+- New `etherfence-mcp::policy_ux` module: `explain_policy`/`PolicyExplanation`
+  and `dry_run_check`/`CheckOutcome`, small reusable helpers built on the
+  existing policy parser and proxy decision functions, with unit test
+  coverage for warnings and dry-run outcomes.
+- `docs/mcp-policy-ux.md` documents `validate`/`explain`/`init`/`check`, the
+  warning semantics, and explicit non-goals (no daemon, no network access, no
+  tool execution).
+- CLI integration tests (`crates/etherfence-cli/tests/cli_mcp_policy.rs`)
+  covering: validation success across all example and generated policies,
+  clear validation failures for unsupported schema, malformed TOML, empty
+  `allow_roots`, and suspicious Unicode; `explain` warning coverage; `init`
+  success for every profile and safe overwrite protection; and `check`
+  allow/deny outcomes for tool calls, blocked resource URIs, suspicious
+  Unicode, and fail-closed batches.
+
+### Notes
+
+- Schema unchanged: `ef-mcp-policy/v0.1`.
+- No changes to `scan`, `policy`, or `mcp-proxy` runtime behavior; v0.5.0
+  compatibility/smoke tests, v0.4.1 Unicode hardening, v0.4.0 path-aware
+  policy, and v0.3.1 bidirectional method policy/tools-list
+  filtering/audit-redaction/batch fail-closed behavior are all preserved.
+- No daemon, API service, control plane, endpoint agent, shell hooks,
+  terminal-command scanning, network/TLS interception, DLP/content
+  inspection, or arbitrary MCP tool execution added.
+- No git tag created or pushed for this release.
+
 ## [0.5.0] - 2026-07-10
 
 ### Added

@@ -309,6 +309,48 @@
 - No new enforcement semantics, schema changes, or runtime behavior changes;
   proxy remains stdio-only, exact-match, experimental/pre-alpha
 
+## v0.6.0 - MCP policy UX (validate, explain, init, check)
+
+- New `etherfence mcp-policy` subcommand group, local-only and serverless:
+  - `etherfence mcp-policy validate <policy.toml>` parses and validates a
+    policy using the existing `ef-mcp-policy/v0.1` loader, with clear errors
+    for unsupported schema versions, empty `name`, missing `allow_roots`,
+    malformed TOML, and suspicious Unicode
+  - `etherfence mcp-policy explain <policy.toml>` prints a deterministic
+    human summary of methods, tools, server scopes, path rules, guarded keys,
+    Unicode-hardening posture, and audit-redaction posture, plus warnings for
+    wildcard method allow, no `[methods]` section, no allowed tool anywhere,
+    unused path rules, guards referencing an undefined path rule, broad
+    `allow_roots` (e.g. `/`, `C:/`), and empty `deny_roots`
+  - `etherfence mcp-policy init --profile <name> [--output <file>]` generates
+    a starter policy from one of five built-in profiles (`minimal`,
+    `strict-method-only`, `filesystem-project-readonly`,
+    `filesystem-project-readonly-hardened`, `resources-project-only`);
+    refuses to overwrite an existing `--output` file unless `--overwrite` is
+    also passed
+  - `etherfence mcp-policy check --policy <policy.toml> --request <json>
+    [--server-name <name>] [--direction client-to-server|server-to-client]`
+    dry-runs one JSON-RPC request/notification against the exact same
+    `inspect_client_line`/`inspect_server_line` decision functions the live
+    proxy uses, reporting method/tool/path decisions, reason, and whether the
+    request would be forwarded; JSON-RPC batches are reported as denied
+    fail-closed; no MCP server is started or contacted and no tool is
+    executed
+- New `etherfence-mcp::policy_ux` module exposing `explain_policy` and
+  `dry_run_check` as small, reusable, serverless helpers built on the
+  existing policy parser and proxy decision functions — no proxy internals
+  duplicated
+- `docs/mcp-policy-ux.md` documents all four commands, the warning semantics,
+  and explicit non-goals
+- Schema unchanged (`ef-mcp-policy/v0.1`); existing `scan`, `policy`, and
+  `mcp-proxy` behavior, v0.5.0 compatibility/smoke tests, v0.4.1 Unicode
+  hardening, v0.4.0 path-aware policy, and v0.3.1 bidirectional method
+  policy/tools-list filtering/audit redaction/batch fail-closed behavior are
+  all preserved unchanged
+- Not in scope: daemon/API/control plane, network/TLS interception, shell
+  hooks, terminal-command scanning, endpoint agent, DLP/content inspection,
+  or arbitrary MCP tool execution
+
 ## v0.2.x ideas
 
 - Expand tested config schemas and platform paths

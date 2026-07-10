@@ -8,15 +8,20 @@
 
 mod audit;
 mod policy;
+mod policy_ux;
 mod proxy;
 mod unicode;
 
 pub use audit::{redacted_argument_keys, redacted_param_keys, AuditLog, AuditRecord};
 pub use policy::{
     decide_method, decide_tool_argument_paths, decide_tool_call, is_always_allowed_method,
-    load_mcp_policy, parse_mcp_policy, Decision, McpPolicyFile, MethodRules, PolicyDecision,
-    ServerPolicy, ToolRules, ALWAYS_ALLOWED_METHODS, DEFAULT_ALLOWED_METHODS,
+    load_mcp_policy, parse_mcp_policy, Decision, McpPolicyFile, MethodDirection, MethodRules,
+    PolicyDecision, ServerPolicy, ToolRules, ALWAYS_ALLOWED_METHODS, DEFAULT_ALLOWED_METHODS,
     SUPPORTED_MCP_POLICY_SCHEMA_VERSION,
+};
+pub use policy_ux::{
+    dry_run_check, explain_policy, CheckOutcome, GuardScope, GuardSummary, MethodPolicySummary,
+    PathRuleSummary, PolicyExplanation, ServerScopeSummary, ToolPolicySummary,
 };
 pub use proxy::exit_code;
 pub use proxy::{
