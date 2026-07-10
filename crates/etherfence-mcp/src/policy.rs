@@ -4,6 +4,10 @@ use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::path::Path;
 
+use crate::unicode::{
+    inspect_method_name, inspect_path_value, inspect_policy_identifier, inspect_tool_name,
+};
+
 pub const SUPPORTED_MCP_POLICY_SCHEMA_VERSION: &str = "ef-mcp-policy/v0.1";
 
 /// Methods the proxy always allows because they are required for MCP protocol
@@ -176,6 +180,7 @@ pub fn parse_mcp_policy(content: &str) -> Result<McpPolicyFile> {
     if policy.name.trim().is_empty() {
         anyhow::bail!("MCP proxy policy name must not be empty");
     }
+    validate_policy_unicode_hygiene(&policy)?;
     for (name, rule) in &policy.path_rules {
         if name.trim().is_empty() {
             anyhow::bail!("MCP proxy path rule names must not be empty");
@@ -187,6 +192,80 @@ pub fn parse_mcp_policy(content: &str) -> Result<McpPolicyFile> {
         }
     }
     Ok(policy)
+}
+
+fn validate_policy_unicode_hygiene(policy: &McpPolicyFile) -> Result<()> {
+    validate_policy_identifier(&policy.name, "MCP proxy policy name")?;
+    validate_tool_rules(&policy.tools, "global tool policy")?;
+    if let Some(methods) = &policy.methods {
+        validate_method_rules(methods, "global method policy")?;
+    }
+    for rule_name in policy.path_rules.keys() {
+        validate_policy_identifier(rule_name, "MCP proxy path rule name")?;
+    }
+    for (server_name, server) in &policy.servers {
+        validate_policy_identifier(server_name, "MCP proxy server policy name")?;
+        validate_tool_rules(&server.tools, "server-specific tool policy")?;
+        if let Some(methods) = &server.methods {
+            validate_method_rules(methods, "server-specific method policy")?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_tool_rules(rules: &ToolRules, context: &str) -> Result<()> {
+    for tool_name in rules.allow.iter().chain(rules.deny.iter()) {
+        validate_tool_name(tool_name, context)?;
+    }
+    for (tool_name, guard) in &rules.path_guards {
+        validate_tool_name(tool_name, "MCP proxy tool path guard key")?;
+        if let Some(arguments) = &guard.arguments {
+            validate_path_key_guard(arguments, "MCP proxy tool argument path guard")?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_method_rules(rules: &MethodRules, context: &str) -> Result<()> {
+    for method in rules.allow.iter().chain(rules.deny.iter()) {
+        validate_method_name(method, context)?;
+    }
+    for (method, guard) in &rules.path_guards {
+        validate_method_name(method, "MCP proxy method path guard key")?;
+        if let Some(params) = &guard.params {
+            validate_path_key_guard(params, "MCP proxy method param path guard")?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_path_key_guard(guard: &PathKeyGuard, context: &str) -> Result<()> {
+    validate_policy_identifier(&guard.path_rule, "MCP proxy referenced path rule name")?;
+    for key in guard.path_keys.iter().chain(guard.uri_keys.iter()) {
+        validate_policy_identifier(key, context)?;
+    }
+    Ok(())
+}
+
+fn validate_policy_identifier(value: &str, context: &str) -> Result<()> {
+    if let Some(risk) = inspect_policy_identifier(value) {
+        anyhow::bail!("{context} rejected: {}", risk.reason());
+    }
+    Ok(())
+}
+
+fn validate_method_name(value: &str, context: &str) -> Result<()> {
+    if let Some(risk) = inspect_method_name(value) {
+        anyhow::bail!("{context} rejected: {}", risk.reason());
+    }
+    Ok(())
+}
+
+fn validate_tool_name(value: &str, context: &str) -> Result<()> {
+    if let Some(risk) = inspect_tool_name(value) {
+        anyhow::bail!("{context} rejected: {}", risk.reason());
+    }
+    Ok(())
 }
 
 pub fn decide_tool_argument_paths(
@@ -308,6 +387,15 @@ fn evaluate_path_value(
     kind: PathInputKind,
     raw_value: &str,
 ) -> PathPolicyDecision {
+    if inspect_path_value(raw_value).is_some() {
+        return path_decision(
+            Decision::Deny,
+            "unicode_suspicious_path_value",
+            rule_name.to_string(),
+            key.to_string(),
+            "unicode_suspicious_path_value",
+        );
+    }
     let Some(candidate) = normalize_path_value(raw_value, kind) else {
         return path_decision(
             Decision::Deny,
@@ -488,6 +576,12 @@ pub fn decide_tool_call(
     server_name: &str,
     tool_name: &str,
 ) -> PolicyDecision {
+    if let Some(risk) = inspect_tool_name(tool_name) {
+        return PolicyDecision {
+            decision: Decision::Deny,
+            reason: risk.reason().to_string(),
+        };
+    }
     if policy.tools.deny.iter().any(|entry| entry == tool_name) {
         return PolicyDecision {
             decision: Decision::Deny,
@@ -566,6 +660,12 @@ pub fn decide_method_for_direction(
     direction: MethodDirection,
     method: &str,
 ) -> PolicyDecision {
+    if let Some(risk) = inspect_method_name(method) {
+        return PolicyDecision {
+            decision: Decision::Deny,
+            reason: risk.reason().to_string(),
+        };
+    }
     if is_always_allowed_for_direction(direction, method) {
         return PolicyDecision {
             decision: Decision::Allow,
@@ -1002,6 +1102,146 @@ path_rule = "win_project"
     fn rejects_empty_name() {
         let content = VALID_POLICY.replace("minimal-mcp-boundary", " ");
         assert!(parse_mcp_policy(&content).is_err());
+    }
+
+    #[test]
+    fn rejects_non_ascii_method_allow_entry() {
+        let content = r#"
+schema_version = "ef-mcp-policy/v0.1"
+name = "unicode-method"
+
+[methods]
+allow = ["tοols/call"]
+"#;
+        let error = parse_mcp_policy(content).expect_err("non-ASCII method rejected");
+        assert!(error.to_string().contains("unicode_non_ascii_method"));
+    }
+
+    #[test]
+    fn rejects_bidi_control_in_method_tool_and_path_rule_names() {
+        let method_error = parse_mcp_policy(
+            r#"
+schema_version = "ef-mcp-policy/v0.1"
+name = "unicode-method-bidi"
+
+[methods]
+allow = ["tools/\u202ecall"]
+"#,
+        )
+        .expect_err("bidi method rejected");
+        assert!(method_error
+            .to_string()
+            .contains("unicode_bidi_control_detected"));
+
+        let tool_error = parse_mcp_policy(
+            r#"
+schema_version = "ef-mcp-policy/v0.1"
+name = "unicode-tool-bidi"
+
+[tools]
+allow = ["filesystem.\u202eread"]
+"#,
+        )
+        .expect_err("bidi tool rejected");
+        assert!(tool_error
+            .to_string()
+            .contains("unicode_bidi_control_detected"));
+
+        let path_rule_error = parse_mcp_policy(
+            r#"
+schema_version = "ef-mcp-policy/v0.1"
+name = "unicode-rule-bidi"
+
+[path_rules."project\u202ereadonly"]
+allow_roots = ["/home/user/project"]
+"#,
+        )
+        .expect_err("bidi path rule rejected");
+        assert!(path_rule_error
+            .to_string()
+            .contains("unicode_bidi_control_detected"));
+    }
+
+    #[test]
+    fn rejects_zero_width_in_method_tool_and_path_rule_names() {
+        let zero_width = "\u{200B}";
+        let method_error = parse_mcp_policy(&format!(
+            r#"
+schema_version = "ef-mcp-policy/v0.1"
+name = "unicode-method-zero-width"
+
+[methods]
+allow = ["tools/{zero_width}call"]
+"#,
+        ))
+        .expect_err("zero-width method rejected");
+        assert!(method_error
+            .to_string()
+            .contains("unicode_zero_width_detected"));
+
+        let tool_error = parse_mcp_policy(&format!(
+            r#"
+schema_version = "ef-mcp-policy/v0.1"
+name = "unicode-tool-zero-width"
+
+[tools]
+allow = ["filesystem.{zero_width}read"]
+"#,
+        ))
+        .expect_err("zero-width tool rejected");
+        assert!(tool_error
+            .to_string()
+            .contains("unicode_zero_width_detected"));
+
+        let path_rule_error = parse_mcp_policy(&format!(
+            r#"
+schema_version = "ef-mcp-policy/v0.1"
+name = "unicode-rule-zero-width"
+
+[path_rules."project{zero_width}readonly"]
+allow_roots = ["/home/user/project"]
+"#,
+        ))
+        .expect_err("zero-width path rule rejected");
+        assert!(path_rule_error
+            .to_string()
+            .contains("unicode_zero_width_detected"));
+    }
+
+    #[test]
+    fn rejects_zero_width_path_guard_key_and_non_ascii_policy_identifier() {
+        let zero_width = "\u{200B}";
+        let key_error = parse_mcp_policy(&format!(
+            r#"
+schema_version = "ef-mcp-policy/v0.1"
+name = "unicode-key"
+
+[tools]
+allow = ["filesystem.read"]
+
+[path_rules.project_readonly]
+allow_roots = ["/home/user/project"]
+
+[tools."filesystem.read".arguments]
+path_keys = ["pa{zero_width}th"]
+path_rule = "project_readonly"
+"#,
+        ))
+        .expect_err("zero-width path key rejected");
+        assert!(key_error
+            .to_string()
+            .contains("unicode_zero_width_detected"));
+
+        let name_error = parse_mcp_policy(
+            r#"
+schema_version = "ef-mcp-policy/v0.1"
+name = "policу"
+"#,
+        )
+        .expect_err("non-ASCII policy identifier rejected");
+        assert!(name_error
+            .to_string()
+            .contains("unicode_non_ascii_identifier"));
     }
 
     #[test]

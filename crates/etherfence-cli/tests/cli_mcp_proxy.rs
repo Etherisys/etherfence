@@ -862,6 +862,40 @@ fn proxy_path_guard_denies_file_uri_under_denied_root_and_non_file_uri() {
 }
 
 #[test]
+fn proxy_path_guard_denies_bidi_or_zero_width_path_without_logging_raw_value() {
+    let policy = write_temp_policy("path-unicode", PATH_GUARD_POLICY);
+    let zero_width_uri = format!(
+        r#"{{"jsonrpc":"2.0","id":6,"method":"resources/read","params":{{"uri":"file:///home/user/project/{}secret.txt"}}}}"#,
+        "\u{200B}"
+    );
+    let run = run_proxy_with_input(
+        "path-unicode",
+        &policy,
+        &[
+            r#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"filesystem.read","arguments":{"path":"/home/user/project/\u202esecret.txt"}}}"#,
+            zero_width_uri.as_str(),
+        ],
+    );
+    assert!(run.output.status.success());
+    let lines = stdout_json_lines(&run.output);
+    assert_eq!(response_with_id(&lines, 5)["error"]["code"], -32000);
+    assert_eq!(response_with_id(&lines, 6)["error"]["code"], -32000);
+    let received = std::fs::read_to_string(&run.server_log).unwrap_or_default();
+    assert!(!received.contains("secret.txt"));
+    let audit = std::fs::read_to_string(&run.audit_log).expect("audit log");
+    assert!(audit.contains("unicode_suspicious_path_value"));
+    assert!(audit.contains("\"path_key\":\"path\""));
+    assert!(audit.contains("\"path_key\":\"uri\""));
+    assert!(!audit.contains("/home/user/project"));
+    assert!(!audit.contains("file:///home/user/project"));
+    assert!(!audit.contains("secret.txt"));
+
+    let _ = std::fs::remove_file(&policy);
+    let _ = std::fs::remove_file(&run.server_log);
+    let _ = std::fs::remove_file(&run.audit_log);
+}
+
+#[test]
 fn real_mcp_command_env_var_must_be_json_array() {
     let err = parse_real_mcp_command("npx -y server").expect_err("plain shell string rejected");
     assert!(err.contains("JSON array"));

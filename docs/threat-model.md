@@ -121,6 +121,20 @@ component. Its trust boundary assumptions:
   metadata: decision, reason category, method/direction/tool name, key names,
   path rule name, and redacted path classification. Full paths and URIs are not
   logged.
+- v0.4.1 adds narrow Unicode/homograph hardening for MCP policy/runtime names
+  and guarded path-like values. Policy parsing rejects suspicious Unicode in
+  policy names, server scopes, path-rule names, tool/method guard keys, and
+  path keys. Runtime checks deny non-ASCII/bidi/zero-width MCP method names,
+  non-ASCII/bidi/zero-width `tools/call` tool names, and bidi/zero-width
+  guarded path/URI values before matching or path comparison. Audit uses safe
+  categories such as `unicode_bidi_control_detected`,
+  `unicode_zero_width_detected`, `unicode_non_ascii_method`,
+  `unicode_non_ascii_tool`, and `unicode_suspicious_path_value`, with redacted
+  placeholders for Unicode-denied method/tool names and suspicious
+  audit-visible argument/param key names. The proxy does not fold Unicode
+  confusables into ASCII equivalents, does not implement
+  locale-specific path equivalence, and does not add content inspection, DLP,
+  URL filtering, network interception, a daemon, or a control plane.
 
 ## Path handling and Semgrep path-traversal triage
 
