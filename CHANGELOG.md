@@ -9,6 +9,55 @@ one opt-in experimental runtime component: an MCP stdio boundary proxy.
 EtherFence still has no daemon mode, shell hooks, command interception,
 terminal-command scanning, or network interception.
 
+## [0.7.0] - 2026-07-10
+
+### Added
+
+- `docs/ci.md`: a full walkthrough of CI/team workflow integration —
+  failing a PR on findings with `scan --fail-on`, failing only on new
+  findings with `scan --baseline`/`--fail-on-new`, generating and uploading
+  a SARIF report, validating MCP proxy policies in CI with `mcp-policy
+  validate`, dry-run-checking MCP policy decisions in CI with `mcp-policy
+  check` without starting an MCP server, avoiding secrets in checked-in
+  baselines/policies, and a restatement that EtherFence is local-first and
+  pre-v1.
+- New checked example CI input files under `docs/examples/ci/`:
+  `scan-policy.toml` (scan-only posture policy), `mcp-policy.toml` (MCP
+  proxy policy), `baseline.json` (baseline generated from
+  `tests/fixtures/home`), and `requests/` (JSON-RPC request fixtures for
+  `mcp-policy check` covering an allowed tool call, a denied tool, and a
+  denied path).
+- New checked example GitHub Actions workflows under
+  `docs/examples/workflows/` (documentation, not active repository
+  workflows): `scan-gate.yml`, `scan-baseline.yml`,
+  `scan-sarif-upload.yml`, `mcp-policy-gate.yml`, and
+  `pr-security-gate.yml` (a combined gate composing the other four).
+- New README "CI and team workflow integration" section pointing at
+  `docs/ci.md` and the example files/workflows above.
+- New tests (`crates/etherfence-cli/tests/ci_examples.rs`) so the CI docs
+  and examples cannot silently drift: example policies parse; example
+  JSON-RPC requests are valid JSON; `mcp-policy check` against the example
+  requests produces the documented allow/deny decisions; the checked-in
+  example baseline exactly matches a freshly regenerated baseline from
+  `tests/fixtures/home`; every example workflow file parses as YAML; and
+  every file/command path referenced by the example workflows and
+  `docs/ci.md` exists in the repository.
+
+### Notes
+
+- No production `mcp-proxy` enforcement behavior changes and no
+  `ef-mcp-policy/v0.1` schema changes.
+- No daemon, API service, control plane, endpoint agent, shell hooks,
+  terminal-command scanning, network/TLS interception, DLP/content
+  inspection, marketplace GitHub Action, central dashboard, remote policy
+  service, automatic PR-commenting bot, or arbitrary MCP tool execution
+  added.
+- Existing `scan`, `policy`, `mcp-proxy`, and `mcp-policy` behavior; v0.6.1
+  subprocess test hardening; v0.6.0 `mcp-policy` validate/explain/init/check;
+  v0.5.0 compatibility smoke tests; and v0.4.1 Unicode hardening/v0.4.0 path
+  guards are all preserved unchanged.
+- No git tag created or pushed for this release.
+
 ## [0.6.1] - 2026-07-10
 
 ### Fixed

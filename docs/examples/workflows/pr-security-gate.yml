@@ -1,0 +1,76 @@
+# Example GitHub Actions workflow: a single combined PR gate that runs the
+# posture scan gate, a baseline-aware scan, SARIF upload, and MCP policy
+# validate/check together. This is a composition of the other example
+# workflows in this directory (scan-gate.yml, scan-baseline.yml,
+# scan-sarif-upload.yml, mcp-policy-gate.yml) into one job, for teams that
+# want one status check instead of several.
+#
+# This file is documentation, not an active workflow. Copy it into
+# `.github/workflows/` in your own repository and adjust paths/severities to
+# match. See docs/ci.md for the full explanation of every flag used below.
+#
+# Scope: every step here is scan-only or a local, serverless MCP policy
+# dry-run/validate. Nothing in this workflow starts `etherfence mcp-proxy`,
+# spawns or contacts an MCP server, executes a tool, or intercepts
+# network/terminal activity.
+name: etherfence-pr-security-gate
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  security-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+
+      - name: Build etherfence
+        run: cargo build --release -p etherfence-cli
+
+      # 1. Fail the PR on any new high-severity posture finding relative to
+      #    the checked-in baseline; known/accepted findings already in the
+      #    baseline do not fail the job.
+      - name: Scan gate (fail on new high-severity findings)
+        run: |
+          ./target/release/etherfence scan \
+            --root . \
+            --policy docs/examples/ci/scan-policy.toml \
+            --baseline docs/examples/ci/baseline.json \
+            --fail-on-new high \
+            --format human
+
+      # 2. Generate and upload a SARIF report so every finding (not only the
+      #    ones that fail the job) is visible in GitHub code scanning.
+      - name: Generate SARIF report
+        run: |
+          ./target/release/etherfence scan \
+            --root . \
+            --policy docs/examples/ci/scan-policy.toml \
+            --format sarif > etherfence.sarif
+
+      - name: Upload SARIF to code scanning
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: etherfence.sarif
+          category: etherfence
+
+      # 3. Validate the MCP proxy policy this team uses and dry-run-check a
+      #    known-denied request, so a policy typo or accidental widening
+      #    fails the PR before it ever reaches `etherfence mcp-proxy`.
+      - name: Validate MCP policy
+        run: |
+          ./target/release/etherfence mcp-policy validate \
+            docs/examples/ci/mcp-policy.toml
+
+      - name: Dry-run denied tool call stays denied
+        run: |
+          ./target/release/etherfence mcp-policy check \
+            --policy docs/examples/ci/mcp-policy.toml \
+            --request docs/examples/ci/requests/denied-tool-call.json

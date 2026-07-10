@@ -1,0 +1,49 @@
+# Example GitHub Actions workflow: fail a PR only on *new* posture findings,
+# using a checked-in baseline to tolerate known/accepted existing findings.
+#
+# This file is documentation, not an active workflow. The `--baseline` path
+# below points at this repository's example baseline
+# (docs/examples/ci/baseline.json, generated from tests/fixtures/home) purely
+# so the path resolves for the tests in this repo. Copy this workflow into
+# `.github/workflows/` in your own repository, generate and commit your own
+# baseline file (see docs/ci.md for how to generate one and how to avoid
+# committing secrets in it), and point `--root`/`--baseline` at your project.
+#
+# Scope: this only runs `etherfence scan --baseline ... --fail-on-new ...`,
+# a read-only, local, scan-only posture diff. It does not start
+# `etherfence mcp-proxy`, install a daemon, or intercept network/terminal
+# activity.
+name: etherfence-scan-baseline-gate
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  scan-baseline:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+
+      - name: Build etherfence
+        run: cargo build --release -p etherfence-cli
+
+      # Compares the current scan against a checked-in baseline and fails
+      # only when a *new* high-severity finding appears; existing findings
+      # already recorded in the baseline do not fail the job.
+      - name: Run posture scan against baseline
+        run: |
+          ./target/release/etherfence scan \
+            --root . \
+            --baseline docs/examples/ci/baseline.json \
+            --fail-on-new high \
+            --format human
+
+      # To refresh the baseline after intentionally accepting new findings:
+      #   etherfence scan --root . --write-baseline docs/examples/ci/baseline.json
+      # Review the diff before committing an updated baseline.

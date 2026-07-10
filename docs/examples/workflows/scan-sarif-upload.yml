@@ -1,0 +1,51 @@
+# Example GitHub Actions workflow: generate a SARIF 2.1.0 report from
+# `etherfence scan` and upload it to GitHub code scanning.
+#
+# This file is documentation, not an active workflow. Copy it into
+# `.github/workflows/` in your own repository and adjust `--root`/`--policy`
+# to match. See docs/ci.md and docs/sarif.md for details on the SARIF
+# document shape.
+#
+# Scope: this only runs `etherfence scan --format sarif`, a read-only, local,
+# scan-only posture check, followed by the standard `github/codeql-action/
+# upload-sarif` action. It does not start `etherfence mcp-proxy`, install a
+# daemon, or send data anywhere besides the GitHub code scanning API for this
+# repository.
+name: etherfence-scan-sarif
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  scan-sarif:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+
+      - name: Build etherfence
+        run: cargo build --release -p etherfence-cli
+
+      # SARIF generation never changes exit-code/fail-on behavior on its own;
+      # add --fail-on/--fail-on-new here too if you also want this job to
+      # fail the run on findings, in addition to uploading them.
+      - name: Generate SARIF report
+        run: |
+          ./target/release/etherfence scan \
+            --root . \
+            --policy docs/examples/ci/scan-policy.toml \
+            --format sarif > etherfence.sarif
+
+      - name: Upload SARIF to code scanning
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: etherfence.sarif
+          category: etherfence

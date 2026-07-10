@@ -1,0 +1,32 @@
+# Example `ef-mcp-policy/v0.1` policy for `etherfence mcp-policy
+# validate|explain|check` in a CI/PR gate.
+#
+# This mirrors the `filesystem-project-readonly-hardened` built-in profile
+# (see `etherfence mcp-policy init --profile filesystem-project-readonly-hardened`)
+# so the docs/examples/workflows/ examples have a concrete, self-contained
+# file to validate, explain, and dry-run-check. Copy it into your own
+# repository and adjust `allow_roots`/`deny_roots` to your project's real
+# paths before relying on it — the paths below are placeholders.
+#
+# `etherfence mcp-policy validate|explain|check` never start or contact an
+# MCP server and never execute a tool; they only parse this file (and, for
+# `check`, one JSON-RPC request you provide) and reuse the same policy
+# decision functions `etherfence mcp-proxy` uses.
+schema_version = "ef-mcp-policy/v0.1"
+name = "ci-team-gate"
+
+[tools]
+allow = ["filesystem.read", "filesystem.list"]
+deny = ["filesystem.write", "filesystem.delete", "shell.run"]
+
+[path_rules.project_readonly]
+allow_roots = ["/path/to/project"]
+deny_roots = [
+  "/path/to/project/.git",
+  "/path/to/project/.env",
+  "/path/to/project/secrets",
+]
+
+[tools."filesystem.read".arguments]
+path_keys = ["path"]
+path_rule = "project_readonly"

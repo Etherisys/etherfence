@@ -188,6 +188,38 @@ etherfence mcp-policy check \
 
 See `docs/mcp-policy-ux.md` for the full command reference.
 
+## CI and team workflow integration (v0.7.0)
+
+EtherFence is designed to be easy to drop into a team's CI: every command
+below is local, read-only scan-only or a serverless MCP-policy dry-run, with
+no daemon, no external service, and no change to `mcp-proxy` enforcement.
+
+```sh
+# Fail a PR on any high-severity posture finding.
+etherfence scan --root . --policy docs/examples/ci/scan-policy.toml --fail-on high
+
+# Fail a PR only on *new* findings versus a checked-in baseline.
+etherfence scan --root . --baseline docs/examples/ci/baseline.json --fail-on-new high
+
+# Generate a SARIF report for code-scanning upload.
+etherfence scan --root . --format sarif > etherfence.sarif
+
+# Validate an MCP proxy policy, and dry-run one request against it, without
+# starting or contacting an MCP server.
+etherfence mcp-policy validate docs/examples/ci/mcp-policy.toml
+etherfence mcp-policy check \
+  --policy docs/examples/ci/mcp-policy.toml \
+  --request docs/examples/ci/requests/allowed-tool-call.json
+```
+
+See `docs/ci.md` for the full walkthrough (including how to avoid committing
+secrets in baselines/policies), checked example CI input files under
+`docs/examples/ci/`, and checked example GitHub Actions workflows under
+`docs/examples/workflows/` (scan posture gate, scan-with-baseline, SARIF
+upload, MCP policy validate/explain/check gate, and a combined PR security
+gate). These are documentation examples, not active repository workflows —
+copy the one(s) you want into your own `.github/workflows/`.
+
 ## Linux and Windows usage
 
 The scanner remains conservative and scan-only on both Linux and Windows. It reads known local AI-agent/MCP configuration files and emits posture findings; it does not install services, intercept commands, hook shells, or intercept network traffic. MCP traffic is only ever proxied when you explicitly run the experimental `etherfence mcp-proxy` command described above.

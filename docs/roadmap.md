@@ -351,6 +351,44 @@
   hooks, terminal-command scanning, endpoint agent, DLP/content inspection,
   or arbitrary MCP tool execution
 
+## v0.7.0 - CI and team workflow integration
+
+- `docs/ci.md` documents how to adopt EtherFence in a team/CI pipeline:
+  failing a PR on findings with `scan --fail-on`, failing only on new
+  findings with `scan --baseline`/`--fail-on-new`, generating and uploading
+  a SARIF report, validating MCP proxy policies in CI with `mcp-policy
+  validate`, and dry-run-checking MCP policy decisions in CI with
+  `mcp-policy check` without starting an MCP server; also documents avoiding
+  secrets in checked-in baselines/policies and restates that EtherFence is
+  local-first and pre-v1
+- New checked example CI input files under `docs/examples/ci/`: a scan-only
+  posture policy (`scan-policy.toml`), an MCP proxy policy
+  (`mcp-policy.toml`), a baseline generated from `tests/fixtures/home`
+  (`baseline.json`), and JSON-RPC request fixtures for `mcp-policy check`
+  covering an allowed tool call, a denied tool, and a denied path
+  (`requests/`)
+- New checked example GitHub Actions workflows under
+  `docs/examples/workflows/` (documentation, not active repository
+  workflows): a scan posture gate, a scan-with-baseline gate, a SARIF
+  generate-and-upload workflow, an MCP policy validate/explain/check gate,
+  and a combined PR security gate composing all of the above
+- New README "CI and team workflow integration" section pointing at
+  `docs/ci.md` and the example files/workflows above
+- New tests (`crates/etherfence-cli/tests/ci_examples.rs`) keeping the
+  examples honest: example policies parse, example JSON-RPC requests are
+  valid JSON, `mcp-policy check` against the example requests produces the
+  documented allow/deny decisions, the regenerated baseline matches the
+  checked-in one, every example workflow file parses as YAML, and every
+  file/command path referenced by the example workflows and `docs/ci.md`
+  exists
+- No production `mcp-proxy` enforcement behavior changes, no
+  `ef-mcp-policy/v0.1` schema changes, no daemon/API/control plane, no
+  marketplace GitHub Action, no automatic PR-commenting bot, and no new
+  runtime blocking mode; `scan`, `policy`, `mcp-proxy`, and `mcp-policy`
+  behavior, v0.6.1 subprocess test hardening, v0.6.0 `mcp-policy`
+  validate/explain/init/check, v0.5.0 compatibility smoke tests, and v0.4.1
+  Unicode hardening/v0.4.0 path guards are all preserved unchanged
+
 ## v0.2.x ideas
 
 - Expand tested config schemas and platform paths

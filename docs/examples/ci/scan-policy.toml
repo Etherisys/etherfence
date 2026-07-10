@@ -1,0 +1,44 @@
+# Example `ef-policy/v0.1` scan-only posture policy for `etherfence scan
+# --policy docs/examples/ci/scan-policy.toml` in a CI/PR gate.
+#
+# This is intentionally close to the built-in `ci-runner` profile
+# (`etherfence policy show ci-runner`); it is duplicated here, with comments,
+# so CI workflow examples in docs/examples/workflows/ have a concrete,
+# self-contained file to point at. Copy it into your own repository and
+# adjust `allowed_path_prefixes`/`denied_paths` to your project's real paths
+# before relying on it — the paths below are placeholders, not real
+# organization paths.
+#
+# This file only affects `etherfence scan --policy ...` posture checks. It
+# does not change `etherfence mcp-proxy` enforcement and is not an
+# `ef-mcp-policy/v0.1` file.
+schema_version = "ef-policy/v0.1"
+name = "ci-team-gate"
+description = "Example scan-only posture policy for a team CI/PR gate. Tirith is optional because most CI runners have no interactive terminal to control."
+require_tirith = false
+
+[agents."Claude Code"]
+allowed_mcp_servers = ["github"]
+
+[agents."Cursor"]
+allowed_mcp_servers = ["github"]
+
+[agents."VS Code"]
+allowed_mcp_servers = ["github"]
+
+[agents."Windsurf"]
+allowed_mcp_servers = ["github"]
+
+[agents."Gemini CLI"]
+allowed_mcp_servers = ["github"]
+
+[agents."Codex CLI"]
+allowed_mcp_servers = ["github"]
+
+[filesystem]
+allowed_path_prefixes = ["/path/to/project", "/path/to/project/workspace"]
+denied_paths = ["/", "/home/user", "/Users/example"]
+
+[environment]
+allowed_name_patterns = ["^GITHUB_", "^CI$", "^NODE_ENV$", "^RUST_", "^CARGO_"]
+deny_secret_like_names = true

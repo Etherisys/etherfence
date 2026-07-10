@@ -1,0 +1,44 @@
+# Example GitHub Actions workflow: fail a PR when `etherfence scan` finds
+# posture issues at or above a chosen severity.
+#
+# This file is documentation, not an active workflow. The `--policy` path
+# below points at this repository's example CI policy
+# (docs/examples/ci/scan-policy.toml) purely so the path resolves for the
+# tests in this repo. Copy this workflow into `.github/workflows/` in your
+# own repository (and adjust `--root`, the policy file/profile, and the
+# `--fail-on` severity) to enable it. See docs/ci.md for the full
+# explanation of `--fail-on`.
+#
+# Scope: this only runs `etherfence scan`, a read-only, local, scan-only
+# posture check. It does not start `etherfence mcp-proxy`, install a daemon,
+# or intercept network/terminal activity.
+name: etherfence-scan-gate
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+
+      - name: Build etherfence
+        run: cargo build --release -p etherfence-cli
+
+      # Fails the job (non-zero exit) when any high-severity finding exists.
+      # Use --policy or --policy-profile to also evaluate posture policy
+      # violations (EF-POL-*) alongside the built-in scan-only findings.
+      - name: Run posture scan gate
+        run: |
+          ./target/release/etherfence scan \
+            --root . \
+            --policy docs/examples/ci/scan-policy.toml \
+            --fail-on high \
+            --format human
