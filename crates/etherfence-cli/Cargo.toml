@@ -12,6 +12,7 @@ path = "src/main.rs"
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
+dialoguer.workspace = true
 etherfence-core = { path = "../etherfence-core" }
 etherfence-detectors = { path = "../etherfence-detectors" }
 etherfence-inventory = { path = "../etherfence-inventory" }

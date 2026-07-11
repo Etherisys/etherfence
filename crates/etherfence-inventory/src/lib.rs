@@ -1,20 +1,13 @@
 use anyhow::{Context, Result};
 use etherfence_core::{
-    read_bounded_text_file, AgentKind, EnvVar, InventoryItem, McpServer, MAX_CONFIG_FILE_BYTES,
-    PARSE_ERROR_EVIDENCE_PREFIX,
+    read_bounded_text_file, AgentKind, ConfigFormat, EnvVar, InventoryItem, McpServer,
+    MAX_CONFIG_FILE_BYTES, PARSE_ERROR_EVIDENCE_PREFIX,
 };
 use serde_json::Value as JsonValue;
 use std::collections::BTreeSet;
 use std::env;
 use std::path::{Path, PathBuf};
 use toml::Value as TomlValue;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ConfigFormat {
-    Json,
-    Toml,
-    PresenceOnly,
-}
 
 #[derive(Debug, Clone, Copy)]
 struct Candidate {
@@ -151,13 +144,13 @@ const CANDIDATES: &[Candidate] = &[
     },
     Candidate {
         agent: AgentKind::Hermes,
-        relative_path: ".hermes/config.json",
-        format: ConfigFormat::PresenceOnly,
+        relative_path: ".hermes/config.yaml",
+        format: ConfigFormat::Yaml,
     },
     Candidate {
         agent: AgentKind::Hermes,
-        relative_path: "AppData/Roaming/Hermes/config.json",
-        format: ConfigFormat::PresenceOnly,
+        relative_path: "AppData/Roaming/Hermes/config.yaml",
+        format: ConfigFormat::Yaml,
     },
     Candidate {
         agent: AgentKind::Antigravity,
@@ -305,7 +298,9 @@ fn parse_candidate(root: &Path, path: &Path, candidate: Candidate) -> Result<Inv
             item.mcp_servers = parsed.servers;
             item.evidence.extend(parsed.warnings);
         }
-        ConfigFormat::PresenceOnly => item.evidence.push(presence_only_evidence(candidate.agent)),
+        ConfigFormat::Yaml | ConfigFormat::PresenceOnly => {
+            item.evidence.push(presence_only_evidence(candidate.agent));
+        }
     }
     item.mcp_servers.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(item)

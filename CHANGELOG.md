@@ -17,6 +17,41 @@ field guards; `ef-mcp-policy/v0.1` policies are unaffected. EtherFence still
 has no daemon mode, shell hooks, command interception, terminal-command
 scanning, or network interception.
 
+## [1.6.0] - 2026-07-11
+
+### Added
+
+- **Guided setup wizard**: `etherfence setup` (no subcommand) now launches an
+  interactive guided setup experience on TTYs. The wizard scans for AI clients,
+  detects MCP servers, shows trust assessments, and provides step-by-step
+  guidance. On non-TTY (CI, pipes, scripts), it prints clear guidance to use
+  explicit subcommands. (#TBD)
+- **Safe policy generation**: Generated starter policies now default to
+  **deny-all quarantine** (`tools.allow = []`, `methods.allow = ["tools/list"]`)
+  instead of the previous wildcard `tools.allow = ["*"]`. This is a security
+  correction — policies now fail-closed by default. Operators refine the
+  allowlist explicitly after setup. (#TBD)
+- **Real Hermes config path**: Hermes Agent detection now uses the actual
+  `~/.hermes/config.yaml` path (YAML format, `mcp_servers:` key) instead of
+  the incorrect `~/.hermes/config.json` guess. (#TBD)
+- New core types for client detection granularity: `ReadSupport`, `WriteSupportKind`,
+  `ConfigFormat::Yaml`. These lay the groundwork for the client adapter
+  architecture planned for v1.7.0. (#TBD)
+
+### Changed
+
+- `generated_policy_template()` now produces deny-all policies instead of
+  wildcard allow-all. Existing policies written by earlier versions are
+  unaffected; this only changes new policy generation. (#TBD)
+- README Quickstart now leads with `etherfence setup` (guided wizard) and
+  documents explicit subcommands as advanced/CI usage. (#TBD)
+
+### Fixed
+
+- Hermes Agent no longer requires the nonexistent `~/.hermes/config.json`
+  marker file for detection. The correct `~/.hermes/config.yaml` path is
+  used, with YAML format support. (#TBD)
+
 ## [1.5.0] - 2026-07-11
 
 ### Added

@@ -179,6 +179,35 @@ pub fn read_bounded_text_file_no_follow(path: &Path, max_bytes: u64) -> io::Resu
     })
 }
 
+/// MCP config read support level for a client.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ReadSupport {
+    /// Full MCP server parsing from config files.
+    Full,
+    /// Config file detected but MCP parsing not yet implemented.
+    PresenceOnly,
+    /// Config format not supported.
+    Unsupported,
+}
+
+/// MCP config write support level for a client.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum WriteSupportKind {
+    Supported,
+    AdvisoryOnly,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ConfigFormat {
+    Json,
+    Toml,
+    Yaml,
+    PresenceOnly,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum AgentKind {

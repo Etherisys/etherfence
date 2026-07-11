@@ -84,9 +84,10 @@ enum Command {
         command: McpPolicyCommand,
     },
     /// Safely detect, plan, apply, rollback, and doctor local MCP proxy onboarding.
+    /// Run without a subcommand to launch the guided setup wizard.
     Setup {
         #[command(subcommand)]
-        command: SetupCommand,
+        command: Option<SetupCommand>,
     },
 }
 
@@ -414,8 +415,12 @@ fn main() -> Result<()> {
     }
 }
 
-fn run_setup_command(command: SetupCommand) -> Result<()> {
-    match command {
+fn run_setup_command(command: Option<SetupCommand>) -> Result<()> {
+    let cmd = match command {
+        Some(cmd) => cmd,
+        None => return run_setup_wizard(),
+    };
+    match cmd {
         SetupCommand::Detect { root, format } => {
             let root = setup_root(root);
             let detections = etherfence_setup::detect(&root);
@@ -1056,6 +1061,77 @@ fn doctor_status_label(value: etherfence_setup::DoctorStatus) -> &'static str {
         etherfence_setup::DoctorStatus::Warn => "WARN",
         etherfence_setup::DoctorStatus::Fail => "FAIL",
     }
+}
+
+fn run_setup_wizard() -> Result<()> {
+    use dialoguer::console::Term;
+    let term = Term::stderr();
+    if !term.is_term() {
+        anyhow::bail!(
+            "The guided setup wizard requires an interactive terminal (TTY).\n\
+             For non-interactive use, run one of the explicit subcommands:\n\n  \
+             etherfence setup detect        Detect AI client MCP configs\n  \
+             etherfence setup catalog       Show client compatibility matrix\n  \
+             etherfence setup plan          Show wrapping plan\n  \
+             etherfence setup apply         Apply setup changes\n  \
+             etherfence setup rollback      Restore setup backups\n  \
+             etherfence setup doctor        Check setup health\n  \
+             etherfence setup baseline      Manage integrity baselines\n\n\
+             See etherfence setup --help for more details."
+        );
+    }
+
+    let root = etherfence_inventory::default_scan_root();
+
+    // Step 1: Scan
+    eprintln!(
+        "EtherFence v{} — Guided Secure Setup",
+        env!("CARGO_PKG_VERSION")
+    );
+    eprintln!("Scanning for AI clients and MCP configurations...\n");
+
+    let detections = etherfence_setup::detect(&root);
+    if detections.is_empty() {
+        eprintln!("No known AI client MCP configurations were detected on this system.");
+        eprintln!("This may be expected if you don't use AI coding agents with MCP servers.");
+        eprintln!("\nRun 'etherfence setup catalog' to see which clients EtherFence can detect.");
+        return Ok(());
+    }
+
+    eprintln!("Detected {} client configuration(s):\n", detections.len());
+    for detection in &detections {
+        let ws = if detection.write_support == etherfence_setup::WriteSupport::Supported {
+            "✓ write-supported"
+        } else {
+            "(advisory-only)"
+        };
+        eprintln!("  {} ({})", detection.agent, ws);
+        eprintln!("    Config: {}", detection.config_path);
+        if !detection.servers.is_empty() {
+            eprintln!("    MCP servers:");
+            for server in &detection.servers {
+                let wrapped = if server.wrapped { " [wrapped]" } else { "" };
+                eprintln!("      - {}{}", server.name, wrapped);
+            }
+        } else {
+            eprintln!("    (no MCP servers configured)");
+        }
+        if !detection.notes.is_empty() {
+            for note in &detection.notes {
+                eprintln!("    Note: {}", note);
+            }
+        }
+        eprintln!();
+    }
+
+    // Step 6: Preview
+    eprintln!("Next steps:");
+    eprintln!("  Run 'etherfence setup plan' to see the full wrapping plan");
+    eprintln!("  Run 'etherfence setup apply' to apply setup changes");
+
+    eprintln!("\nThis guided wizard is a v1.6.0 preview. Full interactive multi-select");
+    eprintln!("coming in a follow-up release. For now, use the subcommands above.");
+    Ok(())
 }
 
 fn run_mcp_policy_command(command: McpPolicyCommand) -> Result<()> {
