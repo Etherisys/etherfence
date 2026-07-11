@@ -1,20 +1,14 @@
 use anyhow::{Context, Result};
 use etherfence_core::{
-    read_bounded_text_file, AgentKind, EnvVar, InventoryItem, McpServer, MAX_CONFIG_FILE_BYTES,
-    PARSE_ERROR_EVIDENCE_PREFIX,
+    read_bounded_text_file, AgentKind, ConfigFormat, EnvVar, InventoryItem, McpServer,
+    MAX_CONFIG_FILE_BYTES, PARSE_ERROR_EVIDENCE_PREFIX,
 };
 use serde_json::Value as JsonValue;
+use serde_yaml::Value as YamlValue;
 use std::collections::BTreeSet;
 use std::env;
 use std::path::{Path, PathBuf};
 use toml::Value as TomlValue;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ConfigFormat {
-    Json,
-    Toml,
-    PresenceOnly,
-}
 
 #[derive(Debug, Clone, Copy)]
 struct Candidate {
@@ -151,33 +145,43 @@ const CANDIDATES: &[Candidate] = &[
     },
     Candidate {
         agent: AgentKind::Hermes,
-        relative_path: ".hermes/config.json",
-        format: ConfigFormat::PresenceOnly,
+        relative_path: ".hermes/config.yaml",
+        format: ConfigFormat::Yaml,
     },
     Candidate {
         agent: AgentKind::Hermes,
-        relative_path: "AppData/Roaming/Hermes/config.json",
-        format: ConfigFormat::PresenceOnly,
+        relative_path: "AppData/Roaming/Hermes/config.yaml",
+        format: ConfigFormat::Yaml,
     },
     Candidate {
         agent: AgentKind::Antigravity,
-        relative_path: ".antigravity/config.json",
-        format: ConfigFormat::PresenceOnly,
+        relative_path: ".gemini/config/mcp_config.json",
+        format: ConfigFormat::Json,
     },
     Candidate {
         agent: AgentKind::Antigravity,
-        relative_path: "AppData/Roaming/Antigravity/config.json",
-        format: ConfigFormat::PresenceOnly,
+        relative_path: ".agents/mcp_config.json",
+        format: ConfigFormat::Json,
+    },
+    Candidate {
+        agent: AgentKind::Antigravity,
+        relative_path: "AppData/Roaming/Antigravity/mcp_config.json",
+        format: ConfigFormat::Json,
     },
     Candidate {
         agent: AgentKind::OpenCode,
-        relative_path: ".opencode/config.json",
-        format: ConfigFormat::PresenceOnly,
+        relative_path: ".config/opencode/opencode.json",
+        format: ConfigFormat::Json,
+    },
+    Candidate {
+        agent: AgentKind::OpenCode,
+        relative_path: ".config/opencode/opencode.jsonc",
+        format: ConfigFormat::Json,
     },
     Candidate {
         agent: AgentKind::OpenCode,
         relative_path: "AppData/Roaming/OpenCode/config.json",
-        format: ConfigFormat::PresenceOnly,
+        format: ConfigFormat::Json,
     },
     Candidate {
         agent: AgentKind::Cline,
@@ -305,7 +309,15 @@ fn parse_candidate(root: &Path, path: &Path, candidate: Candidate) -> Result<Inv
             item.mcp_servers = parsed.servers;
             item.evidence.extend(parsed.warnings);
         }
-        ConfigFormat::PresenceOnly => item.evidence.push(presence_only_evidence(candidate.agent)),
+        ConfigFormat::Yaml => {
+            let value: YamlValue = serde_yaml::from_str(&content).context("parsing YAML")?;
+            let parsed = parse_yaml_mcp_servers(&value);
+            item.mcp_servers = parsed.servers;
+            item.evidence.extend(parsed.warnings);
+        }
+        ConfigFormat::PresenceOnly => {
+            item.evidence.push(presence_only_evidence(candidate.agent));
+        }
     }
     item.mcp_servers.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(item)
@@ -324,6 +336,84 @@ fn presence_only_evidence(agent: AgentKind) -> String {
 
 /// Deterministic, single-line parse-error evidence. TOML errors in particular
 /// render as multi-line spans, so whitespace is collapsed and the message capped.
+fn parse_yaml_mcp_servers(value: &YamlValue) -> ParsedServers {
+    let mut parsed = ParsedServers::default();
+    match value.get("mcp_servers") {
+        Some(YamlValue::Mapping(map)) => {
+            for (key, server) in map {
+                let name = key.as_str().unwrap_or_default();
+                if name.is_empty() {
+                    continue;
+                }
+                if !server.is_mapping() {
+                    parsed.warnings.push(format!(
+                        "mcp_servers entry {name:?} is not a YAML mapping; recorded name only"
+                    ));
+                    parsed.servers.push(McpServer {
+                        name: name.to_string(),
+                        command: None,
+                        args: Vec::new(),
+                        env: Vec::new(),
+                        url: None,
+                    });
+                    continue;
+                }
+                let command = server
+                    .get("command")
+                    .and_then(|v| v.as_str())
+                    .map(ToOwned::to_owned);
+                let url = server
+                    .get("url")
+                    .and_then(|v| v.as_str())
+                    .map(ToOwned::to_owned);
+                let args = server
+                    .get("args")
+                    .and_then(|v| v.as_sequence())
+                    .map(|seq| {
+                        seq.iter()
+                            .filter_map(|v| v.as_str().map(ToOwned::to_owned))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let env = server
+                    .get("env")
+                    .and_then(|v| v.as_mapping())
+                    .map(|env_map| {
+                        env_map
+                            .iter()
+                            .filter_map(|(k, v)| {
+                                let name = k.as_str()?.to_string();
+                                let value_hint: Option<String> = v
+                                    .as_str()
+                                    .map(|s| s.to_string())
+                                    .or_else(|| v.as_i64().map(|n| n.to_string()))
+                                    .or_else(|| v.as_f64().map(|n| n.to_string()))
+                                    .or_else(|| v.as_bool().map(|b| b.to_string()));
+                                Some(EnvVar {
+                                    name,
+                                    value_hint: value_hint.map(|s| redact_env_value(&s)),
+                                })
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                parsed.servers.push(McpServer {
+                    name: name.to_string(),
+                    command,
+                    args,
+                    env,
+                    url,
+                });
+            }
+        }
+        Some(_) => parsed
+            .warnings
+            .push("mcp_servers present but not a YAML mapping; ignored".to_string()),
+        None => {}
+    }
+    parsed
+}
+
 fn parse_error_evidence(err: &anyhow::Error) -> String {
     let mut message = format!("{err:#}")
         .split_whitespace()

@@ -17,25 +17,49 @@ field guards; `ef-mcp-policy/v0.1` policies are unaffected. EtherFence still
 has no daemon mode, shell hooks, command interception, terminal-command
 scanning, or network interception.
 
-## [1.5.0] - 2026-07-11
+## [1.6.0] - 2026-07-11
 
 ### Added
 
-- Interactive terminals now show a professional EtherFence startup banner for
-  human-readable command output, reinforcing "AI Agent Security Posture &
-  Runtime Control" while remaining invisible to scripts and CI. The banner is
-  suppressed for JSON, Markdown, SARIF, MCP stdio proxy traffic,
-  redirected/piped stdout, CI environments, `NO_COLOR`, and terminals without
-  ANSI color support.
+- **Guided setup wizard**: `etherfence setup` (no subcommand) now launches an
+  interactive guided setup experience on TTYs. The wizard scans for AI clients,
+  detects MCP servers, and provides step-by-step guidance toward applying
+  setup changes. On non-TTY (CI, pipes, scripts), it prints clear guidance to use
+  explicit subcommands.
+- **Safe policy generation**: Generated starter policies now default to
+  **deny-all quarantine** (`tools.allow = []`, `methods.allow = ["tools/list"]`)
+  instead of the previous wildcard `tools.allow = ["*"]`. This is a security
+  correction — policies now fail-closed by default. Operators refine the
+  allowlist explicitly after setup.
+- **Real Hermes config path**: Hermes Agent detection now uses the actual
+  `~/.hermes/config.yaml` path (YAML format, `mcp_servers:` key) instead of
+  the incorrect `~/.hermes/config.json` guess. Hermes MCP servers are now
+  parsed from YAML config.
+- **Real OpenCode and Antigravity detection**: OpenCode now probes
+  `~/.config/opencode/opencode.{json,jsonc}` and Antigravity probes
+  `~/.gemini/config/mcp_config.json` with binary detection for `agy`.
+- New core types for client detection granularity: `ReadSupport`, `WriteSupportKind`,
+  `ConfigFormat::Yaml`.
 
-- `etherfence setup detect` human-output labels renamed for clarity without
-  changing semantics or JSON schemas: `recommendation: deny (needs-review=...)`
-  → `starter policy: deny` (dropping the separate `needs-review` field from the
-  recommendation line — the tier is always `deny`, and the rationale explains
-  why), and `trust: ... needs-review=true` → `trust assessment: ...
-  review-needed=true` (eliminating confusion with the capability-label-based
-  review flag). Machine-readable `StarterPolicyRecommendation.needsReview` and
-  `TrustAssessment.needsReview` JSON fields are unchanged.
+### Changed
+
+- `generated_policy_template()` now produces deny-all policies instead of
+  wildcard allow-all. Existing policies written by earlier versions are
+  unaffected; this only changes new policy generation.
+- README Quickstart now leads with `etherfence setup` (guided wizard) and
+  documents explicit subcommands as advanced/CI usage.
+
+### Fixed
+
+- Hermes Agent no longer requires the nonexistent `~/.hermes/config.json`
+  marker file for detection. The correct `~/.hermes/config.yaml` path is
+  used, with YAML format and MCP server parsing.
+- OpenCode and Antigravity detection now uses real config paths and binary
+  names discovered from live system inspection.
+
+## [1.5.0] - 2026-07-11
+
+### Added
 
 - New versioned MCP proxy policy schema extension `ef-mcp-policy/v0.2`,
   additive over `ef-mcp-policy/v0.1`: every existing v0.1 policy continues

@@ -26,6 +26,7 @@ pub use classification::{
     classify_server, human_label, recommend, CapabilityLabel, ClassifiedCapabilities,
     RecommendationTier, StarterPolicyRecommendation,
 };
+pub use etherfence_core::WriteSupportKind as WriteSupport;
 pub use trust::{
     aggregate, assess_trust, configuration_risk_from_indicators, human_label_version_expression,
     needs_review, sort_indicators, AggregateAssessmentStatus, ArtifactIdentityConfidence,
@@ -50,11 +51,12 @@ pub struct SetupDetection {
     pub notes: Vec<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-pub enum WriteSupport {
-    Supported,
-    AdvisoryOnly,
+pub enum ServerTransport {
+    Stdio,
+    Remote,
+    Unknown,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -66,14 +68,6 @@ pub struct SetupServer {
     pub capabilities: ClassifiedCapabilities,
     pub recommendation: StarterPolicyRecommendation,
     pub trust_assessment: TrustAssessment,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum ServerTransport {
-    Stdio,
-    Remote,
-    Unknown,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -403,11 +397,11 @@ pub fn generated_policy_template(server_name: &str) -> Result<String> {
 name = "etherfence-setup-{safe_name}"
 
 [methods]
-allow = ["tools/list", "tools/call"]
+allow = ["tools/list"]
 deny = []
 
 [tools]
-allow = ["*"]
+allow = []
 deny = []
 "#
     );
@@ -847,6 +841,14 @@ mod tests {
         let policy = generated_policy_template("filesystem").unwrap();
         assert!(policy.contains("schema_version = \"ef-mcp-policy/v0.1\""));
         assert!(policy.contains("tools/list"));
+        assert!(
+            !policy.contains("[\"*\"]"),
+            "generated policy must not contain wildcard allow-all"
+        );
+        assert!(
+            policy.contains("allow = []"),
+            "generated policy tools.allow must be deny-all"
+        );
     }
 
     #[test]

@@ -1,0 +1,15 @@
+# Hermes Agent config.yaml fixture
+# Simulates a real Hermes installation with MCP servers configured
+
+mcp_servers:
+  agentmail:
+    command: "agentmail-mcp"
+    args: ["--config", "/home/user/.agentmail/config.json"]
+    env:
+      AGENTMAIL_API_KEY: "test-fixture-key-redacted"
+
+  stitch:
+    command: "npx"
+    args: ["-y", "@anthropic/stitch-mcp@0.5.0"]
+    env:
+      STITCH_API_KEY: "test-fixture-key-redacted"

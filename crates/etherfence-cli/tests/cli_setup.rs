@@ -156,7 +156,7 @@ fn setup_detect_human_output_gains_capability_lines_without_removing_existing_on
 
     // New lines are additive.
     assert!(stdout.contains("capabilities: filesystem"));
-    assert!(stdout.contains("starter policy: deny"));
+    assert!(stdout.contains("recommendation: deny"));
 }
 
 #[test]

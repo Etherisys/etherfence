@@ -1,6 +1,6 @@
 # Install
 
-Status: **v1.5.0 — production-ready for controlled local-first deployments
+Status: **v1.6.0 — production-ready for controlled local-first deployments
 of its defined scope** (`scan`, `mcp-policy`, and the stdio `mcp-proxy`
 boundary) with a stable CLI and policy schema — not a universal
 certification for every MCP server, MCP client, or deployment environment,
@@ -19,7 +19,7 @@ There are three ways to get `etherfence`:
 
 Releases are cut manually (see [`docs/release-automation.md`](release-automation.md))
 and published on the repository's
-[GitHub Releases](https://github.com/Etherisys/etherfence/releases) page.
+[GitHub Releases](https://github.com/Etherisys-id/etherfence/releases) page.
 Each release attaches:
 
 - `etherfence-linux-x86_64.tar.gz`
@@ -32,7 +32,7 @@ Download both files for the release you want, then:
 sha256sum -c etherfence-linux-x86_64.tar.gz.sha256
 
 # Extract. The archive contains a versioned directory, e.g.
-# etherfence-v1.5.0-linux-x86_64/{etherfence,README.md,LICENSE}.
+# etherfence-v1.6.0-linux-x86_64/{etherfence,README.md,LICENSE}.
 tar -xzf etherfence-linux-x86_64.tar.gz
 
 # Run it in place...
@@ -62,7 +62,7 @@ $actual = (Get-FileHash etherfence-windows-x86_64.zip -Algorithm SHA256).Hash
 if ($actual -ne $expected.ToUpper()) { throw "checksum mismatch" }
 
 # Extract. The archive contains a versioned directory, e.g.
-# etherfence-v1.5.0-windows-x86_64\{etherfence.exe,README.md,LICENSE}.
+# etherfence-v1.6.0-windows-x86_64\{etherfence.exe,README.md,LICENSE}.
 Expand-Archive etherfence-windows-x86_64.zip -DestinationPath .
 
 # Run it in place...
@@ -77,7 +77,7 @@ somewhere already on it, to run `etherfence` from any shell.
 Requires a stable Rust toolchain ([rustup.rs](https://rustup.rs)).
 
 ```sh
-git clone https://github.com/Etherisys/etherfence.git
+git clone https://github.com/Etherisys-id/etherfence.git
 cd etherfence
 cargo build --release -p etherfence-cli
 ./target/release/etherfence --version
@@ -105,7 +105,7 @@ etherfence --version
 ```
 
 should print `etherfence <version>` matching the release or checkout you
-installed (`1.5.0` for this release).
+installed (`1.6.0` for this release).
 
 ## Run your first scan
 

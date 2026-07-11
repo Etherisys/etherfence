@@ -142,29 +142,35 @@ Three local commands, each with a distinct job:
 
 ## Quick start
 
-Five steps, all local:
+Run the guided setup wizard:
 
 ```sh
 # 1. Install or build (see docs/install.md for release artifacts).
 cargo build --release -p etherfence-cli
-alias etherfence=./target/release/etherfence   # or put it on PATH
 
-# 2. Run your first scan.
-etherfence scan --root tests/fixtures/home     # or omit --root to scan your real machine
+# 2. Run the guided setup wizard.
+etherfence setup
+```
 
-# 3. Validate an MCP proxy policy.
-etherfence mcp-policy validate examples/policies/mcp-minimal-boundary.toml
+The wizard scans your system for AI clients (Claude Code, Cursor, VS Code, Hermes, OpenCode, etc.), detects their MCP servers, shows trust assessments, lets you select which servers to protect, and generates deny-by-default starter policies with preview before applying.
 
-# 4. Dry-run a policy decision — no MCP server started or contacted.
-etherfence mcp-policy check \
-  --policy examples/policies/mcp-minimal-boundary.toml \
-  --request '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"filesystem.read","arguments":{}}}'
+**For CI and scripting**, the explicit subcommands remain available:
 
-# 5. Optional: wrap a real MCP server with the runtime boundary proxy.
-etherfence mcp-proxy \
-  --policy examples/policies/mcp-minimal-boundary.toml \
-  --server-name filesystem \
-  -- npx -y @modelcontextprotocol/server-filesystem /home/user/projects
+```sh
+etherfence setup detect      # Detect MCP configs (read-only)
+etherfence setup catalog     # Show client compatibility matrix
+etherfence setup plan        # Show wrapping plan (read-only)
+etherfence setup apply       # Apply setup changes
+etherfence setup rollback    # Restore setup backups
+etherfence setup doctor      # Check setup health
+```
+
+Non-setup commands:
+
+```sh
+etherfence scan                                    # Posture scan
+etherfence mcp-policy validate policy.toml         # Validate a policy
+etherfence mcp-policy check --policy policy.toml --request '...'  # Dry-run
 ```
 
 ## Install / build
