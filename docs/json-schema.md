@@ -160,7 +160,7 @@ Example:
 }
 ```
 
-## `etherfence setup detect` schema (`ef-setup-detect/v0.1`)
+## `etherfence setup detect` schema (`ef-setup-detect/v0.2`)
 
 `etherfence setup detect --format json` (v1.2.0) is the first JSON output
 `setup detect` has ever had — an additive new schema, not a change to an
@@ -173,9 +173,17 @@ total output is longer than before. `setup plan` and `setup doctor`
 remain byte-identical to their pre-v1.2.0 output; only `setup detect`'s
 default human output gained lines.
 
+v1.3.0 additively bumps this schema to `ef-setup-detect/v0.2`: every
+`capabilities`/`recommendation` field above keeps its exact name, type,
+and meaning, and one new field, `trustAssessment`, is added per server
+(see "Trust and integrity assessment" below). Human output gains two more
+lines per server (`trust: ...`, `trust indicators: ...`), appended after
+the existing `recommendation:` line — again additive, not
+byte-identical to pre-v1.3.0 output.
+
 | Field | Type | Description |
 | --- | --- | --- |
-| `etherfenceSchemaVersion` | string | `ef-setup-detect/v0.1`. |
+| `etherfenceSchemaVersion` | string | `ef-setup-detect/v0.2`. |
 | `root` | string | Root directory used for detection. |
 | `detections` | array | One entry per detected client config. |
 
@@ -202,11 +210,36 @@ Each `servers[]` entry:
 | `recommendation.needsReview` | boolean | `true` when `capabilities.labels` contains `unknown`, `shell-command-execution`, or `identity-auth`; `false` otherwise. |
 | `recommendation.rationale` | string | Short, deterministic, generated explanation naming the label(s) that drove the decision. |
 
+### `servers[].trustAssessment` (v1.3.0)
+
+Static, local-only trust-and-integrity assessment. It never proves a server is safe, trusted, certified, malware-free, benign, or definitively malicious — see `docs/setup-onboarding.md` for the full limiting
+language. `recommendation.tier` above stays `"deny"` regardless of any
+value here; this feature never produces an `"allow"` recommendation.
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `trustAssessment.artifactIdentity` | string | `verified-local` (a specific local regular file was hashed under bounded, race-safe conditions), `known-source` (an exact curated identity match — not proof of authenticity/provenance/safety), or `unknown`. |
+| `trustAssessment.artifactIdentityRationale` | string | **Always present.** Deterministic explanation of why `artifactIdentity` holds its value. For a remote/URL-configured server this explicitly states "no local invocation to assess," distinct from a stdio server's `unknown`, which means a local inspection ran but was inconclusive. |
+| `trustAssessment.configurationRisk` | string | `no-known-indicators` (no implemented indicator triggered — not an absence-of-risk guarantee), `needs-review`, or `high-risk`. |
+| `trustAssessment.aggregate` | string | `verified-local`, `known-source`, `needs-review`, `high-risk`, or `unknown` — derived by the configuration-risk-first rule: `configurationRisk` of `high-risk`/`needs-review` always wins; `artifactIdentity` only surfaces to the aggregate when `configurationRisk` is `no-known-indicators`. Both underlying fields are always reported separately regardless of which one determined the aggregate. |
+| `trustAssessment.needsReview` | boolean | `true` iff `aggregate` is `needs-review`, `high-risk`, or `unknown`. |
+| `trustAssessment.invocation.applicable` | boolean | `false` only for remote/URL-configured servers, which have no local invocation to assess; every other `invocation` field is then omitted. |
+| `trustAssessment.invocation.runner` | string, omitted if absent | `npx`, `uvx`, or `pipx-run`, when recognized. |
+| `trustAssessment.invocation.packageIdentity` / `.versionExpression` | string, omitted if absent | Parsed package identity and its pinning classification (`exactly-pinned`, `omitted`, `mutable-tag`, `version-range`, or `unsupported-or-ambiguous`). |
+| `trustAssessment.invocation.malformedRunnerInvocation` | boolean | `true` when a recognized runner's arguments could not be parsed into a package identity at all. |
+| `trustAssessment.invocation.shellWrapper` | string, omitted if absent | One of `sh-c`, `bash-c`, `cmd-c`, `powershell-command`, `powershell-encoded-command`, `pwsh-command`, `pwsh-encoded-command`. |
+| `trustAssessment.invocation.obscuredLaunchPatterns` | array of string, omitted/empty if none | Zero or more of `pipe-to-shell-downloader`, `encoded-powershell-option`, `windows-certutil-download-pattern`, `powershell-web-request-to-invoke-expression`, `decode-then-execute-piped-to-shell` — a fixed, closed set. |
+| `trustAssessment.executablePath` | string | `absolute-path`, `relative-path`, `path-resolved-command`, `missing-path`, `non-regular-file`, `symlink`, `ambiguous-or-unsupported`, or `not-applicable` (remote servers). A path may also carry a separate `temporary-directory-location` indicator (see below) alongside its primary classification. |
+| `trustAssessment.sha256` | string, omitted if absent | Lowercase hex SHA-256 digest. Present **only** when `artifactIdentity == "verified-local"` — omitted, never `null`, otherwise. |
+| `trustAssessment.indicators` | array | **Always present**, `[]` when empty — unlike `capabilities.evidence`, this is never omitted. |
+
+Each `indicators[]` entry: `id` (stable, e.g. `EF-TRUST-PIN-001`), `severity` (`info`/`low`/`medium`/`high`, reusing the same scale as `ef-scan-report` findings), `category` (one of `obscured-launch`, `shell-wrapper`, `package-pinning`, `executable-path`, `local-artifact`, `unicode-identity`, `environment-variable`), `summary`, `rationale`, `evidence` (array of `{key, value}` safe structured tokens — never raw command strings, environment values, or file content), and `remediation`. Indicators are sorted deterministically by `(category, id)`.
+
 Example:
 
 ```json
 {
-  "etherfenceSchemaVersion": "ef-setup-detect/v0.1",
+  "etherfenceSchemaVersion": "ef-setup-detect/v0.2",
   "root": "/home/user",
   "detections": [
     {
@@ -228,6 +261,22 @@ Example:
             "tier": "deny",
             "needsReview": false,
             "rationale": "denied by default; no fixture-verified allow rule exists for this capability set"
+          },
+          "trustAssessment": {
+            "artifactIdentity": "known-source",
+            "artifactIdentityRationale": "This server's parsed package identity is an exact match against a small curated known-source table. This does not prove package authenticity, provenance, installation integrity, or safety.",
+            "configurationRisk": "no-known-indicators",
+            "aggregate": "known-source",
+            "needsReview": false,
+            "invocation": {
+              "applicable": true,
+              "runner": "npx",
+              "packageIdentity": "@modelcontextprotocol/server-filesystem",
+              "versionExpression": "exactly-pinned",
+              "malformedRunnerInvocation": false
+            },
+            "executablePath": "path-resolved-command",
+            "indicators": []
           }
         }
       ],
@@ -237,10 +286,10 @@ Example:
 }
 ```
 
-Both `ef-setup-catalog/v0.1` and `ef-setup-detect/v0.1` are posture/
-classification/starter-policy guidance only — they never imply runtime
-blocking, interception, or enforcement, and no `--fail-on` flag exists for
-either command in v1.2.0.
+`ef-setup-catalog/v0.1` and `ef-setup-detect/v0.2` are posture/
+classification/starter-policy/trust-assessment guidance only — they never
+imply runtime blocking, interception, or enforcement, and no `--fail-on`
+flag exists for either command.
 
 ## Stability expectations
 
@@ -249,4 +298,5 @@ either command in v1.2.0.
 - Finding IDs and fingerprints are intended to be stable for automation when the underlying issue is unchanged.
 - Findings are posture risks/hints, not confirmed exploitability.
 - Policy, baseline, and report JSON are scan-only outputs and do not imply runtime blocking or enforcement.
-- `ef-setup-catalog/v0.1` and `ef-setup-detect/v0.1` are additive, independently versioned schemas for the `setup` command family and do not alter the `ef-scan-report`/`ef-baseline`/`ef-mcp-policy` schemas above.
+- `ef-setup-catalog/v0.1` and `ef-setup-detect/v0.2` are additive, independently versioned schemas for the `setup` command family and do not alter the `ef-scan-report`/`ef-baseline`/`ef-mcp-policy` schemas above.
+- `ef-setup-detect/v0.2`'s `trustAssessment` fields never imply a server is proven safe, trusted, certified, malware-free, benign, or that it has no malicious behavior — see `docs/setup-onboarding.md` for the full limiting language.

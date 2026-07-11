@@ -54,7 +54,7 @@ v1.2.0; `recommendation.needsReview` is `true` when the label set includes
 static and local-only: no MCP server is started, no network call is made,
 and no MCP protocol method is ever invoked to produce it. See
 [`docs/json-schema.md`](json-schema.md) for the full `ef-setup-catalog/v0.1`
-and `ef-setup-detect/v0.1` schemas.
+and `ef-setup-detect/v0.2` schemas.
 
 ### Catalog tier vs. write support
 
@@ -67,6 +67,89 @@ v1.2.0, even though `setup catalog`/`setup detect` can describe them in
 detail). A client can be catalog `advisory-only` and `WriteSupport::AdvisoryOnly`
 at the same time (e.g. Hermes) without those two facts being the same
 claim.
+
+## `etherfence setup detect` trust and integrity assessment (v1.3.0)
+
+`etherfence setup detect` (both `--format human` and `--format json`)
+additionally reports a static, local-only, deterministic **trust and
+integrity assessment** for every discovered MCP server, alongside its
+v1.2.0 capability classification and starter-policy recommendation. It is
+read-only, offline, and starts no process, opens no network connection,
+and invokes no MCP protocol method to produce it — exactly the same
+posture as v1.2.0's classification. See
+[`docs/json-schema.md`](json-schema.md) for the full `ef-setup-detect/v0.2`
+field reference.
+
+**What this feature never claims.** The trust-and-integrity assessment never proves a server is safe, trusted, certified, malware-free, benign, or definitively malicious. It is not a malware scanner, a behavioral security
+sandbox, an endpoint protection product, a package authenticity or
+software-signature verifier, a package-registry reputation service, a
+universal typosquatting detector, a universal Unicode confusable detector,
+or a universal MCP server certification system. It is not a guarantee that
+no malicious behavior exists, and it is not a replacement for manual review
+or for `mcp-proxy`'s runtime least-privilege policy.
+
+**Vocabulary and what each value actually means:**
+
+- `artifactIdentity: verified-local` means only that a specific local
+  regular file was inspected and SHA-256 hashed under bounded,
+  TOCTOU-safe conditions — it does not mean the program is safe.
+- `artifactIdentity: known-source` means only an exact match against a
+  small curated identity table — it does not prove package
+  authenticity, provenance, installation integrity, or safety.
+- `configurationRisk: no-known-indicators` means only that no implemented
+  v1.3.0 indicator triggered for that server — it does not prove the
+  absence of malicious behavior.
+- `aggregate` combines the two axes above by a fixed,
+  configuration-risk-first rule: a raised configuration-risk indicator is
+  never hidden by a favorable artifact identity, and a favorable artifact
+  identity still surfaces to the aggregate whenever no configuration-risk
+  indicator fired. Both underlying fields are always reported separately,
+  regardless of which one determined the aggregate value.
+
+**What it assesses, statically, from already-parsed local configuration:**
+
+- Package-runner invocation pinning for `npx`, `uvx`, and `pipx run` —
+  whether the resolved package version is exactly pinned, omitted, a
+  mutable tag, a version range, or unsupported/ambiguous. No package
+  registry is ever contacted, and no package is ever installed or
+  executed.
+- Shell-wrapper invocation (`sh -c`, `bash -c`, `cmd.exe /c`,
+  `powershell -Command`/`-EncodedCommand`, `pwsh -Command`/
+  `-EncodedCommand`) and a fixed, closed set of obscured/download-and-
+  execute launch patterns, detected by bounded structural string
+  matching — never a general shell parser, and the wrapped command is
+  never executed or decoded.
+- Executable-path classification (absolute path, relative path,
+  bare/PATH-resolved command, missing path, non-regular file, symlink,
+  temporary-directory location, or ambiguous/unsupported). A relative
+  path, a PATH-resolved command, or a symlink is never silently promoted
+  to a verified local artifact — `PATH` is never searched, and symlinks
+  are never followed.
+- Local artifact hashing for an eligible absolute regular-file path only:
+  a bounded, streamed SHA-256 read that refuses to follow a symlink at
+  open time (enforced by the kernel on Unix; the opened handle's own
+  metadata is additionally checked on every platform) and cross-checks
+  filesystem file identity — not just length and modified time, which a
+  substituted file can coincidentally match — before, immediately after
+  opening, and after the read completes, discarding the hash on any
+  mismatch. File contents never appear in any output.
+- A narrow set of Unicode/identity-ambiguity indicators (bidirectional
+  control characters, invisible/zero-width characters, a defined
+  mixed-script condition, and a single curated confusable-identity alias)
+  — not a universal confusable or typosquatting detector.
+- Environment-variable **names only** (dynamic loader injection,
+  interpreter/runtime path override, package-registry override,
+  TLS-verification-disabling, and secret-like names). Environment
+  variable *values* are never emitted, logged, or included in any
+  evidence, in this feature or anywhere else in EtherFence — this feature
+  only ever sees the same redacted `<set>`/`<empty>` value hint the
+  existing inventory layer has produced since v0.1.x.
+
+**Policy relationship.** `recommendation.tier` remains `"deny"` for every
+server regardless of the trust-and-integrity assessment; this feature
+introduces no path to an `"allow"` recommendation. A favorable assessment
+may be described as indicating a server is ready for manual review, but it
+never grants, enables, or implies runtime permission. Existing `mcp-proxy` enforcement behavior, `tools/list` filtering, `tools/call` enforcement, method policy, path policy, and audit behavior are not changed by this feature. The MCP proxy policy schema is not touched either.
 
 ## v1.1.0 write targets
 

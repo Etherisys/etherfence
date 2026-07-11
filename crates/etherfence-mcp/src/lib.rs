@@ -10,7 +10,7 @@ mod audit;
 mod policy;
 mod policy_ux;
 mod proxy;
-mod unicode;
+pub mod unicode;
 
 pub use audit::{redacted_argument_keys, redacted_param_keys, AuditLog, AuditRecord};
 pub use policy::{

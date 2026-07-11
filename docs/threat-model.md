@@ -153,6 +153,60 @@ recommended permissive by default). An unrecognized MCP server, or one
 whose config could not be parsed, is labeled `unknown` and its
 recommendation is never permissive.
 
+## v1.3.0 addendum: MCP server trust and integrity assessment
+
+The trust-and-integrity assessment extension to `etherfence setup detect`
+adds one new, narrow, local-only surface not present before v1.3.0: a
+bounded read of a directly configured local executable file for SHA-256
+hashing. This section documents that surface explicitly rather than
+folding it silently into the "no new trust boundary" framing above.
+
+- **What's read.** Only a statically configured executable path that
+  resolves, via `fs::symlink_metadata` (never followed through a
+  symlink), to a regular file at an absolute path is eligible. The open
+  itself refuses to follow a symlink at the final path component
+  (`O_NOFOLLOW` on Unix, the only mechanism that closes this race
+  atomically at the kernel level); on every platform, the opened file
+  handle's own metadata — and, separately, a fresh path-based check after
+  the read completes — must match the original check's filesystem file
+  identity (device+inode on Unix, volume+file-index on Windows), not
+  merely its length and modified time, before a hash is ever reported.
+  This matters because a file replaced between the initial check and the
+  read could otherwise coincidentally match length and modified time
+  while being a different object entirely; identity comparison catches
+  that case. The read is streamed and capped at an explicit size limit; a
+  file exceeding the limit is never fully read. Any mismatch at any of
+  these checks discards the computed hash rather than reporting it — an
+  operator running `setup detect` repeatedly against a workstation whose
+  binaries change between runs will see this degrade gracefully, not
+  silently succeed with a stale or substituted identity.
+- **What's never read.** File contents never appear in any output. A
+  relative path, a bare/PATH-resolved command, or a symlink is never
+  hashed — `PATH` is never searched and symlinks are never dereferenced.
+  Remote (URL-configured) servers have no local executable to read at
+  all.
+- **No new process or network surface.** Hashing is a local file read
+  only; it never starts the executable, never contacts a package
+  registry or any other network endpoint, and never invokes an MCP
+  protocol method. This is the same "no new trust boundary" posture as
+  v1.2.0's classification, extended by exactly one narrowly bounded local
+  file read.
+- **Static structural detection only.** Package-runner version-pinning
+  parsing, shell-wrapper recognition, and the fixed set of obscured-launch
+  patterns are all closed-world string/token matching over already-parsed
+  `command`/`args` fields — never a general shell parser, never command
+  execution, and never decoding of an encoded payload.
+- **Explicit non-goals.** This feature is not a malware scanner, a
+  behavioral security sandbox, an endpoint protection product, a package
+  authenticity or software-signature verifier, a package-registry
+  reputation service, a universal typosquatting detector, or a universal
+  Unicode confusable detector. `artifactIdentity: verified-local` and
+  `artifactIdentity: known-source` never imply the underlying program is
+  safe; `configurationRisk: no-known-indicators` never implies an absence
+  of malicious behavior. `recommendation.tier` remains `deny` for every
+  server regardless of this assessment's output — this feature introduces
+  no path to a permissive default.
+
 ## Path handling and Semgrep path-traversal triage
 
 Static analysis (Semgrep) flags file-path handling across EtherFence as a

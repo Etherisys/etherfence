@@ -15,6 +15,76 @@ component: an MCP stdio boundary proxy, whose CLI surface and
 has no daemon mode, shell hooks, command interception, terminal-command
 scanning, or network interception.
 
+## [1.3.0] - 2026-07-11
+
+### Added
+
+- `etherfence setup detect` gains a static, local-only, deterministic
+  **trust and integrity assessment** for every discovered MCP server,
+  alongside the existing v1.2.0 capability classification and
+  starter-policy recommendation. New `ef-setup-detect/v0.2` JSON schema,
+  additive over v1.2.0's `ef-setup-detect/v0.1` (every existing field
+  keeps its exact name, type, and meaning); documented in
+  `docs/json-schema.md`. Default human output gains two more lines per
+  server (`trust: ...`, `trust indicators: ...`) — again additive, not
+  byte-identical to pre-v1.3.0 output.
+- Package-runner invocation pinning for `npx`, `uvx`, and `pipx run`:
+  parses package identity and classifies the version expression as
+  exactly pinned, omitted, a mutable tag, a version range, or
+  unsupported/ambiguous. No package registry access, installation, or
+  execution.
+- Shell-wrapper detection (`sh -c`, `bash -c`, `cmd.exe /c`,
+  `powershell`/`pwsh` `-Command`/`-EncodedCommand`) and a fixed, closed
+  set of 5 obscured/download-and-execute launch patterns, detected by
+  bounded structural string matching over already-tokenized arguments —
+  no general shell parser, no command execution, no decoding.
+- Executable-path classification (absolute path, relative path,
+  bare/PATH-resolved command, missing path, non-regular file, symlink,
+  temporary-directory location) with bounded, streamed local SHA-256
+  hashing for an eligible absolute regular-file path only. `PATH` is
+  never searched and symlinks are never followed or dereferenced. File
+  metadata is checked immediately before and after the read; any change
+  discards the computed hash rather than reporting it.
+- Narrow Unicode/identity-ambiguity indicators (bidirectional control
+  characters, invisible/zero-width characters, a defined mixed-script
+  condition, and one curated confusable-identity alias), reusing
+  `etherfence-mcp`'s existing bidi/zero-width detection.
+- Environment-variable name-only risk categories (dynamic loader
+  injection, interpreter/runtime path override, package-registry
+  override, TLS-verification-disabling, secret-like names).
+  Environment-variable *values* are never read into evidence, logged, or
+  persisted anywhere.
+- Artifact Identity Confidence (`verified-local`/`known-source`/`unknown`)
+  and Configuration Risk status (`no-known-indicators`/`needs-review`/
+  `high-risk`) are reported independently and combined into one
+  Aggregate Assessment status by a fixed configuration-risk-first rule.
+- Remote (URL-configured, non-stdio) servers still receive
+  environment-variable and Unicode/identity-ambiguity assessment;
+  invocation/executable-path/local-artifact assessment is explicitly
+  reported as not applicable.
+
+### Notes
+
+- `recommendation.tier` remains `deny` for every server; this feature
+  introduces no path to a permissive `allow` recommendation. No
+  `mcp-proxy` behavior, `ef-mcp-policy/v0.1` schema, `tools/list`
+  filtering, `tools/call` enforcement, method policy, path policy, or
+  audit behavior changed. `setup catalog` and `scan` behavior are
+  unaffected. `setup plan` and `setup doctor` human output is
+  byte-identical to their pre-v1.3.0 output — the new `SetupServer`
+  field (`trust_assessment`) is additive and only rendered by `setup
+  detect`.
+- This feature is not a malware scanner, a behavioral security sandbox,
+  an endpoint protection product, a package authenticity or
+  software-signature verifier, a package-registry reputation service, a
+  universal typosquatting detector, a universal Unicode confusable
+  detector, or a universal MCP server certification system. It does not
+  guarantee that no malicious behavior exists, and it is not a
+  replacement for manual review or for `mcp-proxy`'s runtime
+  least-privilege policy.
+- No new crate, daemon, network access, or subprocess execution was
+  introduced.
+
 ## [1.2.0] - 2026-07-11
 
 ### Added

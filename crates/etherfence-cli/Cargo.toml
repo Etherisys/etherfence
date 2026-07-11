@@ -19,6 +19,7 @@ etherfence-mcp = { path = "../etherfence-mcp" }
 etherfence-policy = { path = "../etherfence-policy" }
 etherfence-report = { path = "../etherfence-report" }
 etherfence-setup = { path = "../etherfence-setup" }
+serde.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]

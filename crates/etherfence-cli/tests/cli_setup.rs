@@ -95,7 +95,9 @@ fn setup_detect_json_includes_capabilities_and_recommendation_per_contract() {
         String::from_utf8_lossy(&output.stderr)
     );
     let json: Value = serde_json::from_slice(&output.stdout).expect("valid JSON");
-    assert_eq!(json["etherfenceSchemaVersion"], "ef-setup-detect/v0.1");
+    // v1.3.0 additively bumps this to v0.2 (new trustAssessment field);
+    // every v0.1 field below keeps its exact name/meaning (FR-074).
+    assert_eq!(json["etherfenceSchemaVersion"], "ef-setup-detect/v0.2");
     assert!(json.get("root").is_some());
 
     let detections = json["detections"].as_array().expect("detections array");

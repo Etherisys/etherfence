@@ -12,7 +12,7 @@ plus an experimental MCP stdio boundary proxy.
 - `etherfence-policy`: scan-only TOML posture policy evaluation
 - `etherfence-report`: human-readable, JSON, Markdown, and SARIF report rendering
 - `etherfence-mcp`: experimental MCP stdio boundary proxy (policy, audit log, proxy engine)
-- `etherfence-setup`: local `setup` onboarding command family — client detection/wrapping (`detect`/`plan`/`apply`/`rollback`/`doctor`), the v1.2.0 client catalog (`catalog.rs`), and MCP server capability classification/starter-policy recommendation (`classification.rs`)
+- `etherfence-setup`: local `setup` onboarding command family — client detection/wrapping (`detect`/`plan`/`apply`/`rollback`/`doctor`), the v1.2.0 client catalog (`catalog.rs`), MCP server capability classification/starter-policy recommendation (`classification.rs`), and the v1.3.0 MCP server trust and integrity assessment (`trust.rs`)
 
 ## Scan data flow
 
@@ -87,6 +87,24 @@ protocol method — classification matches an already-parsed MCP server's
 (exact-match only, no heuristics), never the live server. Starter-policy
 recommendations are deny-by-default and describe posture only; they are
 not enforced anywhere and do not change `mcp-proxy`'s decision logic.
+
+## MCP server trust and integrity assessment (v1.3.0)
+
+The trust-and-integrity assessment extension to `etherfence setup detect`
+is computed by `etherfence-setup::trust` (`assess_trust`), a pure function
+over the same already-parsed `McpServer` data used by v1.2.0
+classification, plus — for a directly configured absolute executable path
+only — one bounded, local, streamed file read for SHA-256 hashing (never
+executed, never sent anywhere). Package-runner version-pinning parsing,
+shell-wrapper/obscured-launch detection, executable-path classification,
+Unicode/identity-ambiguity checks (reusing `etherfence-mcp::unicode`'s
+existing bidi/zero-width detection — `etherfence-setup` already depends on
+`etherfence-mcp`), and environment-variable name-only risk categories are
+all static, closed-world checks with no live server interaction. Rendering
+(both `--format json` and default human output) happens in
+`etherfence-cli`, mirroring the v1.2.0 rendering split. `recommendation.tier`
+is untouched and stays `deny`; this feature adds an independent assessment
+alongside it, never a path to a permissive default.
 
 ## Runtime posture
 

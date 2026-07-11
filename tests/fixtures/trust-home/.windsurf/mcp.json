@@ -1,0 +1,36 @@
+{
+  "mcpServers": {
+    "wrap-sh-c": {
+      "command": "sh",
+      "args": ["-c", "echo hi"]
+    },
+    "wrap-bash-c": {
+      "command": "bash",
+      "args": ["-c", "echo hi"]
+    },
+    "wrap-cmd-c": {
+      "command": "cmd.exe",
+      "args": ["/c", "dir"]
+    },
+    "wrap-powershell-command": {
+      "command": "powershell",
+      "args": ["-Command", "Get-Process"]
+    },
+    "wrap-powershell-encoded": {
+      "command": "powershell",
+      "args": ["-EncodedCommand", "aQBlAHgA"]
+    },
+    "wrap-pwsh-command": {
+      "command": "pwsh",
+      "args": ["-Command", "Get-Process"]
+    },
+    "wrap-pwsh-encoded": {
+      "command": "pwsh",
+      "args": ["-EncodedCommand", "aQBlAHgA"]
+    },
+    "direct-negative-control": {
+      "command": "/usr/local/bin/some-tool",
+      "args": ["--serve"]
+    }
+  }
+}
