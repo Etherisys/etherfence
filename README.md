@@ -69,7 +69,8 @@ The recording runs the real `etherfence` binary against checked-in fixtures:
   used by the live proxy and denies `filesystem.write`.
 
 Reproduce it locally with `./demo/run-demo.sh`, or verify the behavior without
-VHS using `./demo/verify-demo.sh`. Details live in [`demo/README.md`](demo/README.md).
+VHS using `./demo/verify-demo.sh`. [View HD recording](docs/assets/etherfence-demo.mp4).
+Details live in [`demo/README.md`](demo/README.md).
 
 ## What EtherFence protects
 
