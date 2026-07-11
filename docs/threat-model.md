@@ -136,6 +136,23 @@ component. Its trust boundary assumptions:
   locale-specific path equivalence, and does not add content inspection, DLP,
   URL filtering, network interception, a daemon, or a control plane.
 
+## v1.2.0 addendum: client catalog and MCP capability classification
+
+`etherfence setup catalog` and the classification extension to
+`etherfence setup detect` add no new trust boundary. They read the same
+local configuration files already covered by the "Trust boundaries"
+section above (via `etherfence_inventory::discover`), never intercept,
+proxy, or block agent runtime behavior, and never inspect live network
+traffic or start an MCP server process. Capability classification and the
+resulting starter-policy recommendations are static, local-only, and
+computed purely from already-parsed `command`/`args` fields against a
+small curated signature table — they describe posture, not a runtime
+enforcement decision, and `recommendation.tier` is always `deny` in
+v1.2.0 (no fixture-verified `allow` rule exists yet, so nothing is ever
+recommended permissive by default). An unrecognized MCP server, or one
+whose config could not be parsed, is labeled `unknown` and its
+recommendation is never permissive.
+
 ## Path handling and Semgrep path-traversal triage
 
 Static analysis (Semgrep) flags file-path handling across EtherFence as a

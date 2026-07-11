@@ -95,6 +95,20 @@ enum SetupCommand {
         /// Setup root. Defaults to HOME. Intended for tests and controlled local onboarding.
         #[arg(long, hide = true)]
         root: Option<PathBuf>,
+        /// Output format.
+        #[arg(long, value_enum, default_value_t = SetupOutputFormat::Human)]
+        format: SetupOutputFormat,
+    },
+    /// Print the fixed v1.2.0 client compatibility/catalog matrix
+    /// (fixture-verified / detect-only / advisory-only support tiers, plus
+    /// local presence) without modifying files.
+    Catalog {
+        /// Setup root. Defaults to HOME. Intended for tests and controlled local onboarding.
+        #[arg(long, hide = true)]
+        root: Option<PathBuf>,
+        /// Output format.
+        #[arg(long, value_enum, default_value_t = SetupOutputFormat::Human)]
+        format: SetupOutputFormat,
     },
     /// Show the redacted wrapping plan without modifying files.
     Plan {
@@ -234,6 +248,15 @@ enum OutputFormat {
     Sarif,
 }
 
+/// Output format for the `setup` command family (`catalog`, `detect`).
+/// Narrower than `OutputFormat`: `Markdown`/`Sarif` have no defined meaning
+/// for a client/capability catalog (research.md Decision 5).
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum SetupOutputFormat {
+    Human,
+    Json,
+}
+
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum CliSeverity {
     Info,
@@ -320,10 +343,28 @@ fn main() -> Result<()> {
 
 fn run_setup_command(command: SetupCommand) -> Result<()> {
     match command {
-        SetupCommand::Detect { root } => {
+        SetupCommand::Detect { root, format } => {
             let root = setup_root(root);
             let detections = etherfence_setup::detect(&root);
-            print!("{}", render_setup_detect(&root, &detections));
+            match format {
+                SetupOutputFormat::Human => print!("{}", render_setup_detect(&root, &detections)),
+                SetupOutputFormat::Json => {
+                    print!("{}", render_setup_detect_json(&root, &detections)?)
+                }
+            }
+            Ok(())
+        }
+        SetupCommand::Catalog { root, format } => {
+            let root = setup_root(root);
+            let entries = etherfence_setup::catalog(&root);
+            match format {
+                SetupOutputFormat::Human => {
+                    print!("{}", render_setup_catalog_human(&root, &entries))
+                }
+                SetupOutputFormat::Json => {
+                    print!("{}", render_setup_catalog_json(&root, &entries)?)
+                }
+            }
             Ok(())
         }
         SetupCommand::Plan { root } => {
@@ -379,12 +420,99 @@ fn render_setup_detect(root: &Path, detections: &[etherfence_setup::SetupDetecti
                 transport_label(server.transport),
                 server.wrapped
             );
+            let labels: Vec<&str> = server
+                .capabilities
+                .labels
+                .iter()
+                .copied()
+                .map(etherfence_setup::human_label)
+                .collect();
+            let _ = writeln!(out, "    capabilities: {}", labels.join(", "));
+            let _ = writeln!(
+                out,
+                "    recommendation: {} (needs-review={}) — {}",
+                recommendation_tier_label(server.recommendation.tier),
+                server.recommendation.needs_review,
+                server.recommendation.rationale
+            );
         }
         for note in &detection.notes {
             let _ = writeln!(out, "  note: {note}");
         }
     }
     out
+}
+
+fn render_setup_detect_json(
+    root: &Path,
+    detections: &[etherfence_setup::SetupDetection],
+) -> Result<String> {
+    let report = serde_json::json!({
+        "etherfenceSchemaVersion": "ef-setup-detect/v0.1",
+        "root": root.display().to_string(),
+        "detections": detections,
+    });
+    Ok(format!("{}\n", serde_json::to_string_pretty(&report)?))
+}
+
+fn render_setup_catalog_human(root: &Path, entries: &[etherfence_setup::CatalogEntry]) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    let _ = writeln!(out, "EtherFence setup catalog");
+    let _ = writeln!(out, "Root: {}", root.display());
+    let _ = writeln!(
+        out,
+        "Mode: read-only; no configs, policies, backups, or state were modified."
+    );
+    let _ = writeln!(out);
+    let _ = writeln!(
+        out,
+        "Client                  Tier               Found  Config path(s)"
+    );
+    for entry in entries {
+        let paths = if entry.config_paths.is_empty() {
+            "-".to_string()
+        } else {
+            entry.config_paths.join(", ")
+        };
+        let _ = writeln!(
+            out,
+            "{:<23} {:<18} {:<6} {}",
+            entry.client.display_name(),
+            catalog_tier_label(entry.tier),
+            if entry.found_locally { "yes" } else { "no" },
+            paths
+        );
+    }
+    out
+}
+
+fn render_setup_catalog_json(
+    root: &Path,
+    entries: &[etherfence_setup::CatalogEntry],
+) -> Result<String> {
+    let report = serde_json::json!({
+        "etherfenceSchemaVersion": "ef-setup-catalog/v0.1",
+        "root": root.display().to_string(),
+        "clients": entries,
+    });
+    Ok(format!("{}\n", serde_json::to_string_pretty(&report)?))
+}
+
+fn catalog_tier_label(value: etherfence_setup::CatalogSupportTier) -> &'static str {
+    match value {
+        etherfence_setup::CatalogSupportTier::FixtureVerified => "fixture-verified",
+        etherfence_setup::CatalogSupportTier::DetectOnly => "detect-only",
+        etherfence_setup::CatalogSupportTier::AdvisoryOnly => "advisory-only",
+        etherfence_setup::CatalogSupportTier::Unknown => "unknown",
+    }
+}
+
+fn recommendation_tier_label(value: etherfence_setup::RecommendationTier) -> &'static str {
+    match value {
+        etherfence_setup::RecommendationTier::Deny => "deny",
+        etherfence_setup::RecommendationTier::Allow => "allow",
+    }
 }
 
 fn render_setup_plan(plan: &etherfence_setup::SetupPlan) -> String {

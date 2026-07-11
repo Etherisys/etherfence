@@ -1,3 +1,4 @@
+use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -75,6 +76,174 @@ fn setup_detect_and_plan_are_redacted_and_read_only() {
     assert!(plan_stdout.contains("Windsurf:repo-context -> advisory-only"));
     assert!(!plan_stdout.contains("fixture-value"));
     assert!(!root.join(".etherfence").exists());
+}
+
+#[test]
+fn setup_detect_json_includes_capabilities_and_recommendation_per_contract() {
+    let root = fixture_root("home");
+    let output = run(&[
+        "setup",
+        "detect",
+        "--format",
+        "json",
+        "--root",
+        root.to_str().unwrap(),
+    ]);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: Value = serde_json::from_slice(&output.stdout).expect("valid JSON");
+    assert_eq!(json["etherfenceSchemaVersion"], "ef-setup-detect/v0.1");
+    assert!(json.get("root").is_some());
+
+    let detections = json["detections"].as_array().expect("detections array");
+    assert!(!detections.is_empty());
+    let mut saw_filesystem = false;
+    let mut saw_shell_needs_review = false;
+    for detection in detections {
+        assert!(detection.get("agent").is_some());
+        assert!(detection.get("configPath").is_some());
+        assert!(detection.get("writeSupport").is_some());
+        for server in detection["servers"].as_array().expect("servers array") {
+            let labels = server["capabilities"]["labels"]
+                .as_array()
+                .expect("labels array");
+            assert!(!labels.is_empty(), "labels must never be empty");
+            assert_eq!(server["recommendation"]["tier"], "deny");
+            for label in labels {
+                let label = label.as_str().unwrap();
+                assert_eq!(
+                    label,
+                    label.to_lowercase(),
+                    "labels must be kebab-case tokens"
+                );
+                assert!(!label.contains(' '), "labels must be kebab-case tokens");
+            }
+            if labels.iter().any(|l| l == "filesystem") {
+                saw_filesystem = true;
+            }
+            if labels.iter().any(|l| l == "shell-command-execution") {
+                assert_eq!(server["recommendation"]["needsReview"], true);
+                saw_shell_needs_review = true;
+            }
+        }
+    }
+    assert!(
+        saw_filesystem,
+        "expected at least one filesystem-labeled server"
+    );
+    assert!(
+        saw_shell_needs_review,
+        "expected at least one shell-command-execution server flagged needs-review"
+    );
+}
+
+#[test]
+fn setup_detect_human_output_gains_capability_lines_without_removing_existing_ones() {
+    let root = fixture_root("home");
+    let output = run(&["setup", "detect", "--root", root.to_str().unwrap()]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // Pre-existing lines are unchanged.
+    assert!(stdout.contains("EtherFence setup detect"));
+    assert!(stdout.contains("Claude Code [write-supported]"));
+    assert!(stdout.contains("filesystem transport=stdio wrapped=false"));
+
+    // New lines are additive.
+    assert!(stdout.contains("capabilities: filesystem"));
+    assert!(stdout.contains("recommendation: deny (needs-review="));
+}
+
+#[test]
+fn setup_plan_and_doctor_output_does_not_leak_capability_fields() {
+    let root = fixture_root("home");
+    let root_arg = root.to_str().unwrap();
+
+    let plan = run(&["setup", "plan", "--root", root_arg]);
+    assert!(plan.status.success());
+    let plan_stdout = String::from_utf8_lossy(&plan.stdout);
+    assert!(!plan_stdout.contains("capabilities"));
+    assert!(!plan_stdout.contains("recommendation:"));
+    assert!(!plan_stdout.contains("needs-review"));
+
+    let doctor = run(&["setup", "doctor", "--root", root_arg]);
+    assert!(doctor.status.success());
+    let doctor_stdout = String::from_utf8_lossy(&doctor.stdout);
+    assert!(!doctor_stdout.contains("capabilities"));
+    assert!(!doctor_stdout.contains("recommendation:"));
+    assert!(!doctor_stdout.contains("needs-review"));
+}
+
+#[test]
+fn setup_detect_default_format_matches_explicit_human_format() {
+    let root = fixture_root("home");
+    let root_arg = root.to_str().unwrap();
+    let default = run(&["setup", "detect", "--root", root_arg]);
+    let explicit = run(&["setup", "detect", "--format", "human", "--root", root_arg]);
+    assert_eq!(default.stdout, explicit.stdout);
+}
+
+#[test]
+fn setup_detect_recommendations_are_deny_by_default_with_correct_needs_review_across_all_fixtures()
+{
+    let escalating = ["unknown", "shell-command-execution", "identity-auth"];
+    let mut saw_any_server = false;
+    for fixture in [
+        "home",
+        "empty-home",
+        "windows-home",
+        "malformed-home",
+        "minimal-home",
+        "multi-home",
+        "safe-home",
+        "multi-path-home",
+    ] {
+        let root = fixture_root(fixture);
+        let output = run(&[
+            "setup",
+            "detect",
+            "--format",
+            "json",
+            "--root",
+            root.to_str().unwrap(),
+        ]);
+        assert!(
+            output.status.success(),
+            "fixture {fixture} stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let json: Value = serde_json::from_slice(&output.stdout)
+            .unwrap_or_else(|e| panic!("fixture {fixture}: invalid JSON: {e}"));
+        for detection in json["detections"].as_array().expect("detections array") {
+            for server in detection["servers"].as_array().expect("servers array") {
+                saw_any_server = true;
+                assert_eq!(
+                    server["recommendation"]["tier"], "deny",
+                    "fixture {fixture} server {:?}: tier must always be deny in v1.2.0",
+                    server["name"]
+                );
+                let labels: Vec<&str> = server["capabilities"]["labels"]
+                    .as_array()
+                    .expect("labels array")
+                    .iter()
+                    .map(|l| l.as_str().unwrap())
+                    .collect();
+                let expected_needs_review = labels.iter().any(|l| escalating.contains(l));
+                assert_eq!(
+                    server["recommendation"]["needsReview"], expected_needs_review,
+                    "fixture {fixture} server {:?} labels={labels:?}: needs_review mismatch",
+                    server["name"]
+                );
+            }
+        }
+    }
+    assert!(
+        saw_any_server,
+        "expected at least one server across all fixtures"
+    );
 }
 
 #[test]

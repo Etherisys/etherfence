@@ -8,11 +8,65 @@ This document is the implementation safety contract. It intentionally limits v1.
 
 | Command | Mutates files? | Purpose |
 | --- | --- | --- |
-| `etherfence setup detect` | No | Find known AI client MCP configs and classify configured MCP servers. |
+| `etherfence setup catalog` | No | Print the fixed 10-client compatibility/catalog matrix (support tier, local presence). |
+| `etherfence setup detect` | No | Find known AI client MCP configs, classify configured MCP servers by capability, and recommend a starter policy tier. |
 | `etherfence setup plan` | No | Show a redacted before/after wrapping proposal. |
 | `etherfence setup apply` | Yes | Back up supported configs, generate/validate conservative MCP proxy policies, then rewrite only supported stdio entries. |
 | `etherfence setup rollback` | Yes | Restore only EtherFence-created setup backups. |
 | `etherfence setup doctor` | No | Check setup health without starting MCP servers. |
+
+## `etherfence setup catalog` (v1.2.0)
+
+`etherfence setup catalog [--format human|json] [--root <path>]` prints
+exactly one row per client in the fixed v1.2.0 client list (10 total,
+always in this order): Claude-style config, Cursor, VS Code, Hermes,
+Antigravity, Windsurf, Gemini CLI, Codex CLI, OpenCode, Cline / Roo Code.
+It is read-only, offline, and always exits `0` (no `--fail-on` flag exists
+for this command).
+
+Each row reports one of four support tiers — a statement of *detection
+confidence*, not a promise of write support (see "Catalog tier vs. write
+support" below):
+
+| Tier | Meaning |
+| --- | --- |
+| `fixture-verified` | The client has parsing logic backed by a checked-in fixture and a test asserting its exact catalog row. |
+| `detect-only` | The client has real detection/parsing logic and existing fixture coverage at the inventory level, but no catalog-row-specific fixture test yet. |
+| `advisory-only` | The client is named and its local presence can be detected, but no config/MCP-server parsing is attempted. |
+| `unknown` | Reserved for a client whose detection state cannot be determined; not assigned to any of the 10 clients by default. |
+
+At v1.2.0 ship time: Claude-style config, Cursor, and VS Code are
+`fixture-verified`; Windsurf, Gemini CLI, and Codex CLI are `detect-only`;
+Hermes, Antigravity, OpenCode, and Cline / Roo Code are `advisory-only`.
+
+Each row also reports whether that client's configuration was found
+locally on the current run and every discovered configuration path (a
+client may have more than one, e.g. a global and a project-level config —
+none are ever dropped or reordered).
+
+`etherfence setup detect --format json` additionally carries, per MCP
+server, a multi-label static capability classification
+(`capabilities.labels`, e.g. `filesystem`, `shell-command-execution`,
+`network`, or `unknown` when no curated rule matches) plus a deny-by-default
+starter-policy recommendation (`recommendation.tier` is always `deny` in
+v1.2.0; `recommendation.needsReview` is `true` when the label set includes
+`unknown`, `shell-command-execution`, or `identity-auth`). Classification is
+static and local-only: no MCP server is started, no network call is made,
+and no MCP protocol method is ever invoked to produce it. See
+[`docs/json-schema.md`](json-schema.md) for the full `ef-setup-catalog/v0.1`
+and `ef-setup-detect/v0.1` schemas.
+
+### Catalog tier vs. write support
+
+`CatalogSupportTier` (above) and `WriteSupport` (below, used by `setup
+apply`) are two independent axes and must not be conflated. Windsurf,
+Gemini CLI, and Codex CLI are catalog `detect-only` — their presence and
+MCP servers are reliably parsed — while remaining `WriteSupport::AdvisoryOnly`
+for `setup apply` (i.e. `setup apply` will not rewrite their configs in
+v1.2.0, even though `setup catalog`/`setup detect` can describe them in
+detail). A client can be catalog `advisory-only` and `WriteSupport::AdvisoryOnly`
+at the same time (e.g. Hermes) without those two facts being the same
+claim.
 
 ## v1.1.0 write targets
 
@@ -42,6 +96,20 @@ These clients may be detected and described, but `setup apply` must not rewrite 
 - Continue
 
 Unsupported/advisory entries should explain the detected config path and why EtherFence is not rewriting it yet. They must not dump full config content.
+
+This is a list of named-but-not-write-supported clients (`WriteSupport`
+scope for `setup apply`), not the same thing as the v1.2.0
+`CatalogSupportTier` shown in "`etherfence setup catalog` (v1.2.0)" above —
+the two must not be conflated. Windsurf, Gemini CLI, and Codex CLI are
+catalog `detect-only` in v1.2.0 (their presence and MCP servers are
+reliably parsed) while remaining `WriteSupport::AdvisoryOnly` here; Hermes,
+Antigravity, OpenCode, and Cline / Roo Code are catalog `advisory-only`
+(local presence only, no parsing) and also `WriteSupport::AdvisoryOnly`.
+Aider and Continue are **not** part of the fixed 10-client v1.2.0
+`setup catalog` list and have no `AgentKind`/detection logic in this
+codebase today; this pre-existing list entry predates v1.2.0's scope and is
+retained here only as a statement of future intent, not a current
+detection or write-support claim.
 
 ## Hard safety invariants
 

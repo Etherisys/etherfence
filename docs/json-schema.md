@@ -116,6 +116,126 @@ Baseline files are written with schema: `ef-baseline/v0.1.3`.
 | `created_at` | string/null | Optional timestamp; currently omitted/null for deterministic output. |
 | `findings` | array | Current scan findings with fingerprints. If `--policy` or `--policy-profile` is also used, policy findings are included. |
 
+## `etherfence setup catalog` schema (`ef-setup-catalog/v0.1`)
+
+`etherfence setup catalog --format json` (v1.2.0) emits the fixed 10-client
+compatibility/catalog matrix. It is read-only, local-only, and always
+exits `0`.
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `etherfenceSchemaVersion` | string | `ef-setup-catalog/v0.1`. |
+| `root` | string | Root directory used for local presence detection. |
+| `clients` | array | Always exactly 10 entries, in the fixed declared order below. Never re-sorted by tier, name, or presence. |
+
+Each `clients[]` entry:
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `client` | string | One of: `claude-style-config`, `cursor`, `vs-code`, `hermes`, `antigravity`, `windsurf`, `gemini-cli`, `codex-cli`, `open-code`, `cline-roo-code` (this is also the fixed row order). |
+| `tier` | string | `fixture-verified`, `detect-only`, `advisory-only`, or `unknown`. A statement of detection confidence, distinct from the `WriteSupport` enum used by `setup apply` — see `docs/setup-onboarding.md` "Catalog tier vs. write support". |
+| `foundLocally` | boolean | Whether this client's configuration was found on the current run. |
+| `configPaths` | array of string | Always present, even when empty (`[]`, never omitted or `null`) when `foundLocally` is `false`. One entry per discovered configuration path, in `etherfence_inventory::discover()`'s existing declared order — never re-sorted. |
+
+Example:
+
+```json
+{
+  "etherfenceSchemaVersion": "ef-setup-catalog/v0.1",
+  "root": "/home/user",
+  "clients": [
+    {
+      "client": "claude-style-config",
+      "tier": "fixture-verified",
+      "foundLocally": true,
+      "configPaths": ["~/.claude.json"]
+    },
+    {
+      "client": "cursor",
+      "tier": "fixture-verified",
+      "foundLocally": false,
+      "configPaths": []
+    }
+  ]
+}
+```
+
+## `etherfence setup detect` schema (`ef-setup-detect/v0.1`)
+
+`etherfence setup detect --format json` (v1.2.0) is the first JSON output
+`setup detect` has ever had — an additive new schema, not a change to an
+existing one. Omitting `--format` reproduces the pre-v1.2.0 human-text
+output unchanged, plus new `capabilities`/`recommendation` lines.
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `etherfenceSchemaVersion` | string | `ef-setup-detect/v0.1`. |
+| `root` | string | Root directory used for detection. |
+| `detections` | array | One entry per detected client config. |
+
+Each `detections[]` entry:
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `agent` | string | Agent display name, e.g. `Claude Code`. |
+| `configPath` | string | Discovered configuration path. |
+| `writeSupport` | string | `supported` or `advisory-only` (unchanged from pre-v1.2.0 `setup detect`). |
+| `servers` | array | MCP servers configured for this client. |
+| `notes` | array of string | Additional context; omitted when empty. |
+
+Each `servers[]` entry:
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `name` | string | MCP server name. |
+| `transport` | string | `stdio`, `remote`, or `unknown` (unchanged). |
+| `wrapped` | boolean | Whether the server is already wrapped by `etherfence mcp-proxy` (unchanged). |
+| `capabilities.labels` | array of string | Never empty. `kebab-case` capability tokens from the fixed taxonomy — `unknown`, `shell-command-execution`, `identity-auth`, `security-tooling`, `database`, `messaging-collaboration`, `saas-api`, `network`, `browser`, `filesystem` — derived purely from static, local server `command`/`args` matching a small curated signature table (no network access, no process start, no MCP protocol call). Exactly `["unknown"]` when no curated rule matches. |
+| `capabilities.evidence` | array of string | One human-readable note per matched rule; omitted/empty when `labels` is `["unknown"]`. |
+| `recommendation.tier` | string | Always `"deny"` in v1.2.0. `"allow"` is reserved in the schema for a future release and never appears in v1.2.0 output. |
+| `recommendation.needsReview` | boolean | `true` when `capabilities.labels` contains `unknown`, `shell-command-execution`, or `identity-auth`; `false` otherwise. |
+| `recommendation.rationale` | string | Short, deterministic, generated explanation naming the label(s) that drove the decision. |
+
+Example:
+
+```json
+{
+  "etherfenceSchemaVersion": "ef-setup-detect/v0.1",
+  "root": "/home/user",
+  "detections": [
+    {
+      "agent": "Claude Code",
+      "configPath": "~/.claude.json",
+      "writeSupport": "supported",
+      "servers": [
+        {
+          "name": "filesystem",
+          "transport": "stdio",
+          "wrapped": false,
+          "capabilities": {
+            "labels": ["filesystem"],
+            "evidence": [
+              "command 'npx' arg '@modelcontextprotocol/server-filesystem' matched filesystem rule"
+            ]
+          },
+          "recommendation": {
+            "tier": "deny",
+            "needsReview": false,
+            "rationale": "denied by default; no fixture-verified allow rule exists for this capability set"
+          }
+        }
+      ],
+      "notes": []
+    }
+  ]
+}
+```
+
+Both `ef-setup-catalog/v0.1` and `ef-setup-detect/v0.1` are posture/
+classification/starter-policy guidance only — they never imply runtime
+blocking, interception, or enforcement, and no `--fail-on` flag exists for
+either command in v1.2.0.
+
 ## Stability expectations
 
 - v0.1.x may add optional fields, new finding IDs, and new agent kinds.
@@ -123,3 +243,4 @@ Baseline files are written with schema: `ef-baseline/v0.1.3`.
 - Finding IDs and fingerprints are intended to be stable for automation when the underlying issue is unchanged.
 - Findings are posture risks/hints, not confirmed exploitability.
 - Policy, baseline, and report JSON are scan-only outputs and do not imply runtime blocking or enforcement.
+- `ef-setup-catalog/v0.1` and `ef-setup-detect/v0.1` are additive, independently versioned schemas for the `setup` command family and do not alter the `ef-scan-report`/`ef-baseline`/`ef-mcp-policy` schemas above.
