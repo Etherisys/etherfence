@@ -1,6 +1,6 @@
 # MCP compatibility matrix
 
-This matrix records MCP stdio compatibility checks for EtherFence's `mcp-proxy` (CLI surface and `ef-mcp-policy/v0.1` schema are stable as of v1.0.0, and the proxy is production-ready for controlled local-first deployments of its defined scope). It is evidence for common JSON-RPC stdio flows, not a conformance suite and not a universal certification for every MCP server.
+This matrix records MCP stdio compatibility checks for EtherFence's `mcp-proxy` (CLI surface and `ef-mcp-policy/v0.1` schema are stable as of v1.0.0, and the proxy is production-ready for controlled local-first deployments of its defined scope). `ef-mcp-policy/v0.2` (v1.5.0) adds optional argument/param field guards additively — see `docs/mcp-policy-ux.md` — without changing v0.1 compatibility or the flows recorded here. It is evidence for common JSON-RPC stdio flows, not a conformance suite and not a universal certification for every MCP server.
 
 ## What is tested
 

@@ -1,0 +1,20 @@
+schema_version = "ef-mcp-policy/v0.2"
+name = "mcp-browser-approved-hosts"
+
+# v1.5.0 example: allow a browser/API fetch tool, but constrain its `url`
+# argument to HTTPS only, a named host allowlist, the host's default HTTPS
+# port, and a project-scoped path prefix. Non-HTTPS schemes, unlisted hosts,
+# confusable/userinfo-bearing authorities, and out-of-prefix paths are all
+# denied fail-closed by this one guard.
+[tools]
+allow = ["browser.fetch"]
+
+[tools."browser.fetch".arguments]
+require_keys = ["url"]
+
+[tools."browser.fetch".arguments.fields.url]
+type = "url"
+schemes = ["https"]
+hosts = ["api.example.invalid"]
+ports = [443]
+path_prefixes = ["/v1/"]

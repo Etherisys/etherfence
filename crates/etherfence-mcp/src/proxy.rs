@@ -6,8 +6,9 @@ use std::sync::{Arc, Mutex};
 
 use crate::audit::{redacted_argument_keys, redacted_param_keys, AuditLog, AuditRecord};
 use crate::policy::{
-    decide_method, decide_method_for_direction, decide_method_param_paths,
-    decide_tool_argument_paths, decide_tool_call, Decision, McpPolicyFile, MethodDirection,
+    decide_method, decide_method_for_direction, decide_method_param_guards,
+    decide_method_param_paths, decide_tool_argument_guards, decide_tool_argument_paths,
+    decide_tool_call, Decision, GuardPolicyDecision, McpPolicyFile, MethodDirection,
     PathPolicyDecision,
 };
 
@@ -320,6 +321,10 @@ pub fn inspect_client_line(policy: &McpPolicyFile, server_name: &str, line: &str
             tool_for_audit.and_then(|tool| decide_tool_argument_paths(policy, tool, arguments));
         let (decision, reason) = apply_path_decision(decision, reason, path_decision.as_ref());
 
+        let guard_decision =
+            tool_for_audit.and_then(|tool| decide_tool_argument_guards(policy, tool, arguments));
+        let (decision, reason) = apply_guard_decision(decision, reason, guard_decision.as_ref());
+
         let mut audit = AuditRecord::tool_call(
             &policy.name,
             server_name,
@@ -334,6 +339,13 @@ pub fn inspect_client_line(policy: &McpPolicyFile, server_name: &str, line: &str
                 &path_decision.rule_name,
                 &path_decision.key_name,
                 &path_decision.classification,
+            );
+        }
+        if let Some(guard_decision) = guard_decision.as_ref() {
+            audit = audit.with_guard_metadata(
+                &guard_decision.guard_key,
+                &guard_decision.selector,
+                &guard_decision.reason_category,
             );
         }
         let audit = Some(audit);
@@ -359,6 +371,10 @@ pub fn inspect_client_line(policy: &McpPolicyFile, server_name: &str, line: &str
         // Any other allowed method (resources/list, resources/read, prompts/list,
         // prompts/get, completion/complete, roots/list, sampling/createMessage,
         // or custom methods): forward and audit the method allow decision.
+        //
+        // The v0.1 path/URI guard remains scoped to resources/read only, exactly
+        // as before. The v0.2 params guard (require_keys/forbid_keys/fields) is
+        // new capability and applies to any method with a configured guard.
         let path_decision = if method == "resources/read" {
             decide_method_param_paths(policy, method, params)
         } else {
@@ -369,6 +385,8 @@ pub fn inspect_client_line(policy: &McpPolicyFile, server_name: &str, line: &str
             method_decision.reason.clone(),
             path_decision.as_ref(),
         );
+        let guard_decision = decide_method_param_guards(policy, method, params);
+        let (decision, reason) = apply_guard_decision(decision, reason, guard_decision.as_ref());
         let mut audit = AuditRecord::method_decision(
             &policy.name,
             server_name,
@@ -383,6 +401,13 @@ pub fn inspect_client_line(policy: &McpPolicyFile, server_name: &str, line: &str
                 &path_decision.rule_name,
                 &path_decision.key_name,
                 &path_decision.classification,
+            );
+        }
+        if let Some(guard_decision) = guard_decision.as_ref() {
+            audit = audit.with_guard_metadata(
+                &guard_decision.guard_key,
+                &guard_decision.selector,
+                &guard_decision.reason_category,
             );
         }
         match decision {
@@ -413,6 +438,24 @@ fn apply_path_decision(
     match (base_decision, path_decision) {
         (Decision::Allow, Some(path_decision)) => {
             (path_decision.decision, path_decision.reason.clone())
+        }
+        _ => (base_decision, base_reason),
+    }
+}
+
+/// v0.2 counterpart to [`apply_path_decision`]: a guard decision can only
+/// narrow a still-`Allow` base decision (v0.1 path precedence — see
+/// research.md Decision 7). If the base decision is already `Deny` (from
+/// the tool/method or v0.1 path guard), the v0.2 guard is not consulted and
+/// that decision/reason stands unchanged.
+fn apply_guard_decision(
+    base_decision: Decision,
+    base_reason: String,
+    guard_decision: Option<&GuardPolicyDecision>,
+) -> (Decision, String) {
+    match (base_decision, guard_decision) {
+        (Decision::Allow, Some(guard_decision)) => {
+            (guard_decision.decision, guard_decision.reason.clone())
         }
         _ => (base_decision, base_reason),
     }
@@ -467,20 +510,38 @@ pub fn inspect_server_line(
             MethodDirection::ServerToClient,
             method,
         );
-        let audit = Some(AuditRecord::method_decision_with_direction(
+        // v0.2 params guard: new, purely additive capability for the
+        // server→client direction (v0.1 never guarded params here at all).
+        // Only consulted when the method decision is still Allow, matching
+        // the same "guards only narrow" precedence used client→server.
+        let guard_decision = decide_method_param_guards(policy, method, params);
+        let (decision, reason) = apply_guard_decision(
+            method_decision.decision,
+            method_decision.reason.clone(),
+            guard_decision.as_ref(),
+        );
+        let mut audit = AuditRecord::method_decision_with_direction(
             &policy.name,
             server_name,
             MethodDirection::ServerToClient.as_str(),
             method,
             request_id.clone(),
             param_keys,
-            method_decision.decision,
-            &method_decision.reason,
-        ));
-        if method_decision.decision != Decision::Allow {
+            decision,
+            &reason,
+        );
+        if let Some(guard_decision) = guard_decision.as_ref() {
+            audit = audit.with_guard_metadata(
+                &guard_decision.guard_key,
+                &guard_decision.selector,
+                &guard_decision.reason_category,
+            );
+        }
+        let audit = Some(audit);
+        if decision != Decision::Allow {
             let response_to_server = request_id
                 .filter(|id| !id.is_null())
-                .map(|id| method_denied_error_response(&id, method, &method_decision.reason));
+                .map(|id| method_denied_error_response(&id, method, &reason));
             return InspectedServerLine {
                 action: ServerAction::Deny { response_to_server },
                 audit,
@@ -1799,5 +1860,191 @@ allow = ["roots/list"]
         let audit = inspected.audit.expect("audit");
         assert_eq!(audit.event, "batch_denied");
         assert_eq!(audit.direction.as_deref(), Some("server_to_client"));
+    }
+
+    // --- v0.2 argument/param guards ---
+
+    fn v2_tool_guard_policy() -> McpPolicyFile {
+        parse_mcp_policy(
+            r#"
+schema_version = "ef-mcp-policy/v0.2"
+name = "v2-proxy-guard"
+
+[tools]
+allow = ["github.create_issue"]
+
+[tools."github.create_issue".arguments]
+require_keys = ["org"]
+
+[tools."github.create_issue".arguments.fields.org]
+type = "enum"
+values = ["my-org"]
+"#,
+        )
+        .expect("valid v0.2 test policy")
+    }
+
+    #[test]
+    fn v2_field_guard_denies_tool_call_and_audits_guard_metadata() {
+        let inspected = inspect_client_line(
+            &v2_tool_guard_policy(),
+            "default",
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"github.create_issue","arguments":{"org":"other-org"}}}"#,
+        );
+        let ClientAction::Deny { response } = inspected.action else {
+            panic!("expected deny for out-of-allowlist org");
+        };
+        assert!(response.is_some());
+        let audit = inspected.audit.expect("audit record");
+        assert_eq!(audit.decision, "deny");
+        assert_eq!(audit.guard_key.as_deref(), Some("github.create_issue"));
+        assert_eq!(audit.guard_selector.as_deref(), Some("org"));
+        assert_eq!(
+            audit.guard_reason_category.as_deref(),
+            Some("enum_value_not_allowed")
+        );
+        // The denied value must never appear in the audit record.
+        let serialized = serde_json::to_string(&audit).unwrap();
+        assert!(!serialized.contains("other-org"));
+    }
+
+    #[test]
+    fn v2_field_guard_allows_matching_tool_call() {
+        let inspected = inspect_client_line(
+            &v2_tool_guard_policy(),
+            "default",
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"github.create_issue","arguments":{"org":"my-org"}}}"#,
+        );
+        assert_eq!(inspected.action, ClientAction::Forward);
+        let audit = inspected.audit.expect("audit record");
+        assert_eq!(audit.decision, "allow");
+    }
+
+    #[test]
+    fn v1_only_policy_resources_read_path_guard_behavior_is_unchanged() {
+        // Regression guard for T018: generalizing the "any other method"
+        // branch to call decide_method_param_guards for every method must not
+        // change the v0.1 resources/read path-guard-only behavior.
+        let policy = parse_mcp_policy(
+            r#"
+schema_version = "ef-mcp-policy/v0.1"
+name = "v1-resources-read"
+
+[tools]
+allow = ["filesystem.read"]
+
+[methods]
+allow = ["tools/list", "tools/call", "resources/read"]
+
+[path_rules.project_readonly]
+allow_roots = ["/home/user/project"]
+
+[methods."resources/read".params]
+uri_keys = ["uri"]
+path_rule = "project_readonly"
+"#,
+        )
+        .expect("valid v0.1 policy");
+        let allowed = inspect_client_line(
+            &policy,
+            "default",
+            r#"{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"file:///home/user/project/readme.md"}}"#,
+        );
+        assert_eq!(allowed.action, ClientAction::Forward);
+        let denied = inspect_client_line(
+            &policy,
+            "default",
+            r#"{"jsonrpc":"2.0","id":2,"method":"resources/read","params":{"uri":"file:///etc/passwd"}}"#,
+        );
+        assert!(matches!(denied.action, ClientAction::Deny { .. }));
+    }
+
+    #[test]
+    fn v2_param_guard_enforced_for_non_resources_read_method() {
+        // T018: a v0.2 params guard on a method other than resources/read is
+        // now enforced (new capability; v0.1 never checked this at all).
+        let policy = parse_mcp_policy(
+            r#"
+schema_version = "ef-mcp-policy/v0.2"
+name = "v2-custom-method-guard"
+
+[tools]
+allow = ["filesystem.read"]
+
+[methods]
+allow = ["tools/list", "tools/call", "demo/method"]
+
+[methods."demo/method".params]
+require_keys = ["destination"]
+
+[methods."demo/method".params.fields.destination]
+type = "enum"
+values = ["eng-alerts"]
+"#,
+        )
+        .expect("valid v0.2 policy");
+        let allowed = inspect_client_line(
+            &policy,
+            "default",
+            r#"{"jsonrpc":"2.0","id":1,"method":"demo/method","params":{"destination":"eng-alerts"}}"#,
+        );
+        assert_eq!(allowed.action, ClientAction::Forward);
+        let denied = inspect_client_line(
+            &policy,
+            "default",
+            r#"{"jsonrpc":"2.0","id":2,"method":"demo/method","params":{"destination":"random"}}"#,
+        );
+        assert!(matches!(denied.action, ClientAction::Deny { .. }));
+        let audit = denied.audit.expect("audit record");
+        assert_eq!(audit.guard_key.as_deref(), Some("demo/method"));
+    }
+
+    #[test]
+    fn v2_param_guard_denies_server_to_client_method() {
+        // T019: purely additive server->client params guard enforcement.
+        let policy = parse_mcp_policy(
+            r#"
+schema_version = "ef-mcp-policy/v0.2"
+name = "v2-server-to-client-guard"
+
+[methods]
+allow = ["tools/list", "tools/call", "sampling/createMessage"]
+
+[tools]
+allow = ["filesystem.read"]
+
+[methods."sampling/createMessage".params]
+require_keys = ["operation"]
+
+[methods."sampling/createMessage".params.fields.operation]
+type = "enum"
+values = ["read"]
+"#,
+        )
+        .expect("valid v0.2 policy");
+        let mut pending = TrackedRequests::default();
+        let denied = inspect_server_line(
+            &policy,
+            "default",
+            &mut pending,
+            r#"{"jsonrpc":"2.0","id":"s1","method":"sampling/createMessage","params":{"operation":"write"}}"#,
+        );
+        assert!(matches!(
+            denied.action,
+            ServerAction::Deny {
+                response_to_server: Some(_)
+            }
+        ));
+        let audit = denied.audit.expect("audit record");
+        assert_eq!(audit.guard_key.as_deref(), Some("sampling/createMessage"));
+
+        let mut pending = TrackedRequests::default();
+        let allowed = inspect_server_line(
+            &policy,
+            "default",
+            &mut pending,
+            r#"{"jsonrpc":"2.0","id":"s2","method":"sampling/createMessage","params":{"operation":"read"}}"#,
+        );
+        assert!(matches!(allowed.action, ServerAction::Forward { .. }));
     }
 }

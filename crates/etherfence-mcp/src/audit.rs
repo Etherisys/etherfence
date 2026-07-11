@@ -32,6 +32,12 @@ pub struct AuditRecord {
     pub path_rule: Option<String>,
     pub path_key: Option<String>,
     pub path_classification: Option<String>,
+    /// v0.2 argument/param guard metadata (`require_keys`/`forbid_keys`/
+    /// `fields`). Mirrors the `path_*` trio: only safe identifiers, never
+    /// the evaluated request value.
+    pub guard_key: Option<String>,
+    pub guard_selector: Option<String>,
+    pub guard_reason_category: Option<String>,
     pub decision: String,
     pub reason: String,
 }
@@ -69,6 +75,9 @@ impl AuditRecord {
             path_rule: None,
             path_key: None,
             path_classification: None,
+            guard_key: None,
+            guard_selector: None,
+            guard_reason_category: None,
             decision: decision.as_str().to_string(),
             reason: reason.to_string(),
         }
@@ -107,6 +116,21 @@ impl AuditRecord {
         self
     }
 
+    /// Attach v0.2 argument/param guard metadata. Only safe identifiers
+    /// (guard key, selector, closed-set reason category) are ever recorded
+    /// — never the evaluated request value.
+    pub fn with_guard_metadata(
+        mut self,
+        guard_key: &str,
+        selector: &str,
+        reason_category: &str,
+    ) -> Self {
+        self.guard_key = Some(guard_key.to_string());
+        self.guard_selector = Some(selector.to_string());
+        self.guard_reason_category = Some(reason_category.to_string());
+        self
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn method_decision_with_direction(
         policy_name: &str,
@@ -141,6 +165,9 @@ impl AuditRecord {
             path_rule: None,
             path_key: None,
             path_classification: None,
+            guard_key: None,
+            guard_selector: None,
+            guard_reason_category: None,
             decision: decision.as_str().to_string(),
             reason: reason.to_string(),
         }
@@ -174,6 +201,9 @@ impl AuditRecord {
             path_rule: None,
             path_key: None,
             path_classification: None,
+            guard_key: None,
+            guard_selector: None,
+            guard_reason_category: None,
             decision: Decision::Deny.as_str().to_string(),
             reason: reason.to_string(),
         }
@@ -206,6 +236,9 @@ impl AuditRecord {
             path_rule: None,
             path_key: None,
             path_classification: None,
+            guard_key: None,
+            guard_selector: None,
+            guard_reason_category: None,
             decision: Decision::Allow.as_str().to_string(),
             reason: reason.to_string(),
         }
@@ -236,6 +269,9 @@ impl AuditRecord {
             path_rule: None,
             path_key: None,
             path_classification: None,
+            guard_key: None,
+            guard_selector: None,
+            guard_reason_category: None,
             decision: Decision::Allow.as_str().to_string(),
             reason: reason.to_string(),
         }
@@ -260,6 +296,9 @@ impl AuditRecord {
             path_rule: None,
             path_key: None,
             path_classification: None,
+            guard_key: None,
+            guard_selector: None,
+            guard_reason_category: None,
             decision: Decision::Allow.as_str().to_string(),
             reason: "tracked tools/list response handled; request tracking entry cleared"
                 .to_string(),
@@ -285,6 +324,9 @@ impl AuditRecord {
             path_rule: None,
             path_key: None,
             path_classification: None,
+            guard_key: None,
+            guard_selector: None,
+            guard_reason_category: None,
             decision: Decision::PolicyError.as_str().to_string(),
             reason: reason.to_string(),
         }
@@ -579,5 +621,51 @@ mod tests {
             assert_eq!(value, expected_value);
             assert_eq!(id_type.as_deref(), Some(expected_type));
         }
+    }
+
+    #[test]
+    fn guard_metadata_is_present_but_never_carries_the_denied_value() {
+        let record = AuditRecord::tool_call(
+            "v2-guard-policy",
+            "default",
+            Some(json!(11)),
+            Some("github.create_issue"),
+            vec!["org".to_string()],
+            Decision::Deny,
+            "guarded field value is not in the configured allowlist",
+        )
+        .with_guard_metadata("github.create_issue", "org", "enum_value_not_allowed");
+
+        assert_eq!(record.guard_key.as_deref(), Some("github.create_issue"));
+        assert_eq!(record.guard_selector.as_deref(), Some("org"));
+        assert_eq!(
+            record.guard_reason_category.as_deref(),
+            Some("enum_value_not_allowed")
+        );
+
+        let line = serde_json::to_string(&record).unwrap();
+        assert!(line.contains("\"guard_key\":\"github.create_issue\""));
+        assert!(line.contains("\"guard_selector\":\"org\""));
+        assert!(line.contains("\"guard_reason_category\":\"enum_value_not_allowed\""));
+        // The denied value (e.g. an attacker-controlled org name) must never
+        // appear anywhere in the serialized record — only the key name does.
+        assert!(!line.contains("other-org"));
+        assert!(!line.contains("sk-secret"));
+    }
+
+    #[test]
+    fn guard_metadata_defaults_to_none_when_not_attached() {
+        let record = AuditRecord::method_decision(
+            "test-policy",
+            "default",
+            "resources/read",
+            Some(json!("req-1")),
+            vec!["uri".to_string()],
+            Decision::Allow,
+            "method is in the built-in default allow list",
+        );
+        assert!(record.guard_key.is_none());
+        assert!(record.guard_selector.is_none());
+        assert!(record.guard_reason_category.is_none());
     }
 }

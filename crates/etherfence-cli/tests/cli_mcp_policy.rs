@@ -10,6 +10,15 @@ const ALL_PROFILES: &[&str] = &[
     "resources-project-only",
 ];
 
+/// `ef-mcp-policy/v0.2` profiles, one per documented user story in
+/// specs/004-argument-aware-mcp-policy/spec.md.
+const V2_PROFILES: &[&str] = &[
+    "github-scoped-orgs",
+    "messaging-named-destinations",
+    "browser-approved-hosts",
+    "readonly-operation-guard",
+];
+
 const CHECK_POLICY: &str = r#"
 schema_version = "ef-mcp-policy/v0.1"
 name = "check-me"
@@ -113,6 +122,10 @@ fn validate_succeeds_for_example_policies() {
         "mcp-resources-project-only",
         "mcp-filesystem-project-readonly-hardened",
         "mcp-strict-method-only",
+        "mcp-github-scoped-orgs",
+        "mcp-messaging-named-destinations",
+        "mcp-browser-approved-hosts",
+        "mcp-readonly-operation-guard",
     ];
     for basename in examples {
         let path = example_policy_path(basename);
@@ -140,6 +153,43 @@ fn validate_succeeds_for_every_init_profile() {
         );
         let _ = std::fs::remove_file(&path);
     }
+}
+
+#[test]
+fn validate_succeeds_for_every_v2_init_profile() {
+    for profile in V2_PROFILES {
+        let init_output = run(&["mcp-policy", "init", "--profile", profile]);
+        assert!(init_output.status.success(), "init --profile {profile}");
+        let path = write_temp_policy(&format!("v2-profile-{profile}"), &stdout(&init_output));
+        let output = run(&["mcp-policy", "validate", path.to_str().unwrap()]);
+        assert!(
+            output.status.success(),
+            "expected v0.2 profile {profile} to validate cleanly, stderr: {}",
+            stderr(&output)
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+}
+
+#[test]
+fn validate_fails_clearly_for_v2_construct_under_v1_schema() {
+    let path = write_temp_policy(
+        "v1-with-v2-construct",
+        r#"
+schema_version = "ef-mcp-policy/v0.1"
+name = "v1-with-v2-construct"
+
+[tools]
+allow = ["demo.tool"]
+
+[tools."demo.tool".arguments]
+require_keys = ["org"]
+"#,
+    );
+    let output = run(&["mcp-policy", "validate", path.to_str().unwrap()]);
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("ef-mcp-policy/v0.2"));
+    let _ = std::fs::remove_file(&path);
 }
 
 #[test]
@@ -243,6 +293,18 @@ deny = ["shell.run"]
     let _ = std::fs::remove_file(&path);
 }
 
+#[test]
+fn explain_lists_v2_argument_guards() {
+    let path = example_policy_path("mcp-github-scoped-orgs");
+    let output = run(&["mcp-policy", "explain", &path]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let text = stdout(&output);
+    assert!(text.contains("Argument/param field guards:"));
+    assert!(text.contains("require_keys: org, repo"));
+    assert!(text.contains("fields.\"org\" -> type=enum"));
+    assert!(text.contains("fields.\"repo\" -> type=string"));
+}
+
 // --- init ---
 
 #[test]
@@ -252,6 +314,16 @@ fn init_prints_valid_policy_to_stdout_for_every_profile() {
         assert!(output.status.success(), "init --profile {profile}");
         let text = stdout(&output);
         assert!(text.contains("schema_version = \"ef-mcp-policy/v0.1\""));
+    }
+}
+
+#[test]
+fn init_prints_valid_v2_policy_to_stdout_for_every_profile() {
+    for profile in V2_PROFILES {
+        let output = run(&["mcp-policy", "init", "--profile", profile]);
+        assert!(output.status.success(), "init --profile {profile}");
+        let text = stdout(&output);
+        assert!(text.contains("schema_version = \"ef-mcp-policy/v0.2\""));
     }
 }
 
@@ -472,4 +544,192 @@ fn check_never_executes_a_tool_or_touches_network() {
     assert!(stdout(&output)
         .contains("No MCP server was started or contacted and no tool was executed."));
     let _ = std::fs::remove_file(&path);
+}
+
+// --- v0.2 example-policy check scenarios (one per documented user story) ---
+
+fn check_v2(basename: &str, request: &str) -> Output {
+    let path = example_policy_path(basename);
+    run(&[
+        "mcp-policy",
+        "check",
+        "--policy",
+        &path,
+        "--request",
+        request,
+    ])
+}
+
+#[test]
+fn us1_github_scoped_orgs_allows_in_allowlist_org() {
+    let output = check_v2(
+        "mcp-github-scoped-orgs",
+        r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"github.create_issue","arguments":{"org":"my-org","repo":"my-org/svc","title":"x"}}}"#,
+    );
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(stdout(&output).contains("Decision: ALLOW"));
+}
+
+#[test]
+fn us1_github_scoped_orgs_denies_out_of_allowlist_org() {
+    let output = check_v2(
+        "mcp-github-scoped-orgs",
+        r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"github.create_issue","arguments":{"org":"other-org","repo":"other-org/svc","title":"x"}}}"#,
+    );
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let text = stdout(&output);
+    assert!(text.contains("Decision: DENY"));
+    assert!(text.contains("enum_value_not_allowed"));
+    assert!(
+        !text.contains("other-org"),
+        "denied value must not be echoed"
+    );
+}
+
+#[test]
+fn us1_github_scoped_orgs_denies_missing_required_key() {
+    let output = check_v2(
+        "mcp-github-scoped-orgs",
+        r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"github.create_issue","arguments":{"repo":"my-org/svc"}}}"#,
+    );
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let text = stdout(&output);
+    assert!(text.contains("Decision: DENY"));
+    assert!(text.contains("required_key_missing"));
+}
+
+#[test]
+fn us2_messaging_named_destinations_allows_listed_destination() {
+    let output = check_v2(
+        "mcp-messaging-named-destinations",
+        r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"messaging.send","arguments":{"destination":"eng-alerts","text":"hello"}}}"#,
+    );
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(stdout(&output).contains("Decision: ALLOW"));
+}
+
+#[test]
+fn us2_messaging_named_destinations_denies_unlisted_destination() {
+    let output = check_v2(
+        "mcp-messaging-named-destinations",
+        r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"messaging.send","arguments":{"destination":"random-channel","text":"hello"}}}"#,
+    );
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(stdout(&output).contains("enum_value_not_allowed"));
+}
+
+#[test]
+fn us2_messaging_named_destinations_denies_forbidden_key_present() {
+    let output = check_v2(
+        "mcp-messaging-named-destinations",
+        r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"messaging.send","arguments":{"destination":"eng-alerts","bypass":false}}}"#,
+    );
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let text = stdout(&output);
+    assert!(text.contains("Decision: DENY"));
+    assert!(text.contains("forbidden_key_present"));
+}
+
+#[test]
+fn us3_browser_approved_hosts_allows_matching_url() {
+    let output = check_v2(
+        "mcp-browser-approved-hosts",
+        r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"browser.fetch","arguments":{"url":"https://api.example.invalid/v1/search?q=x"}}}"#,
+    );
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(stdout(&output).contains("Decision: ALLOW"));
+}
+
+#[test]
+fn us3_browser_approved_hosts_denies_wrong_scheme_host_and_path() {
+    for (label, url, expected_category) in [
+        (
+            "scheme",
+            "http://api.example.invalid/v1/search",
+            "url_scheme_not_allowed",
+        ),
+        (
+            "host",
+            "https://evil.example/v1/search",
+            "url_host_not_allowed",
+        ),
+        (
+            "path",
+            "https://api.example.invalid/v2/search",
+            "url_path_prefix_not_allowed",
+        ),
+    ] {
+        let request = format!(
+            r#"{{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{{"name":"browser.fetch","arguments":{{"url":"{url}"}}}}}}"#
+        );
+        let output = check_v2("mcp-browser-approved-hosts", &request);
+        assert!(
+            output.status.success(),
+            "{label} stderr: {}",
+            stderr(&output)
+        );
+        let text = stdout(&output);
+        assert!(text.contains("Decision: DENY"), "{label}");
+        assert!(text.contains(expected_category), "{label}: {text}");
+    }
+}
+
+#[test]
+fn us3_browser_approved_hosts_never_echoes_a_denied_credential_bearing_url() {
+    let output = check_v2(
+        "mcp-browser-approved-hosts",
+        r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"browser.fetch","arguments":{"url":"https://api.example.invalid@evil.example/v1/x?token=super-secret-token"}}}"#,
+    );
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let text = stdout(&output);
+    assert!(text.contains("Decision: DENY"));
+    assert!(text.contains("url_malformed"));
+    assert!(!text.contains("super-secret-token"));
+    assert!(!text.contains("evil.example"));
+}
+
+#[test]
+fn us4_readonly_operation_guard_allows_compliant_request() {
+    let output = check_v2(
+        "mcp-readonly-operation-guard",
+        r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"data.query","arguments":{"operation":"read","limit":10,"filter":{"status":"open"}}}}"#,
+    );
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(stdout(&output).contains("Decision: ALLOW"));
+}
+
+#[test]
+fn us4_readonly_operation_guard_denies_each_primitive_violation() {
+    for (label, request, expected_category) in [
+        (
+            "enum",
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"data.query","arguments":{"operation":"delete","limit":10,"filter":{"status":"open"}}}}"#,
+            "enum_value_not_allowed",
+        ),
+        (
+            "numeric-bound",
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"data.query","arguments":{"operation":"read","limit":1000,"filter":{"status":"open"}}}}"#,
+            "number_above_maximum",
+        ),
+        (
+            "wrong-type",
+            r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"data.query","arguments":{"operation":"read","limit":"10","filter":{"status":"open"}}}}"#,
+            "field_wrong_type",
+        ),
+        (
+            "nested-selector-missing",
+            r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"data.query","arguments":{"operation":"read","limit":10}}}"#,
+            "field_missing",
+        ),
+    ] {
+        let output = check_v2("mcp-readonly-operation-guard", request);
+        assert!(
+            output.status.success(),
+            "{label} stderr: {}",
+            stderr(&output)
+        );
+        let text = stdout(&output);
+        assert!(text.contains("Decision: DENY"), "{label}");
+        assert!(text.contains(expected_category), "{label}: {text}");
+    }
 }

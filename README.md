@@ -207,7 +207,7 @@ path_rule = "project_readonly"
 The proxy inspects every client→server and server→client JSON-RPC method,
 enforces method/tool/path policy, filters `tools/list` advertisements, and
 **fails closed**: a missing or invalid policy means the MCP server is never
-started. Twelve checked-in example policies live under
+started. Sixteen checked-in example policies live under
 [`examples/policies/`](examples/policies). Full behavior, the Unicode/
 homograph hardening added in v0.4.1, and current compatibility evidence are
 documented in [`docs/mcp-proxy.md`](docs/mcp-proxy.md),
