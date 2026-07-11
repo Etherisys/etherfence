@@ -207,6 +207,62 @@ folding it silently into the "no new trust boundary" framing above.
   server regardless of this assessment's output — this feature introduces
   no path to a permissive default.
 
+## v1.4.0 addendum: MCP server integrity baseline and drift detection
+
+`etherfence setup baseline write`/`check` add no new trust boundary beyond
+what v1.3.0 already documents above: both commands reuse the exact same
+discovery, classification, and trust-assessment functions, including the
+same bounded local-artifact hashing and its safety invariants (no-follow
+open, opened-file identity re-validation, bounded streamed reads, no
+symlink following). Two new I/O surfaces are added, both treated as
+trusted-operator CLI input per this document's existing CLI-trusted-
+operator-input model (see "v0.2.x addendum" above):
+
+- **`--output` (write)**: an explicit, operator-chosen path. `write`
+  refuses to overwrite an existing file at this path unless `--overwrite`
+  is passed — this is a data-loss safeguard, not a security boundary
+  (there is no untrusted caller in CLI mode) — implemented as an atomic
+  exclusive file creation (`create_new`), not a separate existence-check
+  followed by a write, closing the TOCTOU window a naive check-then-write
+  would have and refusing to write through a pre-existing symlink at that
+  path. `write --overwrite` writes to an unpredictably named temp file in
+  the same directory (opened via the same atomic exclusive creation, not
+  a plain write, so an attacker who can write into that directory cannot
+  pre-stage a symlink at the exact temp path and have EtherFence write
+  through it) and atomically renames it into place, so a concurrent
+  reader never observes a partially written file.
+- **`--baseline` (check)**: read through a dedicated bounded,
+  no-follow read helper (`etherfence_core::read_bounded_text_file_no_follow`,
+  `MAX_BASELINE_FILE_BYTES`) rather than the general `read_bounded_text_file`
+  used elsewhere — a `--baseline` path that is a symlink is refused
+  outright (a pre-open `symlink_metadata` check, plus `O_NOFOLLOW` on Unix
+  at the actual open, closing the race between the two), and the opened
+  file's identity is re-validated after the read completes. A baseline
+  file with a malformed schema version, invalid JSON, or an internally
+  inconsistent parsed document (fingerprints not matching their own
+  identity fields, duplicate fingerprints, malformed `sha256`, unsorted/
+  duplicate set fields, or an aggregate inconsistent with its own
+  artifact-identity/configuration-risk fields) fails closed (non-zero
+  exit, no comparison performed) rather than being silently accepted.
+  `check` never writes to this path under any circumstance.
+
+**Safety boundary re-affirmed.** Baseline/comparison output persists only
+normalized identity, command/argument *fingerprints* (SHA-256 hashes,
+never raw text), package identity/version classification, executable
+path/hash, environment variable *names* (never values), capability
+labels, trust-indicator IDs/categories/severities, and the v1.3.0
+trust/risk vocabulary. It never persists or emits raw environment values,
+secrets, credentials, file contents, prompts/messages, or MCP protocol
+traffic — the same redaction posture as v1.3.0's trust assessment,
+verified by an automated negative-content test.
+
+**No new process or network surface**, no registry/reputation lookup, no
+download/install action, no signature/provenance verification, no
+sandboxing or subprocess execution, and no change to `mcp-proxy` runtime
+behavior. `check`'s gate flags (`--fail-on-drift`/`--fail-on-new`/
+`--fail-on-risk-increase`) only affect the process exit code, never the
+rendered report or any file on disk.
+
 ## Path handling and Semgrep path-traversal triage
 
 Static analysis (Semgrep) flags file-path handling across EtherFence as a

@@ -9,10 +9,18 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+mod baseline;
 mod catalog;
 mod classification;
 mod trust;
 
+pub use baseline::{
+    build_baseline, compare, drift_gate_triggered, fingerprint, new_gate_triggered,
+    risk_increase_gate_triggered, risk_rank, validate_baseline, BaselineDocument,
+    BaselineServerEntry, ComparisonEntry, ComparisonReport, ComparisonStatus, DriftReason,
+    IndicatorSummary, ReviewState, RiskDirection, BASELINE_SCHEMA_VERSION,
+    COMPARISON_SCHEMA_VERSION,
+};
 pub use catalog::{catalog, CatalogClient, CatalogEntry, CatalogSupportTier};
 pub use classification::{
     classify_server, human_label, recommend, CapabilityLabel, ClassifiedCapabilities,
@@ -60,7 +68,7 @@ pub struct SetupServer {
     pub trust_assessment: TrustAssessment,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ServerTransport {
     Stdio,

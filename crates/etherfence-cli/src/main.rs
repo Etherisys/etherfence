@@ -1,11 +1,13 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use etherfence_core::{
-    read_bounded_text_file, BaselineComparison, BaselineFile, BaselineStatus, Finding,
-    PolicyMetadata, ScanReport, Severity, Summary, MAX_BASELINE_FILE_BYTES, MAX_CONFIG_FILE_BYTES,
+    read_bounded_text_file, read_bounded_text_file_no_follow, BaselineComparison, BaselineFile,
+    BaselineStatus, Finding, PolicyMetadata, ScanReport, Severity, Summary,
+    MAX_BASELINE_FILE_BYTES, MAX_CONFIG_FILE_BYTES,
 };
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Parser)]
@@ -133,6 +135,53 @@ enum SetupCommand {
         /// Setup root. Defaults to HOME. Intended for tests and controlled local onboarding.
         #[arg(long, hide = true)]
         root: Option<PathBuf>,
+    },
+    /// Write and check deterministic MCP server integrity baselines
+    /// (schema ef-setup-baseline/v0.1) and detect drift against them
+    /// (schema ef-setup-baseline-comparison/v0.1). Read-only over the
+    /// scanned root; never auto-updates or auto-accepts a baseline.
+    Baseline {
+        #[command(subcommand)]
+        command: SetupBaselineCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum SetupBaselineCommand {
+    /// Write a new deterministic integrity baseline. Refuses to overwrite
+    /// an existing output file unless `--overwrite` is passed.
+    Write {
+        /// Setup root. Defaults to HOME. Intended for tests and controlled local onboarding.
+        #[arg(long, hide = true)]
+        root: Option<PathBuf>,
+        /// Baseline output file (schema ef-setup-baseline/v0.1).
+        #[arg(long)]
+        output: PathBuf,
+        /// Allow overwriting an existing output file.
+        #[arg(long)]
+        overwrite: bool,
+    },
+    /// Compare current MCP server state against a previously written
+    /// baseline. Never modifies the baseline file.
+    Check {
+        /// Setup root. Defaults to HOME. Intended for tests and controlled local onboarding.
+        #[arg(long, hide = true)]
+        root: Option<PathBuf>,
+        /// Baseline file to compare against (schema ef-setup-baseline/v0.1).
+        #[arg(long)]
+        baseline: PathBuf,
+        /// Output format.
+        #[arg(long, value_enum, default_value_t = SetupOutputFormat::Human)]
+        format: SetupOutputFormat,
+        /// Exit non-zero if any server is new, changed, missing, or unverifiable.
+        #[arg(long)]
+        fail_on_drift: bool,
+        /// Exit non-zero if any server is new.
+        #[arg(long)]
+        fail_on_new: bool,
+        /// Exit non-zero if any server's aggregate risk increased since the baseline.
+        #[arg(long)]
+        fail_on_risk_increase: bool,
     },
 }
 
@@ -381,11 +430,366 @@ fn run_setup_command(command: SetupCommand) -> Result<()> {
             print!("{}", render_setup_doctor(&report));
             Ok(())
         }
+        SetupCommand::Baseline { command } => run_setup_baseline_command(command),
     }
 }
 
 fn setup_root(root: Option<PathBuf>) -> PathBuf {
     root.unwrap_or_else(etherfence_inventory::default_scan_root)
+}
+
+fn run_setup_baseline_command(command: SetupBaselineCommand) -> Result<()> {
+    match command {
+        SetupBaselineCommand::Write {
+            root,
+            output,
+            overwrite,
+        } => run_setup_baseline_write(setup_root(root), &output, overwrite),
+        SetupBaselineCommand::Check {
+            root,
+            baseline,
+            format,
+            fail_on_drift,
+            fail_on_new,
+            fail_on_risk_increase,
+        } => run_setup_baseline_check(
+            setup_root(root),
+            &baseline,
+            format,
+            fail_on_drift,
+            fail_on_new,
+            fail_on_risk_increase,
+        ),
+    }
+}
+
+fn run_setup_baseline_write(root: PathBuf, output: &Path, overwrite: bool) -> Result<()> {
+    let items = etherfence_inventory::discover(&root);
+    let baseline = etherfence_setup::build_baseline(&root, &items);
+    let content = serde_json::to_string_pretty(&baseline)
+        .context("serializing MCP server integrity baseline")?;
+    let bytes = format!("{content}\n");
+    if let Some(parent) = output.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent).with_context(|| {
+                format!("creating baseline output directory {}", parent.display())
+            })?;
+        }
+    }
+    if overwrite {
+        // Write to a temp file in the same directory, then atomically
+        // rename over the destination. `fs::rename` replaces whatever is
+        // at `output` (including a symlink, which it replaces rather than
+        // follows) as a single filesystem operation — there is no window
+        // where a concurrent reader could see a partially written file.
+        atomic_write_baseline(output, bytes.as_bytes())?;
+    } else {
+        // Exclusive creation closes the TOCTOU race a separate
+        // `output.exists()` check-then-`fs::write()` would have: the
+        // open+create is a single atomic syscall, so a file (or symlink)
+        // created at `output` between a hypothetical check and write can
+        // never be silently overwritten. `create_new` also fails if
+        // `output` is a pre-existing symlink (even a dangling one), so a
+        // fresh baseline is never written through a symlink at this path.
+        use std::io::Write as _;
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(output)
+            .map_err(|error| {
+                if error.kind() == io::ErrorKind::AlreadyExists {
+                    anyhow::anyhow!(
+                        "refusing to overwrite existing baseline file {} (pass --overwrite to replace it)",
+                        output.display()
+                    )
+                } else {
+                    anyhow::Error::new(error).context(format!(
+                        "creating baseline output file {}",
+                        output.display()
+                    ))
+                }
+            })?;
+        file.write_all(bytes.as_bytes())
+            .with_context(|| format!("writing baseline file {}", output.display()))?;
+    }
+    print!(
+        "{}",
+        render_setup_baseline_write_human(&root, output, baseline.servers.len())
+    );
+    Ok(())
+}
+
+/// A `u64` that is unpredictable in practice (a fresh `RandomState`'s
+/// internal SipHash keys are seeded from OS randomness, mixed here with a
+/// high-resolution timestamp and the process id) without adding a new
+/// dependency for it. Used only to name a temp file an attacker cannot
+/// pre-stage a symlink at — this is not a cryptographic primitive.
+fn unpredictable_suffix() -> u64 {
+    use std::collections::hash_map::RandomState;
+    use std::hash::{BuildHasher, Hasher};
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let mut hasher = RandomState::new().build_hasher();
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    hasher.write_u128(nanos);
+    hasher.write_u32(std::process::id());
+    hasher.finish()
+}
+
+/// Writes `content` to a freshly, exclusively created temp file in
+/// `path`'s directory, then atomically renames it over `path`. Used only
+/// for the explicit `--overwrite` case; see `run_setup_baseline_write` for
+/// the exclusive-create path used when `--overwrite` is absent.
+///
+/// The temp filename is unpredictable and opened with `create_new` (never
+/// a plain `fs::write`, which both creates *and* follows an existing
+/// symlink): an attacker who can write into the same directory cannot
+/// pre-stage a symlink at the exact path this function will use and have
+/// EtherFence write through it — `create_new` fails outright if anything,
+/// including a symlink, already exists at the candidate path, and a
+/// bounded retry loop picks a fresh candidate on that specific collision.
+fn atomic_write_baseline(path: &Path, content: &[u8]) -> Result<()> {
+    use std::io::Write as _;
+
+    let dir = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let file_name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "baseline".to_string());
+
+    const MAX_ATTEMPTS: u32 = 16;
+    let mut tmp_file = None;
+    let mut tmp_path = None;
+    for _ in 0..MAX_ATTEMPTS {
+        let candidate = dir.join(format!(
+            ".{file_name}.tmp-etherfence-{:016x}",
+            unpredictable_suffix()
+        ));
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&candidate)
+        {
+            Ok(file) => {
+                tmp_file = Some(file);
+                tmp_path = Some(candidate);
+                break;
+            }
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => {
+                return Err(anyhow::Error::new(error)
+                    .context(format!("creating temp baseline file in {}", dir.display())))
+            }
+        }
+    }
+    let (mut file, tmp) = tmp_file
+        .zip(tmp_path)
+        .context("failed to create a unique temp baseline file after repeated attempts")?;
+
+    if let Err(error) = file.write_all(content) {
+        let _ = fs::remove_file(&tmp);
+        return Err(anyhow::Error::new(error)
+            .context(format!("writing temp baseline file {}", tmp.display())));
+    }
+    drop(file);
+
+    fs::rename(&tmp, path).map_err(|error| {
+        let _ = fs::remove_file(&tmp);
+        anyhow::Error::new(error).context(format!(
+            "atomically replacing {} with {}",
+            path.display(),
+            tmp.display()
+        ))
+    })?;
+    Ok(())
+}
+
+fn read_setup_baseline(path: &Path) -> Result<etherfence_setup::BaselineDocument> {
+    // No-follow: a `--baseline` path that is a symlink must fail closed
+    // rather than silently comparing against whatever it happens to point
+    // at (see `etherfence_core::read_bounded_text_file_no_follow`'s
+    // doc comment for the exact race this closes versus the general
+    // `read_bounded_text_file` helper used elsewhere in this CLI).
+    let content = read_bounded_text_file_no_follow(path, MAX_BASELINE_FILE_BYTES)
+        .with_context(|| format!("reading baseline file {}", path.display()))?;
+    let baseline: etherfence_setup::BaselineDocument = serde_json::from_str(&content)
+        .with_context(|| format!("parsing baseline file {}", path.display()))?;
+    etherfence_setup::validate_baseline(&baseline).map_err(|error| {
+        anyhow::anyhow!(
+            "baseline file {} failed consistency validation: {error}",
+            path.display()
+        )
+    })?;
+    Ok(baseline)
+}
+
+fn run_setup_baseline_check(
+    root: PathBuf,
+    baseline_path: &Path,
+    format: SetupOutputFormat,
+    fail_on_drift: bool,
+    fail_on_new: bool,
+    fail_on_risk_increase: bool,
+) -> Result<()> {
+    let baseline = read_setup_baseline(baseline_path)?;
+    let items = etherfence_inventory::discover(&root);
+    let report = etherfence_setup::compare(&baseline, &items, &root);
+
+    match format {
+        SetupOutputFormat::Human => {
+            print!(
+                "{}",
+                render_setup_baseline_check_human(&root, baseline_path, &report)
+            )
+        }
+        SetupOutputFormat::Json => {
+            print!("{}", render_setup_baseline_check_json(&report)?)
+        }
+    }
+
+    let should_fail = (fail_on_drift && etherfence_setup::drift_gate_triggered(&report))
+        || (fail_on_new && etherfence_setup::new_gate_triggered(&report))
+        || (fail_on_risk_increase && etherfence_setup::risk_increase_gate_triggered(&report));
+    if should_fail {
+        std::process::exit(2);
+    }
+    Ok(())
+}
+
+fn render_setup_baseline_write_human(root: &Path, output: &Path, server_count: usize) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    let _ = writeln!(out, "EtherFence setup baseline write");
+    let _ = writeln!(out, "Root: {}", root.display());
+    let _ = writeln!(
+        out,
+        "Mode: read-only over the scanned root; wrote a new baseline file."
+    );
+    let _ = writeln!(
+        out,
+        "Wrote baseline ({server_count} servers) to {}",
+        output.display()
+    );
+    out
+}
+
+fn render_setup_baseline_check_human(
+    root: &Path,
+    baseline_path: &Path,
+    report: &etherfence_setup::ComparisonReport,
+) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    let _ = writeln!(out, "EtherFence setup baseline check");
+    let _ = writeln!(out, "Root: {}", root.display());
+    let _ = writeln!(out, "Baseline: {}", baseline_path.display());
+    let _ = writeln!(out, "Mode: read-only; the baseline file was not modified.");
+    let _ = writeln!(out);
+
+    let mut unchanged = 0usize;
+    let mut changed = 0usize;
+    let mut new = 0usize;
+    let mut missing = 0usize;
+    let mut unverifiable = 0usize;
+
+    for entry in &report.entries {
+        match entry.status {
+            etherfence_setup::ComparisonStatus::Unchanged => unchanged += 1,
+            etherfence_setup::ComparisonStatus::Changed => changed += 1,
+            etherfence_setup::ComparisonStatus::New => new += 1,
+            etherfence_setup::ComparisonStatus::Missing => missing += 1,
+            etherfence_setup::ComparisonStatus::Unverifiable => unverifiable += 1,
+        }
+        if entry.status == etherfence_setup::ComparisonStatus::Unchanged {
+            continue;
+        }
+        let _ = writeln!(
+            out,
+            "- {}:{} [{}] at {}",
+            entry.agent,
+            entry.server_name,
+            comparison_status_label(entry.status),
+            entry.config_source
+        );
+        let _ = writeln!(out, "  transport={}", transport_label(entry.transport));
+        let reasons: Vec<&str> = entry
+            .reasons
+            .iter()
+            .map(|r| drift_reason_label(*r))
+            .collect();
+        let _ = writeln!(out, "  reasons: {}", reasons.join(", "));
+        let risk_from = entry
+            .baseline_risk
+            .map(|s| kebab_label(&s))
+            .unwrap_or_else(|| "n/a".to_string());
+        let risk_to = entry
+            .current_risk
+            .map(|s| kebab_label(&s))
+            .unwrap_or_else(|| "n/a".to_string());
+        let _ = writeln!(
+            out,
+            "  risk: {risk_from} -> {risk_to} ({})",
+            risk_direction_label(entry.risk_direction)
+        );
+    }
+
+    let _ = writeln!(
+        out,
+        "Summary: {unchanged} unchanged, {changed} changed, {new} new, {missing} missing, {unverifiable} unverifiable"
+    );
+    out
+}
+
+fn render_setup_baseline_check_json(report: &etherfence_setup::ComparisonReport) -> Result<String> {
+    Ok(format!("{}\n", serde_json::to_string_pretty(report)?))
+}
+
+fn comparison_status_label(value: etherfence_setup::ComparisonStatus) -> &'static str {
+    match value {
+        etherfence_setup::ComparisonStatus::Unchanged => "unchanged",
+        etherfence_setup::ComparisonStatus::New => "new",
+        etherfence_setup::ComparisonStatus::Changed => "changed",
+        etherfence_setup::ComparisonStatus::Missing => "missing",
+        etherfence_setup::ComparisonStatus::Unverifiable => "unverifiable",
+    }
+}
+
+fn drift_reason_label(value: etherfence_setup::DriftReason) -> &'static str {
+    match value {
+        etherfence_setup::DriftReason::ExecutableHashChanged => "executable-hash-changed",
+        etherfence_setup::DriftReason::CommandChanged => "command-changed",
+        etherfence_setup::DriftReason::ArgumentsChanged => "arguments-changed",
+        etherfence_setup::DriftReason::PackageIdentityChanged => "package-identity-changed",
+        etherfence_setup::DriftReason::PackageVersionChanged => "package-version-changed",
+        etherfence_setup::DriftReason::EnvironmentVariableNamesChanged => {
+            "environment-variable-names-changed"
+        }
+        etherfence_setup::DriftReason::TransportChanged => "transport-changed",
+        etherfence_setup::DriftReason::ServerAdded => "server-added",
+        etherfence_setup::DriftReason::ServerRemoved => "server-removed",
+        etherfence_setup::DriftReason::CapabilitySetChanged => "capability-set-changed",
+        etherfence_setup::DriftReason::TrustIndicatorSetChanged => "trust-indicator-set-changed",
+        etherfence_setup::DriftReason::ArtifactIdentityChanged => "artifact-identity-changed",
+        etherfence_setup::DriftReason::ConfigurationRiskChanged => "configuration-risk-changed",
+        etherfence_setup::DriftReason::RiskIncreased => "risk-increased",
+        etherfence_setup::DriftReason::ExecutableBecameUnverifiable => {
+            "executable-became-unverifiable"
+        }
+    }
+}
+
+fn risk_direction_label(value: etherfence_setup::RiskDirection) -> &'static str {
+    match value {
+        etherfence_setup::RiskDirection::Increased => "increased",
+        etherfence_setup::RiskDirection::Decreased => "decreased",
+        etherfence_setup::RiskDirection::Unchanged => "unchanged",
+        etherfence_setup::RiskDirection::NotApplicable => "not-applicable",
+    }
 }
 
 fn render_setup_detect(root: &Path, detections: &[etherfence_setup::SetupDetection]) -> String {
