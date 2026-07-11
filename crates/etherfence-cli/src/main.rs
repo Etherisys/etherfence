@@ -1,3 +1,5 @@
+mod banner;
+
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use etherfence_core::{
@@ -380,6 +382,7 @@ const BUILT_IN_POLICIES: &[BuiltInPolicy] = &[
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    banner::print_startup_banner(command_banner_mode(&cli.command));
     match cli.command {
         Command::Scan {
             format,
@@ -411,6 +414,53 @@ fn main() -> Result<()> {
         } => run_mcp_proxy(&policy, audit_log.as_deref(), &server_name, &server_command),
         Command::McpPolicy { command } => run_mcp_policy_command(command),
         Command::Setup { command } => run_setup_command(command),
+    }
+}
+
+fn command_banner_mode(command: &Command) -> banner::OutputMode {
+    match command {
+        Command::Scan { format, .. } => match format {
+            OutputFormat::Human => banner::OutputMode::Human,
+            OutputFormat::Json | OutputFormat::Markdown | OutputFormat::Sarif => {
+                banner::OutputMode::Machine
+            }
+        },
+        Command::Policy { command } => match command {
+            PolicyCommand::List => banner::OutputMode::Human,
+            PolicyCommand::Show { .. } => banner::OutputMode::Machine,
+        },
+        Command::McpProxy { .. } => banner::OutputMode::Protocol,
+        Command::McpPolicy { command } => match command {
+            McpPolicyCommand::Validate { .. }
+            | McpPolicyCommand::Explain { .. }
+            | McpPolicyCommand::Check { .. } => banner::OutputMode::Human,
+            // `init` can print raw TOML to stdout when --output is omitted. If
+            // an output path is provided, stdout receives only a human
+            // confirmation and can safely show the interactive banner.
+            McpPolicyCommand::Init { output, .. } => {
+                if output.is_some() {
+                    banner::OutputMode::Human
+                } else {
+                    banner::OutputMode::Machine
+                }
+            }
+        },
+        Command::Setup { command } => match command {
+            SetupCommand::Detect { format, .. }
+            | SetupCommand::Catalog { format, .. }
+            | SetupCommand::Baseline {
+                command: SetupBaselineCommand::Check { format, .. },
+            } => match format {
+                SetupOutputFormat::Human => banner::OutputMode::Human,
+                SetupOutputFormat::Json => banner::OutputMode::Machine,
+            },
+            SetupCommand::Plan { .. }
+            | SetupCommand::Doctor { .. }
+            | SetupCommand::Baseline {
+                command: SetupBaselineCommand::Write { .. },
+            } => banner::OutputMode::Human,
+            SetupCommand::Apply { .. } | SetupCommand::Rollback { .. } => banner::OutputMode::Human,
+        },
     }
 }
 
