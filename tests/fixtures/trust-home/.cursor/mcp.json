@@ -1,0 +1,48 @@
+{
+  "mcpServers": {
+    "uvx-pinned": {
+      "command": "uvx",
+      "args": ["ruff==0.5.0"]
+    },
+    "uvx-omitted": {
+      "command": "uvx",
+      "args": ["web-search-mcp"]
+    },
+    "uvx-version-range": {
+      "command": "uvx",
+      "args": ["ruff>=0.5.0"]
+    },
+    "pipx-run-pinned": {
+      "command": "pipx",
+      "args": ["run", "black==24.1.0"]
+    },
+    "pipx-run-omitted": {
+      "command": "pipx",
+      "args": ["run", "black"]
+    },
+    "uvx-malformed": {
+      "command": "uvx",
+      "args": ["--unknown-flag"]
+    },
+    "bidi‮-name": {
+      "command": "/usr/local/bin/some-tool",
+      "args": []
+    },
+    "invisible​name": {
+      "command": "/usr/local/bin/some-tool",
+      "args": []
+    },
+    "mixed-lаtin-cyrillic": {
+      "command": "/usr/local/bin/some-tool",
+      "args": []
+    },
+    "confusable-alias-server": {
+      "command": "npx",
+      "args": ["@modelcontextprotocol/server-fіlesystem@1.0.0"]
+    },
+    "ascii-negative-control": {
+      "command": "/usr/local/bin/some-tool",
+      "args": []
+    }
+  }
+}

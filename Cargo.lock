@@ -176,6 +176,7 @@ dependencies = [
  "etherfence-policy",
  "etherfence-report",
  "etherfence-setup",
+ "serde",
  "serde_json",
  "serde_yaml",
 ]

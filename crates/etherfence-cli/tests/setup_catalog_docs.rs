@@ -116,9 +116,87 @@ fn json_schema_docs_setup_sections_have_no_prohibited_language() {
 
     let detect_text = section(
         JSON_SCHEMA_DOCS,
-        "## `etherfence setup detect` schema (`ef-setup-detect/v0.1`)",
+        "## `etherfence setup detect` schema (`ef-setup-detect/v0.2`)",
     );
     assert_no_prohibited_terms("docs/json-schema.md ef-setup-detect section", &detect_text);
+}
+
+// Regression-tests v1.3.0's own honesty requirement (spec SC-008): trust-
+// assessment documentation and CLI output must never claim a server is
+// proven safe, trusted, certified, malware-free, benign, or definitively
+// malicious.
+const TRUST_PROHIBITED_TERMS: &[&str] = &[
+    "is safe",
+    "is trusted",
+    "is certified",
+    "malware-free",
+    "is benign",
+    "definitively malicious",
+    "proven safe",
+    "guaranteed safe",
+];
+
+/// Same negation-aware pattern as `assert_no_prohibited_terms`: an honest
+/// disclaimer ("does not mean the program is safe") legitimately contains
+/// the same words as the overclaim it's guarding against, so a bare
+/// substring ban is the wrong test shape here too (the exact lesson from
+/// the v1.2.0 `setup_catalog_docs.rs` false-fail, see project memory).
+fn assert_no_trust_overclaims(label: &str, text: &str) {
+    let lowered = text.to_lowercase();
+    for sentence in lowered.split(['.', '!', '?', '\n']) {
+        let has_overclaim = TRUST_PROHIBITED_TERMS
+            .iter()
+            .any(|term| sentence.contains(term));
+        if !has_overclaim {
+            continue;
+        }
+        let has_negation = NEGATION_CUES.iter().any(|cue| sentence.contains(cue));
+        assert!(
+            has_negation,
+            "{label}: sentence claims a trust overclaim without a disclaiming negation: {sentence:?}"
+        );
+    }
+}
+
+#[test]
+fn json_schema_docs_trust_assessment_section_has_no_overclaims() {
+    let text = section(JSON_SCHEMA_DOCS, "### `servers[].trustAssessment` (v1.3.0)");
+    assert_no_trust_overclaims("docs/json-schema.md trustAssessment section", &text);
+    assert!(text.contains("never proves"));
+}
+
+#[test]
+fn setup_onboarding_docs_trust_assessment_section_has_no_overclaims() {
+    let text = section(
+        SETUP_ONBOARDING_DOCS,
+        "## `etherfence setup detect` trust and integrity assessment (v1.3.0)",
+    );
+    assert_no_trust_overclaims("docs/setup-onboarding.md trust-assessment section", &text);
+}
+
+#[test]
+fn setup_detect_trust_assessment_cli_output_has_no_overclaims() {
+    let root = fixture_root("trust-home");
+    let human = run(&["setup", "detect", "--root", root.to_str().unwrap()]);
+    assert!(human.status.success());
+    assert_no_trust_overclaims(
+        "`setup detect` human output (trust-home)",
+        &String::from_utf8_lossy(&human.stdout),
+    );
+
+    let json = run(&[
+        "setup",
+        "detect",
+        "--format",
+        "json",
+        "--root",
+        root.to_str().unwrap(),
+    ]);
+    assert!(json.status.success());
+    assert_no_trust_overclaims(
+        "`setup detect --format json` output (trust-home)",
+        &String::from_utf8_lossy(&json.stdout),
+    );
 }
 
 #[test]

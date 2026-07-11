@@ -1,0 +1,19 @@
+[mcp_servers.relative-path]
+command = "./bin/some-tool"
+args = []
+
+[mcp_servers.bare-path-command]
+command = "some-tool"
+args = []
+
+[mcp_servers.missing-path]
+command = "/nonexistent/etherfence-trust-fixture/does-not-exist"
+args = []
+
+[mcp_servers.non-regular-file]
+command = "/tmp"
+args = []
+
+[mcp_servers.ambiguous-empty-command]
+command = ""
+args = []

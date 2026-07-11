@@ -529,6 +529,63 @@
   above; `setup plan` and `setup doctor` human output is byte-identical to
   their pre-v1.2.0 output
 
+## v1.3.0 - MCP server trust and integrity assessment
+
+- `etherfence setup detect` gains a static, local-only, deterministic
+  trust-and-integrity assessment per MCP server, alongside the existing
+  v1.2.0 capability classification and starter-policy recommendation;
+  new `ef-setup-detect/v0.2` schema (additive over v1.2.0's
+  `ef-setup-detect/v0.1` — every existing field keeps its name, type, and
+  meaning)
+- Package-runner invocation pinning for `npx`, `uvx`, and `pipx run`:
+  parses package identity and classifies the version expression as
+  exactly pinned, omitted, a mutable tag, a version range, or
+  unsupported/ambiguous — no package registry access, installation, or
+  execution
+- Shell-wrapper detection (`sh -c`, `bash -c`, `cmd.exe /c`,
+  `powershell`/`pwsh` `-Command`/`-EncodedCommand`) and a fixed, closed
+  set of 5 obscured/download-and-execute launch patterns (downloader
+  piped to shell, `certutil -urlcache`, PowerShell web-request piped to
+  `Invoke-Expression`, decode-piped-to-shell, encoded PowerShell option),
+  detected by bounded structural string matching — no general shell
+  parser, no command execution, no decoding
+- Executable-path classification (absolute path, relative path,
+  bare/PATH-resolved command, missing path, non-regular file, symlink,
+  temporary-directory location) with bounded, streamed local SHA-256
+  hashing for an eligible absolute regular-file path only; `PATH` is
+  never searched and symlinks are never followed or dereferenced
+- Narrow Unicode/identity-ambiguity indicators (bidirectional control
+  characters, invisible/zero-width characters, a defined mixed-script
+  condition, and one curated confusable-identity alias), reusing
+  `etherfence-mcp`'s existing bidi/zero-width detection
+- Environment-variable name-only risk categories (dynamic loader
+  injection, interpreter/runtime path override, package-registry
+  override, TLS-verification-disabling, secret-like names); environment
+  variable values are never read into evidence
+- Artifact Identity Confidence (`verified-local`/`known-source`/`unknown`)
+  and Configuration Risk status (`no-known-indicators`/`needs-review`/
+  `high-risk`) are reported independently and combined into one
+  Aggregate Assessment status by a fixed configuration-risk-first
+  precedence rule — a favorable artifact identity never hides a raised
+  configuration-risk indicator, and both fields remain visible regardless
+  of which one determined the aggregate
+- `recommendation.tier` remains `deny` for every server; this feature
+  introduces no path to a permissive `allow` recommendation
+- Remote (URL-configured, non-stdio) servers still receive
+  environment-variable and Unicode/identity-ambiguity assessment;
+  invocation/executable-path/local-artifact assessment is explicitly
+  reported as not applicable rather than fabricated or silently omitted
+- Explicitly not a malware scanner, behavioral security sandbox, endpoint
+  protection product, package authenticity/signature verifier,
+  package-registry reputation service, universal typosquatting detector,
+  universal Unicode confusable detector, or universal MCP server
+  certification system
+- No new crate, daemon, network access, subprocess execution, or
+  runtime-enforcement change; `mcp-proxy`, `ef-mcp-policy/v0.1`, `setup
+  catalog`, `scan`, and existing `setup plan/apply/rollback/doctor`
+  behavior are unchanged; `setup plan` and `setup doctor` human output is
+  byte-identical to their pre-v1.3.0 output
+
 ## v0.2.x ideas
 
 - Expand tested config schemas and platform paths

@@ -1,0 +1,43 @@
+{
+  "mcpServers": {
+    "env-loader-injection": {
+      "command": "/usr/local/bin/some-tool",
+      "type": "stdio",
+      "env": {"LD_PRELOAD": "fixture-secret-value"}
+    },
+    "env-interpreter-path-override": {
+      "command": "/usr/local/bin/some-tool",
+      "type": "stdio",
+      "env": {"PYTHONPATH": "fixture-secret-value"}
+    },
+    "env-registry-override": {
+      "command": "/usr/local/bin/some-tool",
+      "type": "stdio",
+      "env": {"NPM_CONFIG_REGISTRY": "fixture-secret-value"}
+    },
+    "env-tls-disabling": {
+      "command": "/usr/local/bin/some-tool",
+      "type": "stdio",
+      "env": {"NODE_TLS_REJECT_UNAUTHORIZED": "fixture-secret-value"}
+    },
+    "env-secret-like": {
+      "command": "/usr/local/bin/some-tool",
+      "type": "stdio",
+      "env": {"API_TOKEN": "fixture-secret-value"}
+    },
+    "env-dual-match": {
+      "command": "/usr/local/bin/some-tool",
+      "type": "stdio",
+      "env": {"NPM_TOKEN": "fixture-secret-value"}
+    },
+    "env-benign-negative-control": {
+      "command": "/usr/local/bin/some-tool",
+      "type": "stdio",
+      "env": {"MCP_SERVER_NAME": "fixture-value"}
+    },
+    "remote-hosted-docs": {
+      "url": "https://example.invalid/mcp",
+      "env": {"LD_PRELOAD": "fixture-secret-value"}
+    }
+  }
+}

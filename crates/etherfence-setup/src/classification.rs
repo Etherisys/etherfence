@@ -164,7 +164,7 @@ pub fn classify_server(server: &McpServer) -> ClassifiedCapabilities {
 /// regardless of which platform EtherFence itself runs on. Only strips a
 /// trailing `.cmd`/`.exe` suffix — this is normalization of a known
 /// Windows executable-suffix convention, not a fuzzy/substring match.
-fn launcher_name(command: &str) -> &str {
+pub(crate) fn launcher_name(command: &str) -> &str {
     let name = command.rsplit(['/', '\\']).next().unwrap_or(command);
     name.strip_suffix(".cmd")
         .or_else(|| name.strip_suffix(".exe"))
@@ -184,7 +184,7 @@ const LAUNCHER_VALUE_FLAGS: &[&str] = &["--package"];
 /// immediately as the package candidate, and no argument list is scanned
 /// beyond the first non-flag token (research.md Decision 6 — exact-match
 /// only, no substring/heuristic matching).
-fn resolve_package_arg(args: &[String]) -> Option<&str> {
+pub(crate) fn resolve_package_arg(args: &[String]) -> Option<&str> {
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         if LAUNCHER_BOOLEAN_FLAGS.contains(&arg.as_str()) {

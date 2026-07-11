@@ -116,6 +116,7 @@ cargo build --release -p etherfence-cli
 | `etherfence mcp-policy validate/explain/init/check` | Author, validate, explain, and dry-run MCP proxy policies | Local, serverless |
 | `etherfence mcp-proxy` | MCP stdio boundary proxy | Opt-in, local runtime |
 | `etherfence setup catalog` | Fixed 10-client compatibility/catalog matrix (support tier, local presence) | Local, read-only |
+| `etherfence setup detect` | Per-client MCP server inventory, capability classification, starter-policy recommendation, and trust-and-integrity assessment | Local, read-only |
 
 ## `scan` example
 
@@ -240,10 +241,16 @@ Cline / Roo Code        advisory-only      no     -
 
 Prints all 10 fixed clients every run, each labeled honestly by detection
 confidence (`fixture-verified` / `detect-only` / `advisory-only`) rather than
-a single "supported" claim. `etherfence setup detect --format json` also
-carries this release's new, deny-by-default MCP server capability
-classification (`ef-setup-detect/v0.1`) — see
-[`docs/setup-onboarding.md`](docs/setup-onboarding.md) and
+a single "supported" claim. `etherfence setup detect --format json` carries
+this release's deny-by-default MCP server capability classification plus a
+v1.3.0 static trust-and-integrity assessment — package-runner version
+pinning, shell-wrapper/obscured-launch detection, executable-path
+classification, bounded local SHA-256 hashing, Unicode/identity-ambiguity
+checks, and environment-variable name-only risk categories
+(`ef-setup-detect/v0.2`). It never claims a server is proven safe, trusted,
+certified, malware-free, benign, or definitively malicious, and
+`recommendation.tier` stays `deny` regardless of the assessment's output —
+see [`docs/setup-onboarding.md`](docs/setup-onboarding.md) and
 [`docs/json-schema.md`](docs/json-schema.md) for the full schemas.
 
 ## CI and team workflow integration
@@ -290,10 +297,10 @@ active repository workflows — copy the one(s) you want into your own
 | [`docs/mcp-proxy.md`](docs/mcp-proxy.md) | `mcp-proxy` behavior, `ef-mcp-policy/v0.1` schema, limitations |
 | [`docs/mcp-proxy-operator-guide.md`](docs/mcp-proxy-operator-guide.md) | Practical operator walkthrough: before/after, flags, policy/`--server-name` mapping, dry-run and audit-log usage, failure modes, config examples |
 | [`docs/mcp-policy-ux.md`](docs/mcp-policy-ux.md) | `mcp-policy validate/explain/init/check` reference |
-| [`docs/setup-onboarding.md`](docs/setup-onboarding.md) | `setup` onboarding command family safety contract, including `setup catalog` (`ef-setup-catalog/v0.1`) and `setup detect`'s MCP capability classification (`ef-setup-detect/v0.1`) |
+| [`docs/setup-onboarding.md`](docs/setup-onboarding.md) | `setup` onboarding command family safety contract, including `setup catalog` (`ef-setup-catalog/v0.1`), `setup detect`'s MCP capability classification, and its v1.3.0 trust-and-integrity assessment (`ef-setup-detect/v0.2`) |
 | [`docs/mcp-clients.md`](docs/mcp-clients.md) | Client configuration templates for wrapping a server with `mcp-proxy` |
 | [`docs/mcp-compatibility-matrix.md`](docs/mcp-compatibility-matrix.md) | What MCP stdio behavior is tested vs. untested |
-| [`docs/json-schema.md`](docs/json-schema.md) / [`docs/sarif.md`](docs/sarif.md) | `scan` JSON and SARIF output shapes, plus `ef-setup-catalog/v0.1` (`setup catalog`) and `ef-setup-detect/v0.1` (`setup detect`) |
+| [`docs/json-schema.md`](docs/json-schema.md) / [`docs/sarif.md`](docs/sarif.md) | `scan` JSON and SARIF output shapes, plus `ef-setup-catalog/v0.1` (`setup catalog`) and `ef-setup-detect/v0.2` (`setup detect`) |
 | [`docs/threat-model.md`](docs/threat-model.md) / [`docs/architecture.md`](docs/architecture.md) | Threat model and architecture notes |
 | [`docs/roadmap.md`](docs/roadmap.md) | Release-by-release history and scope |
 | [`docs/release-automation.md`](docs/release-automation.md) / [`docs/release-checklist.md`](docs/release-checklist.md) | How releases are cut |

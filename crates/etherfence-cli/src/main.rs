@@ -435,6 +435,30 @@ fn render_setup_detect(root: &Path, detections: &[etherfence_setup::SetupDetecti
                 server.recommendation.needs_review,
                 server.recommendation.rationale
             );
+            let trust = &server.trust_assessment;
+            let _ = writeln!(
+                out,
+                "    trust: artifact-identity={} configuration-risk={} aggregate={} needs-review={}",
+                kebab_label(&trust.artifact_identity),
+                kebab_label(&trust.configuration_risk),
+                kebab_label(&trust.aggregate),
+                trust.needs_review
+            );
+            if trust.indicators.is_empty() {
+                let _ = writeln!(out, "    trust indicators: none");
+            } else {
+                let _ = writeln!(out, "    trust indicators:");
+                for indicator in &trust.indicators {
+                    let _ = writeln!(
+                        out,
+                        "      - {} [{}] {}: {}",
+                        indicator.id,
+                        kebab_label(&indicator.severity),
+                        kebab_label(&indicator.category),
+                        indicator.summary
+                    );
+                }
+            }
         }
         for note in &detection.notes {
             let _ = writeln!(out, "  note: {note}");
@@ -448,7 +472,7 @@ fn render_setup_detect_json(
     detections: &[etherfence_setup::SetupDetection],
 ) -> Result<String> {
     let report = serde_json::json!({
-        "etherfenceSchemaVersion": "ef-setup-detect/v0.1",
+        "etherfenceSchemaVersion": "ef-setup-detect/v0.2",
         "root": root.display().to_string(),
         "detections": detections,
     });
@@ -506,6 +530,17 @@ fn catalog_tier_label(value: etherfence_setup::CatalogSupportTier) -> &'static s
         etherfence_setup::CatalogSupportTier::AdvisoryOnly => "advisory-only",
         etherfence_setup::CatalogSupportTier::Unknown => "unknown",
     }
+}
+
+/// Renders any `Serialize` enum (trust-assessment vocabulary/severity/
+/// category types) using its existing kebab-case JSON token, so CLI human
+/// output never drifts from the JSON contract via a second hand-maintained
+/// label table.
+fn kebab_label(value: &impl serde::Serialize) -> String {
+    serde_json::to_value(value)
+        .ok()
+        .and_then(|v| v.as_str().map(str::to_string))
+        .unwrap_or_else(|| "unknown".to_string())
 }
 
 fn recommendation_tier_label(value: etherfence_setup::RecommendationTier) -> &'static str {

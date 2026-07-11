@@ -1,0 +1,32 @@
+{
+  "mcpServers": {
+    "npx-pinned": {
+      "command": "npx",
+      "args": ["@modelcontextprotocol/server-filesystem@1.2.3"]
+    },
+    "npx-omitted": {
+      "command": "npx",
+      "args": ["@modelcontextprotocol/server-filesystem"]
+    },
+    "npx-mutable-tag": {
+      "command": "npx",
+      "args": ["@modelcontextprotocol/server-filesystem@latest"]
+    },
+    "npx-version-range": {
+      "command": "npx",
+      "args": ["some-package@^1.2.3"]
+    },
+    "npx-scoped-exact": {
+      "command": "npx",
+      "args": ["@scope/name@2.0.0"]
+    },
+    "npx-scoped-omitted": {
+      "command": "npx",
+      "args": ["@scope/name"]
+    },
+    "npx-malformed": {
+      "command": "npx",
+      "args": []
+    }
+  }
+}

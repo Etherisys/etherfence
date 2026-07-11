@@ -11,11 +11,19 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 mod catalog;
 mod classification;
+mod trust;
 
 pub use catalog::{catalog, CatalogClient, CatalogEntry, CatalogSupportTier};
 pub use classification::{
     classify_server, human_label, recommend, CapabilityLabel, ClassifiedCapabilities,
     RecommendationTier, StarterPolicyRecommendation,
+};
+pub use trust::{
+    aggregate, assess_trust, configuration_risk_from_indicators, human_label_version_expression,
+    needs_review, sort_indicators, AggregateAssessmentStatus, ArtifactIdentityConfidence,
+    ConfigurationRiskStatus, EvidenceField, EvidenceKey, ExecutablePathClassification,
+    IndicatorCategory, InvocationAssessment, ObscuredLaunchPattern, PackageRunner,
+    ShellWrapperKind, TrustAssessment, TrustIndicator, VersionExpressionKind,
 };
 
 const BACKUP_MARKER: &str = "etherfence-setup-backup/v1";
@@ -49,6 +57,7 @@ pub struct SetupServer {
     pub wrapped: bool,
     pub capabilities: ClassifiedCapabilities,
     pub recommendation: StarterPolicyRecommendation,
+    pub trust_assessment: TrustAssessment,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -592,12 +601,14 @@ fn detection_from_inventory(item: InventoryItem) -> SetupDetection {
 fn server_from_mcp(server: &McpServer) -> SetupServer {
     let capabilities = classification::classify_server(server);
     let recommendation = classification::recommend(&capabilities);
+    let trust_assessment = trust::assess_trust(server);
     SetupServer {
         name: server.name.clone(),
         transport: transport_for_server(server),
         wrapped: is_wrapped_server(server),
         capabilities,
         recommendation,
+        trust_assessment,
     }
 }
 
