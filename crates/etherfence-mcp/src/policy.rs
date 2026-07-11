@@ -1,7 +1,8 @@
 use anyhow::{Context, Result};
 use etherfence_core::{read_bounded_text_file, MAX_CONFIG_FILE_BYTES};
 use serde::Deserialize;
-use std::collections::BTreeMap;
+use serde_json::Value;
+use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 
 use crate::unicode::{
@@ -9,6 +10,20 @@ use crate::unicode::{
 };
 
 pub const SUPPORTED_MCP_POLICY_SCHEMA_VERSION: &str = "ef-mcp-policy/v0.1";
+/// Schema version that unlocks the v0.2 argument/param guard constructs
+/// (`require_keys`, `forbid_keys`, `fields`) documented in
+/// `specs/004-argument-aware-mcp-policy/contracts/ef-mcp-policy-v0.2.md`.
+/// v0.1 parsing and evaluation are otherwise completely unchanged.
+pub const SUPPORTED_MCP_POLICY_SCHEMA_VERSION_V2: &str = "ef-mcp-policy/v0.2";
+/// All schema versions this build accepts, in the order checked.
+pub const SUPPORTED_MCP_POLICY_SCHEMA_VERSIONS: &[&str] = &[
+    SUPPORTED_MCP_POLICY_SCHEMA_VERSION,
+    SUPPORTED_MCP_POLICY_SCHEMA_VERSION_V2,
+];
+/// Maximum number of `.`-separated segments a v0.2 field-guard selector may
+/// have. Bounded so selector resolution is always O(1) work relative to
+/// policy size, never request-content-dependent.
+const MAX_SELECTOR_SEGMENTS: usize = 8;
 
 /// Methods the proxy always allows because they are required for MCP protocol
 /// initialization and liveness. These are never subject to method policy and
@@ -73,7 +88,7 @@ pub struct ToolRules {
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct ToolPathGuard {
     #[serde(default)]
-    pub arguments: Option<PathKeyGuard>,
+    pub arguments: Option<ArgumentGuard>,
 }
 
 /// Method-level allow/deny rules. When present, these control which JSON-RPC
@@ -99,16 +114,130 @@ pub struct MethodRules {
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct MethodPathGuard {
     #[serde(default)]
-    pub params: Option<PathKeyGuard>,
+    pub params: Option<ArgumentGuard>,
 }
 
+/// One guarded `arguments` (tool call) or `params` (method) object: the v0.1
+/// path/URI containment guard plus the v0.2 structural argument guards
+/// (required/forbidden keys and per-selector field guards). All v0.2 fields
+/// default to empty so a v0.1 policy's `arguments`/`params` table parses
+/// exactly as it always has.
 #[derive(Debug, Clone, Default, Deserialize)]
-pub struct PathKeyGuard {
+pub struct ArgumentGuard {
     #[serde(default)]
     pub path_keys: Vec<String>,
     #[serde(default)]
     pub uri_keys: Vec<String>,
-    pub path_rule: String,
+    /// Required whenever `path_keys`/`uri_keys` is non-empty (enforced by
+    /// `validate_argument_guard`, not by serde) so v0.1's "path_rule is
+    /// mandatory" behavior is unchanged; made `Option` at the type level only
+    /// so a v0.2 policy can configure a guard with no path containment at
+    /// all.
+    #[serde(default)]
+    pub path_rule: Option<String>,
+    /// v0.2: keys that must be present in the guarded object.
+    #[serde(default)]
+    pub require_keys: Vec<String>,
+    /// v0.2: keys that must be absent from the guarded object.
+    #[serde(default)]
+    pub forbid_keys: Vec<String>,
+    /// v0.2: per-selector field guards, keyed by the bounded selector syntax
+    /// (see `validate_selector`). `BTreeMap` keeps iteration deterministic.
+    #[serde(default)]
+    pub fields: BTreeMap<String, FieldGuard>,
+}
+
+/// A TOML-native scalar used by `FieldGuard::Exact`, `FieldGuard::Enum`, and
+/// `FieldGuard::ArrayGuard::allowed_elements`. Comparison against a request's
+/// JSON value is exact type-and-value equality; there is no cross-type
+/// coercion (an `Int` never matches a JSON string, etc).
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(untagged)]
+pub enum ScalarValue {
+    Bool(bool),
+    Int(i64),
+    Float(f64),
+    Str(String),
+}
+
+impl ScalarValue {
+    fn matches(&self, value: &Value) -> bool {
+        match (self, value) {
+            (ScalarValue::Bool(expected), Value::Bool(actual)) => expected == actual,
+            (ScalarValue::Str(expected), Value::String(actual)) => expected == actual,
+            (ScalarValue::Int(expected), Value::Number(actual)) => {
+                actual.as_i64() == Some(*expected)
+            }
+            (ScalarValue::Float(expected), Value::Number(actual)) => {
+                actual.as_f64() == Some(*expected)
+            }
+            _ => false,
+        }
+    }
+}
+
+/// A single v0.2 field-guard primitive, targeting one selector inside a
+/// guarded `arguments`/`params` object. Every variant fails closed
+/// (`field_missing`/`field_wrong_type`) when the selector does not resolve
+/// to a value of the expected JSON kind — see `evaluate_field_guard`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "type")]
+pub enum FieldGuard {
+    #[serde(rename = "exact")]
+    Exact { value: ScalarValue },
+    #[serde(rename = "enum")]
+    Enum { values: Vec<ScalarValue> },
+    #[serde(rename = "string")]
+    StringGuard {
+        #[serde(default)]
+        min_length: Option<usize>,
+        #[serde(default)]
+        max_length: Option<usize>,
+        #[serde(default)]
+        prefix: Option<String>,
+    },
+    #[serde(rename = "number")]
+    NumberGuard {
+        #[serde(default)]
+        min: Option<f64>,
+        #[serde(default)]
+        max: Option<f64>,
+    },
+    #[serde(rename = "array")]
+    ArrayGuard {
+        #[serde(default)]
+        min_items: Option<usize>,
+        #[serde(default)]
+        max_items: Option<usize>,
+        #[serde(default)]
+        allowed_elements: Option<Vec<ScalarValue>>,
+    },
+    #[serde(rename = "url")]
+    UrlGuard {
+        #[serde(default)]
+        schemes: Vec<String>,
+        #[serde(default)]
+        hosts: Vec<String>,
+        #[serde(default)]
+        ports: Vec<u16>,
+        #[serde(default)]
+        path_prefixes: Vec<String>,
+    },
+}
+
+impl FieldGuard {
+    /// The `type =` tag this guard was configured with, for `mcp-policy
+    /// explain` and audit-safe display; never includes configured values.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            FieldGuard::Exact { .. } => "exact",
+            FieldGuard::Enum { .. } => "enum",
+            FieldGuard::StringGuard { .. } => "string",
+            FieldGuard::NumberGuard { .. } => "number",
+            FieldGuard::ArrayGuard { .. } => "array",
+            FieldGuard::UrlGuard { .. } => "url",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -158,6 +287,18 @@ pub struct PathPolicyDecision {
     pub classification: String,
 }
 
+/// The decision produced by a v0.2 argument/param guard (`require_keys`,
+/// `forbid_keys`, or a `fields` selector). Sibling of [`PathPolicyDecision`];
+/// never carries the evaluated request value, only safe identifiers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GuardPolicyDecision {
+    pub decision: Decision,
+    pub reason: String,
+    pub guard_key: String,
+    pub selector: String,
+    pub reason_category: String,
+}
+
 // `path` here is an explicit, trusted-operator CLI input (`mcp-proxy
 // --policy`); see the doc comment on `read_bounded_text_file` for the
 // CLI-vs-future-API path trust model this crate follows.
@@ -170,11 +311,11 @@ pub fn load_mcp_policy(path: &Path) -> Result<McpPolicyFile> {
 
 pub fn parse_mcp_policy(content: &str) -> Result<McpPolicyFile> {
     let policy: McpPolicyFile = toml::from_str(content)?;
-    if policy.schema_version != SUPPORTED_MCP_POLICY_SCHEMA_VERSION {
+    if !SUPPORTED_MCP_POLICY_SCHEMA_VERSIONS.contains(&policy.schema_version.as_str()) {
         anyhow::bail!(
-            "unsupported MCP proxy policy schema_version {:?}; supported schema_version is {:?}",
+            "unsupported MCP proxy policy schema_version {:?}; supported schema_version values are {:?}",
             policy.schema_version,
-            SUPPORTED_MCP_POLICY_SCHEMA_VERSION
+            SUPPORTED_MCP_POLICY_SCHEMA_VERSIONS
         );
     }
     if policy.name.trim().is_empty() {
@@ -195,54 +336,254 @@ pub fn parse_mcp_policy(content: &str) -> Result<McpPolicyFile> {
 }
 
 fn validate_policy_unicode_hygiene(policy: &McpPolicyFile) -> Result<()> {
+    let is_v2 = policy.schema_version == SUPPORTED_MCP_POLICY_SCHEMA_VERSION_V2;
     validate_policy_identifier(&policy.name, "MCP proxy policy name")?;
-    validate_tool_rules(&policy.tools, "global tool policy")?;
+    validate_tool_rules(&policy.tools, is_v2, "global tool policy")?;
     if let Some(methods) = &policy.methods {
-        validate_method_rules(methods, "global method policy")?;
+        validate_method_rules(methods, is_v2, "global method policy")?;
     }
     for rule_name in policy.path_rules.keys() {
         validate_policy_identifier(rule_name, "MCP proxy path rule name")?;
     }
     for (server_name, server) in &policy.servers {
         validate_policy_identifier(server_name, "MCP proxy server policy name")?;
-        validate_tool_rules(&server.tools, "server-specific tool policy")?;
+        validate_tool_rules(&server.tools, is_v2, "server-specific tool policy")?;
         if let Some(methods) = &server.methods {
-            validate_method_rules(methods, "server-specific method policy")?;
+            validate_method_rules(methods, is_v2, "server-specific method policy")?;
         }
     }
     Ok(())
 }
 
-fn validate_tool_rules(rules: &ToolRules, context: &str) -> Result<()> {
+fn validate_tool_rules(rules: &ToolRules, is_v2: bool, context: &str) -> Result<()> {
     for tool_name in rules.allow.iter().chain(rules.deny.iter()) {
         validate_tool_name(tool_name, context)?;
     }
     for (tool_name, guard) in &rules.path_guards {
         validate_tool_name(tool_name, "MCP proxy tool path guard key")?;
         if let Some(arguments) = &guard.arguments {
-            validate_path_key_guard(arguments, "MCP proxy tool argument path guard")?;
+            validate_argument_guard(arguments, is_v2, "MCP proxy tool argument guard")?;
         }
     }
     Ok(())
 }
 
-fn validate_method_rules(rules: &MethodRules, context: &str) -> Result<()> {
+fn validate_method_rules(rules: &MethodRules, is_v2: bool, context: &str) -> Result<()> {
     for method in rules.allow.iter().chain(rules.deny.iter()) {
         validate_method_name(method, context)?;
     }
     for (method, guard) in &rules.path_guards {
         validate_method_name(method, "MCP proxy method path guard key")?;
         if let Some(params) = &guard.params {
-            validate_path_key_guard(params, "MCP proxy method param path guard")?;
+            validate_argument_guard(params, is_v2, "MCP proxy method param guard")?;
         }
     }
     Ok(())
 }
 
-fn validate_path_key_guard(guard: &PathKeyGuard, context: &str) -> Result<()> {
-    validate_policy_identifier(&guard.path_rule, "MCP proxy referenced path rule name")?;
+/// Validates one `arguments`/`params` guard table: the v0.1 path/URI
+/// containment fields (unchanged rules) plus, when present, the v0.2
+/// structural guards. Fails closed on any duplicate/conflicting, unbounded,
+/// or otherwise malformed construct per FR-015 through FR-019.
+fn validate_argument_guard(guard: &ArgumentGuard, is_v2: bool, context: &str) -> Result<()> {
+    let has_path_fields = !guard.path_keys.is_empty() || !guard.uri_keys.is_empty();
+    match &guard.path_rule {
+        Some(path_rule) => {
+            validate_policy_identifier(path_rule, "MCP proxy referenced path rule name")?
+        }
+        None if has_path_fields => {
+            anyhow::bail!("{context} must configure path_rule when path_keys or uri_keys is set")
+        }
+        None => {}
+    }
     for key in guard.path_keys.iter().chain(guard.uri_keys.iter()) {
         validate_policy_identifier(key, context)?;
+    }
+
+    let has_v2_construct =
+        !guard.require_keys.is_empty() || !guard.forbid_keys.is_empty() || !guard.fields.is_empty();
+    if has_v2_construct && !is_v2 {
+        anyhow::bail!(
+            "{context} uses ef-mcp-policy/v0.2 argument-guard fields (require_keys/forbid_keys/fields) \
+             but the policy schema_version is not {SUPPORTED_MCP_POLICY_SCHEMA_VERSION_V2:?}"
+        );
+    }
+    if !has_v2_construct {
+        return Ok(());
+    }
+
+    for key in guard.require_keys.iter().chain(guard.forbid_keys.iter()) {
+        validate_policy_identifier(key, context)?;
+    }
+    let required: HashSet<&str> = guard.require_keys.iter().map(String::as_str).collect();
+    for forbidden in &guard.forbid_keys {
+        if required.contains(forbidden.as_str()) {
+            anyhow::bail!(
+                "{context} key {forbidden:?} is listed in both require_keys and forbid_keys"
+            );
+        }
+    }
+
+    for (selector, field_guard) in &guard.fields {
+        validate_selector(selector, context)?;
+        validate_field_guard(field_guard, context)?;
+    }
+    Ok(())
+}
+
+/// Validates a v0.2 field-guard selector: non-empty, bounded depth,
+/// `[A-Za-z0-9_-]+` segments only, each passing the same Unicode-hygiene
+/// check used for every other policy identifier.
+fn validate_selector(selector: &str, context: &str) -> Result<()> {
+    if selector.trim().is_empty() {
+        anyhow::bail!("{context} selector must not be empty");
+    }
+    let segments: Vec<&str> = selector.split('.').collect();
+    if segments.len() > MAX_SELECTOR_SEGMENTS {
+        anyhow::bail!(
+            "{context} selector {selector:?} exceeds the maximum of {MAX_SELECTOR_SEGMENTS} segments"
+        );
+    }
+    for segment in &segments {
+        if segment.is_empty() {
+            anyhow::bail!("{context} selector {selector:?} has an empty segment");
+        }
+        if let Some(risk) = inspect_policy_identifier(segment) {
+            anyhow::bail!(
+                "{context} selector {selector:?} rejected: {}",
+                risk.reason()
+            );
+        }
+        if !segment
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+        {
+            anyhow::bail!(
+                "{context} selector {selector:?} has a segment with a disallowed character"
+            );
+        }
+    }
+    Ok(())
+}
+
+fn validate_field_guard(guard: &FieldGuard, context: &str) -> Result<()> {
+    match guard {
+        FieldGuard::Exact { value } => validate_scalar_value(value, context)?,
+        FieldGuard::Enum { values } => {
+            if values.is_empty() {
+                anyhow::bail!("{context} enum guard must configure at least one value");
+            }
+            for value in values {
+                validate_scalar_value(value, context)?;
+            }
+        }
+        FieldGuard::StringGuard {
+            min_length,
+            max_length,
+            ..
+        } => validate_bounds(*min_length, *max_length, context)?,
+        FieldGuard::NumberGuard { min, max } => {
+            if min.is_some_and(|v| !v.is_finite()) || max.is_some_and(|v| !v.is_finite()) {
+                anyhow::bail!(
+                    "{context} number guard min/max must be finite (NaN and +/-infinity are not allowed)"
+                );
+            }
+            if let (Some(min), Some(max)) = (min, max) {
+                if min > max {
+                    anyhow::bail!("{context} number guard min must not exceed max");
+                }
+            }
+        }
+        FieldGuard::ArrayGuard {
+            min_items,
+            max_items,
+            allowed_elements,
+        } => {
+            validate_bounds(*min_items, *max_items, context)?;
+            if let Some(allowed) = allowed_elements {
+                if allowed.is_empty() {
+                    anyhow::bail!(
+                        "{context} array guard allowed_elements must not be empty when configured"
+                    );
+                }
+                for value in allowed {
+                    validate_scalar_value(value, context)?;
+                }
+            }
+        }
+        FieldGuard::UrlGuard {
+            schemes,
+            hosts,
+            ports,
+            path_prefixes,
+        } => {
+            for scheme in schemes {
+                let lower = scheme.to_ascii_lowercase();
+                if lower != "http" && lower != "https" {
+                    anyhow::bail!(
+                        "{context} url guard scheme {scheme:?} is not supported (only http/https)"
+                    );
+                }
+            }
+            for host in hosts {
+                if host.is_empty()
+                    || !host.is_ascii()
+                    || host.contains('@')
+                    || host.contains('/')
+                    || host.chars().any(char::is_whitespace)
+                {
+                    anyhow::bail!("{context} url guard host {host:?} is invalid");
+                }
+                if let Some(risk) = inspect_policy_identifier(host) {
+                    anyhow::bail!(
+                        "{context} url guard host {host:?} rejected: {}",
+                        risk.reason()
+                    );
+                }
+            }
+            for prefix in path_prefixes {
+                let valid = prefix == "/" || (prefix.starts_with('/') && prefix.ends_with('/'));
+                if !valid {
+                    anyhow::bail!(
+                        "{context} url guard path_prefixes entry {prefix:?} must be \"/\" or start and end with '/'"
+                    );
+                }
+            }
+            if schemes.is_empty()
+                && hosts.is_empty()
+                && ports.is_empty()
+                && path_prefixes.is_empty()
+            {
+                anyhow::bail!(
+                    "{context} url guard configures no constraints (schemes/hosts/ports/path_prefixes are all empty)"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_bounds(min: Option<usize>, max: Option<usize>, context: &str) -> Result<()> {
+    if let (Some(min), Some(max)) = (min, max) {
+        if min > max {
+            anyhow::bail!("{context} guard min must not exceed max");
+        }
+    }
+    Ok(())
+}
+
+/// Rejects a non-finite `ScalarValue::Float` (`NaN`, `+inf`, `-inf`). Such a
+/// value can never legitimately equal or bound a real request value, and
+/// `NaN` in particular makes every subsequent comparison silently false
+/// (`NaN < x`, `NaN > x`, and `NaN == x` are all `false`), which would
+/// otherwise disable the guard it appears in without any parse error.
+fn validate_scalar_value(value: &ScalarValue, context: &str) -> Result<()> {
+    if let ScalarValue::Float(f) = value {
+        if !f.is_finite() {
+            anyhow::bail!(
+                "{context} configured value must be finite (NaN and +/-infinity are not allowed)"
+            );
+        }
     }
     Ok(())
 }
@@ -279,6 +620,10 @@ pub fn decide_tool_argument_paths(
         .get(tool_name)?
         .arguments
         .as_ref()?;
+    // A guard table with no `path_rule` is a v0.2-only guard (require_keys /
+    // forbid_keys / fields, no path containment at all); there is nothing
+    // for the v0.1 path decision to evaluate.
+    guard.path_rule.as_ref()?;
     Some(decide_path_keys(
         policy,
         guard,
@@ -299,17 +644,21 @@ pub fn decide_method_param_paths(
         .get(method)?
         .params
         .as_ref()?;
+    guard.path_rule.as_ref()?;
     Some(decide_path_keys(policy, guard, params, PathInputKind::Uri))
 }
 
 fn decide_path_keys(
     policy: &McpPolicyFile,
-    guard: &PathKeyGuard,
+    guard: &ArgumentGuard,
     container: Option<&serde_json::Value>,
     default_kind: PathInputKind,
 ) -> PathPolicyDecision {
-    let rule_name = guard.path_rule.clone();
-    let Some(rule) = policy.path_rules.get(&guard.path_rule) else {
+    let rule_name = guard
+        .path_rule
+        .clone()
+        .expect("caller guarantees path_rule is Some");
+    let Some(rule) = policy.path_rules.get(&rule_name) else {
         return path_decision(
             Decision::Deny,
             "path rule referenced by path guard was not found",
@@ -544,7 +893,7 @@ fn path_has_root(candidate: &str, root: &str) -> bool {
             .is_some_and(|rest| rest.starts_with('/'))
 }
 
-fn first_configured_key(guard: &PathKeyGuard) -> String {
+fn first_configured_key(guard: &ArgumentGuard) -> String {
     guard
         .path_keys
         .first()
@@ -567,6 +916,451 @@ fn path_decision(
         key_name,
         classification: classification.to_string(),
     }
+}
+
+// --- v0.2 argument/param guards ---
+
+/// Resolve a bounded selector (see `validate_selector`) against a JSON
+/// value. Each segment is an object key or, when the current container is an
+/// array, an all-digits index. Any mismatch (missing key, non-numeric index
+/// against an array, out-of-range index, or a scalar reached before the
+/// selector is exhausted) resolves to `None` — the caller treats this
+/// identically to "field missing", which is the correct fail-closed
+/// behavior for an unresolvable selector.
+fn resolve_selector<'a>(container: &'a Value, selector: &str) -> Option<&'a Value> {
+    let mut current = container;
+    for segment in selector.split('.') {
+        current = match current {
+            Value::Object(map) => map.get(segment)?,
+            Value::Array(items) => items.get(segment.parse::<usize>().ok()?)?,
+            _ => return None,
+        };
+    }
+    Some(current)
+}
+
+/// A URL guard value, parsed by hand (see
+/// `specs/004-argument-aware-mcp-policy/research.md` Decisions 1-4): no
+/// external URL-parsing dependency, ambiguity fails closed rather than being
+/// guessed at.
+struct ParsedGuardUrl {
+    scheme: String,
+    host: String,
+    port: Option<u16>,
+    path: String,
+}
+
+/// Parse a value as a URL guard would need to for scheme/host/port/path
+/// matching. Returns `None` (malformed, fail closed) for: any `%` anywhere
+/// in the value (percent-encoding is how allowlist checks get bypassed —
+/// see Decision 3), any userinfo (`@`) in the authority (confusable-host
+/// attack — see Decision 2), a non-ASCII or empty host, or an unparseable
+/// scheme/authority.
+fn parse_guarded_url(raw: &str) -> Option<ParsedGuardUrl> {
+    if raw.is_empty() || raw.contains('%') || raw.contains('\0') {
+        return None;
+    }
+    if inspect_path_value(raw).is_some() {
+        return None;
+    }
+    let (scheme, rest) = raw.split_once("://")?;
+    if scheme.is_empty() || !scheme.bytes().all(|b| b.is_ascii_alphabetic()) {
+        return None;
+    }
+    let scheme = scheme.to_ascii_lowercase();
+    let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let authority = &rest[..authority_end];
+    let remainder = &rest[authority_end..];
+    if authority.is_empty() || authority.contains('@') {
+        return None;
+    }
+    let (host_part, port_part) = match authority.rsplit_once(':') {
+        Some((host, port)) => (host, Some(port)),
+        None => (authority, None),
+    };
+    if host_part.is_empty() || !host_part.is_ascii() {
+        return None;
+    }
+    let host = host_part.trim_end_matches('.').to_ascii_lowercase();
+    if host.is_empty()
+        || !host
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-')
+    {
+        return None;
+    }
+    let port = match port_part {
+        Some(port) => Some(port.parse::<u16>().ok()?),
+        None => default_port_for_scheme(&scheme),
+    };
+    let path = if remainder.is_empty() || remainder.starts_with('?') || remainder.starts_with('#') {
+        "/".to_string()
+    } else {
+        let path_end = remainder.find(['?', '#']).unwrap_or(remainder.len());
+        remainder[..path_end].to_string()
+    };
+    // Reject `.`/`..` path segments outright rather than normalizing them:
+    // a downstream HTTP server or intermediary commonly *does* resolve
+    // `/api/../admin` to `/admin`, which would silently defeat a
+    // `path_prefixes = ["/api/"]` allowlist if this guard only compared the
+    // raw, unnormalized string. This mirrors the guard's existing
+    // reject-ambiguity-rather-than-decode stance for percent-encoding.
+    if path
+        .split('/')
+        .any(|segment| segment == "." || segment == "..")
+    {
+        return None;
+    }
+    Some(ParsedGuardUrl {
+        scheme,
+        host,
+        port,
+        path,
+    })
+}
+
+/// "Effective port" per research.md Decision 4: only `http`/`https` get an
+/// implicit default; every other scheme requires an explicit `:port` for a
+/// port allowlist to ever match.
+fn default_port_for_scheme(scheme: &str) -> Option<u16> {
+    match scheme {
+        "http" => Some(80),
+        "https" => Some(443),
+        _ => None,
+    }
+}
+
+fn normalize_host_for_compare(host: &str) -> String {
+    host.trim_end_matches('.').to_ascii_lowercase()
+}
+
+/// Boundary-safe path-prefix match. `validate_field_guard` already requires
+/// every configured `path_prefixes` entry to be `"/"` or to both start and
+/// end with `/`, so a plain `starts_with` is boundary-safe here (no
+/// `"/v1"`-matches-`"/v10"` risk).
+fn url_path_has_prefix(path: &str, prefix: &str) -> bool {
+    path.starts_with(prefix)
+}
+
+/// Evaluate one field guard against the value resolved for its selector
+/// (`None` when the selector did not resolve at all). Returns
+/// `(allowed, reason_category)`; `reason_category` is always one of the
+/// closed-set strings documented in data-model.md and never contains the
+/// evaluated value.
+fn evaluate_field_guard(guard: &FieldGuard, value: Option<&Value>) -> (bool, &'static str) {
+    match guard {
+        FieldGuard::Exact { value: expected } => match value {
+            None => (false, "field_missing"),
+            Some(actual) if expected.matches(actual) => (true, "guard_allowed"),
+            Some(_) => (false, "exact_value_mismatch"),
+        },
+        FieldGuard::Enum { values } => match value {
+            None => (false, "field_missing"),
+            Some(actual) if values.iter().any(|scalar| scalar.matches(actual)) => {
+                (true, "guard_allowed")
+            }
+            Some(_) => (false, "enum_value_not_allowed"),
+        },
+        FieldGuard::StringGuard {
+            min_length,
+            max_length,
+            prefix,
+        } => match value {
+            None => (false, "field_missing"),
+            Some(Value::String(s)) => {
+                let len = s.chars().count();
+                if min_length.is_some_and(|min| len < min) {
+                    return (false, "string_too_short");
+                }
+                if max_length.is_some_and(|max| len > max) {
+                    return (false, "string_too_long");
+                }
+                if let Some(prefix) = prefix {
+                    if !s.starts_with(prefix.as_str()) {
+                        return (false, "string_prefix_mismatch");
+                    }
+                }
+                (true, "guard_allowed")
+            }
+            Some(_) => (false, "field_wrong_type"),
+        },
+        FieldGuard::NumberGuard { min, max } => match value {
+            None => (false, "field_missing"),
+            Some(Value::Number(n)) => {
+                let Some(n) = n.as_f64() else {
+                    return (false, "field_wrong_type");
+                };
+                if min.is_some_and(|min| n < min) {
+                    return (false, "number_below_minimum");
+                }
+                if max.is_some_and(|max| n > max) {
+                    return (false, "number_above_maximum");
+                }
+                (true, "guard_allowed")
+            }
+            Some(_) => (false, "field_wrong_type"),
+        },
+        FieldGuard::ArrayGuard {
+            min_items,
+            max_items,
+            allowed_elements,
+        } => match value {
+            None => (false, "field_missing"),
+            Some(Value::Array(items)) => {
+                if min_items.is_some_and(|min| items.len() < min) {
+                    return (false, "array_too_short");
+                }
+                if max_items.is_some_and(|max| items.len() > max) {
+                    return (false, "array_too_long");
+                }
+                if let Some(allowed) = allowed_elements {
+                    let all_allowed = items
+                        .iter()
+                        .all(|item| allowed.iter().any(|scalar| scalar.matches(item)));
+                    if !all_allowed {
+                        return (false, "array_element_not_allowed");
+                    }
+                }
+                (true, "guard_allowed")
+            }
+            Some(_) => (false, "field_wrong_type"),
+        },
+        FieldGuard::UrlGuard {
+            schemes,
+            hosts,
+            ports,
+            path_prefixes,
+        } => match value {
+            None => (false, "field_missing"),
+            Some(Value::String(raw)) => {
+                let Some(parsed) = parse_guarded_url(raw) else {
+                    return (false, "url_malformed");
+                };
+                if !schemes.is_empty()
+                    && !schemes
+                        .iter()
+                        .any(|s| s.eq_ignore_ascii_case(&parsed.scheme))
+                {
+                    return (false, "url_scheme_not_allowed");
+                }
+                if !hosts.is_empty()
+                    && !hosts
+                        .iter()
+                        .any(|host| normalize_host_for_compare(host) == parsed.host)
+                {
+                    return (false, "url_host_not_allowed");
+                }
+                if !ports.is_empty() {
+                    match parsed.port {
+                        Some(port) if ports.contains(&port) => {}
+                        _ => return (false, "url_port_not_allowed"),
+                    }
+                }
+                if !path_prefixes.is_empty()
+                    && !path_prefixes
+                        .iter()
+                        .any(|prefix| url_path_has_prefix(&parsed.path, prefix))
+                {
+                    return (false, "url_path_prefix_not_allowed");
+                }
+                (true, "guard_allowed")
+            }
+            Some(_) => (false, "field_wrong_type"),
+        },
+    }
+}
+
+fn field_guard_deny_reason(category: &str) -> &'static str {
+    match category {
+        "field_missing" => "guarded field is missing from the request",
+        "field_wrong_type" => "guarded field has an unexpected JSON type",
+        "exact_value_mismatch" => "guarded field does not equal the configured exact value",
+        "enum_value_not_allowed" => "guarded field value is not in the configured allowlist",
+        "string_too_short" => "guarded string field is shorter than the configured minimum length",
+        "string_too_long" => "guarded string field is longer than the configured maximum length",
+        "string_prefix_mismatch" => {
+            "guarded string field does not start with the configured prefix"
+        }
+        "number_below_minimum" => "guarded numeric field is below the configured minimum",
+        "number_above_maximum" => "guarded numeric field is above the configured maximum",
+        "array_too_short" => "guarded array field has fewer items than the configured minimum",
+        "array_too_long" => "guarded array field has more items than the configured maximum",
+        "array_element_not_allowed" => {
+            "guarded array field contains an element outside the configured allowlist"
+        }
+        "url_malformed" => "guarded URL field could not be parsed",
+        "url_scheme_not_allowed" => "guarded URL field's scheme is not in the configured allowlist",
+        "url_host_not_allowed" => "guarded URL field's host is not in the configured allowlist",
+        "url_port_not_allowed" => {
+            "guarded URL field's effective port is not in the configured allowlist"
+        }
+        "url_path_prefix_not_allowed" => {
+            "guarded URL field's path is outside the configured allowed prefixes"
+        }
+        _ => "guarded field failed policy evaluation",
+    }
+}
+
+fn guard_decision(
+    decision: Decision,
+    reason: &str,
+    guard_key: &str,
+    selector: &str,
+    category: &str,
+) -> GuardPolicyDecision {
+    GuardPolicyDecision {
+        decision,
+        reason: reason.to_string(),
+        guard_key: guard_key.to_string(),
+        selector: selector.to_string(),
+        reason_category: category.to_string(),
+    }
+}
+
+/// Evaluate the v0.2 `require_keys`/`forbid_keys`/`fields` guards for one
+/// `ArgumentGuard`. Returns `None` when no v0.2 construct is configured at
+/// all (no override — the v0.1-only decision, if any, stands unchanged).
+/// Checks `require_keys`, then `forbid_keys`, then `fields` in `BTreeMap`
+/// (deterministic) order; the first failure wins.
+fn decide_argument_guard(
+    guard_key: &str,
+    guard: &ArgumentGuard,
+    container: Option<&Value>,
+) -> Option<GuardPolicyDecision> {
+    if guard.require_keys.is_empty() && guard.forbid_keys.is_empty() && guard.fields.is_empty() {
+        return None;
+    }
+    let object = container.and_then(Value::as_object);
+    for required in &guard.require_keys {
+        if !object.is_some_and(|o| o.contains_key(required)) {
+            return Some(guard_decision(
+                Decision::Deny,
+                "required key is missing from the guarded object",
+                guard_key,
+                required,
+                "required_key_missing",
+            ));
+        }
+    }
+    for forbidden in &guard.forbid_keys {
+        if object.is_some_and(|o| o.contains_key(forbidden)) {
+            return Some(guard_decision(
+                Decision::Deny,
+                "forbidden key is present in the guarded object",
+                guard_key,
+                forbidden,
+                "forbidden_key_present",
+            ));
+        }
+    }
+    for (selector, field_guard) in &guard.fields {
+        let resolved = container.and_then(|c| resolve_selector(c, selector));
+        let (allowed, category) = evaluate_field_guard(field_guard, resolved);
+        if !allowed {
+            return Some(guard_decision(
+                Decision::Deny,
+                field_guard_deny_reason(category),
+                guard_key,
+                selector,
+                category,
+            ));
+        }
+    }
+    Some(guard_decision(
+        Decision::Allow,
+        "all configured argument/param guards were satisfied",
+        guard_key,
+        "<none>",
+        "guard_allowed",
+    ))
+}
+
+/// Combine an optional global-scope and an optional server-scope argument
+/// guard for the same key. Guards are pure narrowing constraints (they only
+/// ever turn `Allow` into `Deny`, never the reverse), so there is no
+/// meaningful "one wins" precedence to choose between them the way
+/// [`decide_tool_call`]'s allow/deny lists need: both configured guards are
+/// evaluated and **both must pass** (logical AND). The global guard is
+/// checked first so a deny reason is deterministic when both would deny;
+/// this ordering has no effect on the final `Allow`/`Deny` outcome, only on
+/// which reason is reported. Returns `None` only when neither scope has a
+/// guard configured at all (no override).
+fn decide_combined_argument_guard(
+    guard_key: &str,
+    global: Option<&ArgumentGuard>,
+    server: Option<&ArgumentGuard>,
+    container: Option<&Value>,
+) -> Option<GuardPolicyDecision> {
+    let global_decision =
+        global.and_then(|guard| decide_argument_guard(guard_key, guard, container));
+    if global_decision
+        .as_ref()
+        .is_some_and(|decision| decision.decision == Decision::Deny)
+    {
+        return global_decision;
+    }
+    let server_decision =
+        server.and_then(|guard| decide_argument_guard(guard_key, guard, container));
+    if server_decision
+        .as_ref()
+        .is_some_and(|decision| decision.decision == Decision::Deny)
+    {
+        return server_decision;
+    }
+    global_decision.or(server_decision)
+}
+
+/// v0.2 counterpart to [`decide_tool_argument_paths`]: evaluates
+/// `require_keys`/`forbid_keys`/`fields` configured on a tool's `arguments`
+/// guard. Unlike the v0.1 path guard (which only ever consults the global
+/// `[tools."<tool>".arguments]` scope), this checks **both** the global
+/// scope and, when `server_name` has a matching entry, the server-specific
+/// `[servers."<server_name>".tools."<tool>".arguments]` scope — see
+/// [`decide_combined_argument_guard`] for the combination rule.
+pub fn decide_tool_argument_guards(
+    policy: &McpPolicyFile,
+    server_name: &str,
+    tool_name: &str,
+    arguments: Option<&Value>,
+) -> Option<GuardPolicyDecision> {
+    let global = policy
+        .tools
+        .path_guards
+        .get(tool_name)
+        .and_then(|guard| guard.arguments.as_ref());
+    let server = policy
+        .servers
+        .get(server_name)
+        .and_then(|server| server.tools.path_guards.get(tool_name))
+        .and_then(|guard| guard.arguments.as_ref());
+    decide_combined_argument_guard(tool_name, global, server, arguments)
+}
+
+/// v0.2 counterpart to [`decide_method_param_paths`], but — unlike the v0.1
+/// path guard, which the live proxy only ever consults for `resources/read`
+/// — applicable to any method with a configured `params` guard. This is
+/// purely additive new v0.2 capability; it does not change which methods
+/// the v0.1 path guard covers. Also checks both the global and (when
+/// present) the server-specific `[servers."<server_name>".methods."<method>".params]`
+/// scope, combined per [`decide_combined_argument_guard`].
+pub fn decide_method_param_guards(
+    policy: &McpPolicyFile,
+    server_name: &str,
+    method: &str,
+    params: Option<&Value>,
+) -> Option<GuardPolicyDecision> {
+    let global = policy
+        .methods
+        .as_ref()
+        .and_then(|methods| methods.path_guards.get(method))
+        .and_then(|guard| guard.params.as_ref());
+    let server = policy
+        .servers
+        .get(server_name)
+        .and_then(|server| server.methods.as_ref())
+        .and_then(|methods| methods.path_guards.get(method))
+        .and_then(|guard| guard.params.as_ref());
+    decide_combined_argument_guard(method, global, server, params)
 }
 
 /// Deterministic decision for a tool name: deny-list match wins, then
@@ -1574,5 +2368,1304 @@ allow = ["tools/list", "tools/call"]
             decide_method(&policy, "default", "roots/list").decision,
             Decision::Deny
         );
+    }
+}
+
+#[cfg(test)]
+mod v2_guard_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn policy_with_tool_guard(guard_toml: &str) -> McpPolicyFile {
+        let content = format!(
+            r#"
+schema_version = "ef-mcp-policy/v0.2"
+name = "v2-guard-test"
+
+[tools]
+allow = ["demo.tool"]
+
+{guard_toml}
+"#
+        );
+        parse_mcp_policy(&content).expect("valid v0.2 policy")
+    }
+
+    fn policy_with_method_guard(guard_toml: &str) -> McpPolicyFile {
+        let content = format!(
+            r#"
+schema_version = "ef-mcp-policy/v0.2"
+name = "v2-method-guard-test"
+
+[methods]
+allow = ["tools/list", "tools/call", "demo/method"]
+
+{guard_toml}
+"#
+        );
+        parse_mcp_policy(&content).expect("valid v0.2 policy")
+    }
+
+    // --- schema gating ---
+
+    #[test]
+    fn v1_policy_rejects_require_keys() {
+        let content = r#"
+schema_version = "ef-mcp-policy/v0.1"
+name = "v1-with-v2-construct"
+
+[tools]
+allow = ["demo.tool"]
+
+[tools."demo.tool".arguments]
+require_keys = ["org"]
+"#;
+        let error = parse_mcp_policy(content).expect_err("v2 construct under v0.1 rejected");
+        assert!(error.to_string().contains("ef-mcp-policy/v0.2"));
+    }
+
+    #[test]
+    fn v1_policy_rejects_field_guard() {
+        let content = r#"
+schema_version = "ef-mcp-policy/v0.1"
+name = "v1-with-v2-field"
+
+[tools]
+allow = ["demo.tool"]
+
+[tools."demo.tool".arguments.fields.org]
+type = "exact"
+value = "my-org"
+"#;
+        let error = parse_mcp_policy(content).expect_err("v2 field guard under v0.1 rejected");
+        assert!(error.to_string().contains("ef-mcp-policy/v0.2"));
+    }
+
+    #[test]
+    fn v2_schema_version_is_accepted() {
+        let policy = policy_with_tool_guard(
+            r#"
+[tools."demo.tool".arguments]
+require_keys = ["org"]
+"#,
+        );
+        assert_eq!(policy.schema_version, "ef-mcp-policy/v0.2");
+    }
+
+    // --- validation ---
+
+    #[test]
+    fn rejects_key_both_required_and_forbidden() {
+        let content = r#"
+schema_version = "ef-mcp-policy/v0.2"
+name = "conflict"
+
+[tools]
+allow = ["demo.tool"]
+
+[tools."demo.tool".arguments]
+require_keys = ["org"]
+forbid_keys = ["org"]
+"#;
+        let error = parse_mcp_policy(content).expect_err("conflicting require/forbid rejected");
+        assert!(error
+            .to_string()
+            .contains("listed in both require_keys and forbid_keys"));
+    }
+
+    #[test]
+    fn rejects_empty_enum_values() {
+        let content = r#"
+schema_version = "ef-mcp-policy/v0.2"
+name = "empty-enum"
+
+[tools]
+allow = ["demo.tool"]
+
+[tools."demo.tool".arguments.fields.org]
+type = "enum"
+values = []
+"#;
+        let error = parse_mcp_policy(content).expect_err("empty enum rejected");
+        assert!(error.to_string().contains("at least one value"));
+    }
+
+    #[test]
+    fn rejects_empty_allowed_elements_when_configured() {
+        let content = r#"
+schema_version = "ef-mcp-policy/v0.2"
+name = "empty-allowed-elements"
+
+[tools]
+allow = ["demo.tool"]
+
+[tools."demo.tool".arguments.fields.fields]
+type = "array"
+allowed_elements = []
+"#;
+        let error = parse_mcp_policy(content).expect_err("empty allowed_elements rejected");
+        assert!(error
+            .to_string()
+            .contains("allowed_elements must not be empty"));
+    }
+
+    #[test]
+    fn rejects_impossible_numeric_range() {
+        let content = r#"
+schema_version = "ef-mcp-policy/v0.2"
+name = "impossible-range"
+
+[tools]
+allow = ["demo.tool"]
+
+[tools."demo.tool".arguments.fields.limit]
+type = "number"
+min = 100
+max = 1
+"#;
+        let error = parse_mcp_policy(content).expect_err("min > max rejected");
+        assert!(error.to_string().contains("min must not exceed max"));
+    }
+
+    #[test]
+    fn rejects_nan_number_guard_min() {
+        let content = r#"
+schema_version = "ef-mcp-policy/v0.2"
+name = "nan-min"
+
+[tools]
+allow = ["demo.tool"]
+
+[tools."demo.tool".arguments.fields.limit]
+type = "number"
+min = nan
+"#;
+        let error = parse_mcp_policy(content).expect_err("NaN min rejected");
+        assert!(error.to_string().contains("must be finite"));
+    }
+
+    #[test]
+    fn rejects_nan_number_guard_max() {
+        let content = r#"
+schema_version = "ef-mcp-policy/v0.2"
+name = "nan-max"
+
+[tools]
+allow = ["demo.tool"]
+
+[tools."demo.tool".arguments.fields.limit]
+type = "number"
+max = nan
+"#;
+        let error = parse_mcp_policy(content).expect_err("NaN max rejected");
+        assert!(error.to_string().contains("must be finite"));
+    }
+
+    #[test]
+    fn rejects_infinite_number_guard_bounds() {
+        for body in ["min = inf", "max = -inf", "min = -inf\nmax = inf"] {
+            let content = format!(
+                r#"
+schema_version = "ef-mcp-policy/v0.2"
+name = "infinite-bound"
+
+[tools]
+allow = ["demo.tool"]
+
+[tools."demo.tool".arguments.fields.limit]
+type = "number"
+{body}
+"#
+            );
+            let error = parse_mcp_policy(&content).expect_err("infinite bound rejected");
+            assert!(
+                error.to_string().contains("must be finite"),
+                "body={body}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_nan_in_exact_and_enum_and_allowed_elements() {
+        let exact = r#"
+schema_version = "ef-mcp-policy/v0.2"
+name = "nan-exact"
+
+[tools]
+allow = ["demo.tool"]
+
+[tools."demo.tool".arguments.fields.score]
+type = "exact"
+value = nan
+"#;
+        assert!(parse_mcp_policy(exact)
+            .expect_err("NaN exact value rejected")
+            .to_string()
+            .contains("must be finite"));
+
+        let enum_guard = r#"
+schema_version = "ef-mcp-policy/v0.2"
+name = "nan-enum"
+
+[tools]
+allow = ["demo.tool"]
+
+[tools."demo.tool".arguments.fields.score]
+type = "enum"
+values = [1.0, nan]
+"#;
+        assert!(parse_mcp_policy(enum_guard)
+            .expect_err("NaN enum value rejected")
+            .to_string()
+            .contains("must be finite"));
+
+        let array_guard = r#"
+schema_version = "ef-mcp-policy/v0.2"
+name = "nan-array"
+
+[tools]
+allow = ["demo.tool"]
+
+[tools."demo.tool".arguments.fields.scores]
+type = "array"
+allowed_elements = [1.0, nan]
+"#;
+        assert!(parse_mcp_policy(array_guard)
+            .expect_err("NaN allowed_elements value rejected")
+            .to_string()
+            .contains("must be finite"));
+    }
+
+    #[test]
+    fn rejects_impossible_string_length_range() {
+        let content = r#"
+schema_version = "ef-mcp-policy/v0.2"
+name = "impossible-string-range"
+
+[tools]
+allow = ["demo.tool"]
+
+[tools."demo.tool".arguments.fields.name]
+type = "string"
+min_length = 10
+max_length = 1
+"#;
+        let error = parse_mcp_policy(content).expect_err("min_length > max_length rejected");
+        assert!(error.to_string().contains("min must not exceed max"));
+    }
+
+    #[test]
+    fn rejects_selector_exceeding_max_depth() {
+        let selector = (0..MAX_SELECTOR_SEGMENTS + 1)
+            .map(|i| format!("s{i}"))
+            .collect::<Vec<_>>()
+            .join(".");
+        let content = format!(
+            r#"
+schema_version = "ef-mcp-policy/v0.2"
+name = "too-deep"
+
+[tools]
+allow = ["demo.tool"]
+
+[tools."demo.tool".arguments.fields."{selector}"]
+type = "exact"
+value = "x"
+"#
+        );
+        let error = parse_mcp_policy(&content).expect_err("selector too deep rejected");
+        assert!(error.to_string().contains("exceeds the maximum"));
+    }
+
+    #[test]
+    fn rejects_selector_with_empty_segment() {
+        let content = r#"
+schema_version = "ef-mcp-policy/v0.2"
+name = "empty-segment"
+
+[tools]
+allow = ["demo.tool"]
+
+[tools."demo.tool".arguments.fields."a..b"]
+type = "exact"
+value = "x"
+"#;
+        let error = parse_mcp_policy(content).expect_err("empty selector segment rejected");
+        assert!(error.to_string().contains("empty segment"));
+    }
+
+    #[test]
+    fn rejects_selector_with_disallowed_character() {
+        let content = r#"
+schema_version = "ef-mcp-policy/v0.2"
+name = "bad-char"
+
+[tools]
+allow = ["demo.tool"]
+
+[tools."demo.tool".arguments.fields."a b"]
+type = "exact"
+value = "x"
+"#;
+        let error =
+            parse_mcp_policy(content).expect_err("disallowed character in selector rejected");
+        assert!(error.to_string().contains("disallowed character"));
+    }
+
+    #[test]
+    fn rejects_bidi_selector_segment() {
+        let content = format!(
+            r#"
+schema_version = "ef-mcp-policy/v0.2"
+name = "bidi-selector"
+
+[tools]
+allow = ["demo.tool"]
+
+[tools."demo.tool".arguments.fields."a{}b"]
+type = "exact"
+value = "x"
+"#,
+            '\u{202E}'
+        );
+        let error = parse_mcp_policy(&content).expect_err("bidi selector segment rejected");
+        assert!(error.to_string().contains("unicode_bidi_control_detected"));
+    }
+
+    #[test]
+    fn rejects_url_guard_with_unsupported_scheme() {
+        let content = r#"
+schema_version = "ef-mcp-policy/v0.2"
+name = "bad-scheme"
+
+[tools]
+allow = ["demo.tool"]
+
+[tools."demo.tool".arguments.fields.url]
+type = "url"
+schemes = ["ftp"]
+"#;
+        let error = parse_mcp_policy(content).expect_err("unsupported scheme rejected");
+        assert!(error.to_string().contains("only http/https"));
+    }
+
+    #[test]
+    fn rejects_url_guard_with_invalid_host() {
+        let content = r#"
+schema_version = "ef-mcp-policy/v0.2"
+name = "bad-host"
+
+[tools]
+allow = ["demo.tool"]
+
+[tools."demo.tool".arguments.fields.url]
+type = "url"
+hosts = ["user@evil.example"]
+"#;
+        let error = parse_mcp_policy(content).expect_err("invalid host rejected");
+        assert!(error.to_string().contains("is invalid"));
+    }
+
+    #[test]
+    fn rejects_url_guard_with_no_constraints() {
+        let content = r#"
+schema_version = "ef-mcp-policy/v0.2"
+name = "no-constraints"
+
+[tools]
+allow = ["demo.tool"]
+
+[tools."demo.tool".arguments.fields.url]
+type = "url"
+"#;
+        let error = parse_mcp_policy(content).expect_err("meaningless url guard rejected");
+        assert!(error.to_string().contains("configures no constraints"));
+    }
+
+    #[test]
+    fn rejects_url_guard_path_prefix_without_boundary() {
+        let content = r#"
+schema_version = "ef-mcp-policy/v0.2"
+name = "bad-prefix"
+
+[tools]
+allow = ["demo.tool"]
+
+[tools."demo.tool".arguments.fields.url]
+type = "url"
+path_prefixes = ["/v1"]
+"#;
+        let error = parse_mcp_policy(content).expect_err("unbounded path prefix rejected");
+        assert!(error.to_string().contains("start and end with '/'"));
+    }
+
+    #[test]
+    fn rejects_unknown_field_guard_type() {
+        let content = r#"
+schema_version = "ef-mcp-policy/v0.2"
+name = "unknown-type"
+
+[tools]
+allow = ["demo.tool"]
+
+[tools."demo.tool".arguments.fields.org]
+type = "regex"
+pattern = ".*"
+"#;
+        assert!(parse_mcp_policy(content).is_err());
+    }
+
+    #[test]
+    fn rejects_missing_path_rule_when_path_keys_configured() {
+        let content = r#"
+schema_version = "ef-mcp-policy/v0.2"
+name = "missing-path-rule"
+
+[tools]
+allow = ["demo.tool"]
+
+[tools."demo.tool".arguments]
+path_keys = ["path"]
+"#;
+        let error = parse_mcp_policy(content).expect_err("missing path_rule rejected");
+        assert!(error.to_string().contains("must configure path_rule"));
+    }
+
+    // --- require_keys / forbid_keys evaluation ---
+
+    #[test]
+    fn require_keys_allows_when_present() {
+        let policy = policy_with_tool_guard(
+            r#"
+[tools."demo.tool".arguments]
+require_keys = ["org", "repo"]
+"#,
+        );
+        let decision = decide_tool_argument_guards(
+            &policy,
+            "default",
+            "demo.tool",
+            Some(&json!({"org": "my-org", "repo": "svc"})),
+        )
+        .expect("guard configured");
+        assert_eq!(decision.decision, Decision::Allow);
+    }
+
+    #[test]
+    fn require_keys_denies_when_missing() {
+        let policy = policy_with_tool_guard(
+            r#"
+[tools."demo.tool".arguments]
+require_keys = ["org", "repo"]
+"#,
+        );
+        let decision = decide_tool_argument_guards(
+            &policy,
+            "default",
+            "demo.tool",
+            Some(&json!({"org": "my-org"})),
+        )
+        .expect("guard configured");
+        assert_eq!(decision.decision, Decision::Deny);
+        assert_eq!(decision.reason_category, "required_key_missing");
+        assert_eq!(decision.selector, "repo");
+    }
+
+    #[test]
+    fn require_keys_denies_when_container_absent() {
+        let policy = policy_with_tool_guard(
+            r#"
+[tools."demo.tool".arguments]
+require_keys = ["org"]
+"#,
+        );
+        let decision = decide_tool_argument_guards(&policy, "default", "demo.tool", None)
+            .expect("guard configured");
+        assert_eq!(decision.decision, Decision::Deny);
+        assert_eq!(decision.reason_category, "required_key_missing");
+    }
+
+    #[test]
+    fn forbid_keys_denies_regardless_of_value() {
+        let policy = policy_with_tool_guard(
+            r#"
+[tools."demo.tool".arguments]
+forbid_keys = ["bypass"]
+"#,
+        );
+        let decision = decide_tool_argument_guards(
+            &policy,
+            "default",
+            "demo.tool",
+            Some(&json!({"bypass": false})),
+        )
+        .expect("guard configured");
+        assert_eq!(decision.decision, Decision::Deny);
+        assert_eq!(decision.reason_category, "forbidden_key_present");
+    }
+
+    #[test]
+    fn forbid_keys_allows_when_absent() {
+        let policy = policy_with_tool_guard(
+            r#"
+[tools."demo.tool".arguments]
+forbid_keys = ["bypass"]
+"#,
+        );
+        let decision =
+            decide_tool_argument_guards(&policy, "default", "demo.tool", Some(&json!({"x": 1})))
+                .expect("guard configured");
+        assert_eq!(decision.decision, Decision::Allow);
+    }
+
+    #[test]
+    fn no_guard_configured_returns_none() {
+        let policy = policy_with_tool_guard(
+            r#"
+[tools."demo.tool".arguments]
+path_rule = "unused"
+"#,
+        );
+        assert!(
+            decide_tool_argument_guards(&policy, "default", "demo.tool", Some(&json!({})))
+                .is_none()
+        );
+    }
+
+    // --- exact / enum ---
+
+    #[test]
+    fn exact_guard_allows_matching_value() {
+        let policy = policy_with_tool_guard(
+            r#"
+[tools."demo.tool".arguments.fields.mode]
+type = "exact"
+value = "read"
+"#,
+        );
+        let decision = decide_tool_argument_guards(
+            &policy,
+            "default",
+            "demo.tool",
+            Some(&json!({"mode": "read"})),
+        )
+        .unwrap();
+        assert_eq!(decision.decision, Decision::Allow);
+    }
+
+    #[test]
+    fn exact_guard_denies_mismatched_value() {
+        let policy = policy_with_tool_guard(
+            r#"
+[tools."demo.tool".arguments.fields.mode]
+type = "exact"
+value = "read"
+"#,
+        );
+        let decision = decide_tool_argument_guards(
+            &policy,
+            "default",
+            "demo.tool",
+            Some(&json!({"mode": "write"})),
+        )
+        .unwrap();
+        assert_eq!(decision.decision, Decision::Deny);
+        assert_eq!(decision.reason_category, "exact_value_mismatch");
+    }
+
+    #[test]
+    fn enum_guard_allows_member_and_denies_non_member() {
+        let policy = policy_with_tool_guard(
+            r#"
+[tools."demo.tool".arguments.fields.org]
+type = "enum"
+values = ["my-org"]
+"#,
+        );
+        let allowed = decide_tool_argument_guards(
+            &policy,
+            "default",
+            "demo.tool",
+            Some(&json!({"org": "my-org"})),
+        )
+        .unwrap();
+        assert_eq!(allowed.decision, Decision::Allow);
+        let denied = decide_tool_argument_guards(
+            &policy,
+            "default",
+            "demo.tool",
+            Some(&json!({"org": "other-org"})),
+        )
+        .unwrap();
+        assert_eq!(denied.decision, Decision::Deny);
+        assert_eq!(denied.reason_category, "enum_value_not_allowed");
+    }
+
+    #[test]
+    fn enum_guard_denies_missing_field() {
+        let policy = policy_with_tool_guard(
+            r#"
+[tools."demo.tool".arguments.fields.org]
+type = "enum"
+values = ["my-org"]
+"#,
+        );
+        let decision =
+            decide_tool_argument_guards(&policy, "default", "demo.tool", Some(&json!({}))).unwrap();
+        assert_eq!(decision.decision, Decision::Deny);
+        assert_eq!(decision.reason_category, "field_missing");
+    }
+
+    // --- string: length + prefix ---
+
+    #[test]
+    fn string_guard_length_bounds() {
+        let policy = policy_with_tool_guard(
+            r#"
+[tools."demo.tool".arguments.fields.name]
+type = "string"
+min_length = 2
+max_length = 4
+"#,
+        );
+        assert_eq!(
+            decide_tool_argument_guards(
+                &policy,
+                "default",
+                "demo.tool",
+                Some(&json!({"name": "ok"}))
+            )
+            .unwrap()
+            .decision,
+            Decision::Allow
+        );
+        let too_short = decide_tool_argument_guards(
+            &policy,
+            "default",
+            "demo.tool",
+            Some(&json!({"name": "a"})),
+        )
+        .unwrap();
+        assert_eq!(too_short.reason_category, "string_too_short");
+        let too_long = decide_tool_argument_guards(
+            &policy,
+            "default",
+            "demo.tool",
+            Some(&json!({"name": "toolong"})),
+        )
+        .unwrap();
+        assert_eq!(too_long.reason_category, "string_too_long");
+    }
+
+    #[test]
+    fn string_guard_prefix_and_wrong_type() {
+        let policy = policy_with_tool_guard(
+            r#"
+[tools."demo.tool".arguments.fields.repo]
+type = "string"
+prefix = "my-org/"
+"#,
+        );
+        assert_eq!(
+            decide_tool_argument_guards(
+                &policy,
+                "default",
+                "demo.tool",
+                Some(&json!({"repo": "my-org/svc"}))
+            )
+            .unwrap()
+            .decision,
+            Decision::Allow
+        );
+        let mismatch = decide_tool_argument_guards(
+            &policy,
+            "default",
+            "demo.tool",
+            Some(&json!({"repo": "other-org/svc"})),
+        )
+        .unwrap();
+        assert_eq!(mismatch.reason_category, "string_prefix_mismatch");
+        let wrong_type =
+            decide_tool_argument_guards(&policy, "default", "demo.tool", Some(&json!({"repo": 5})))
+                .unwrap();
+        assert_eq!(wrong_type.reason_category, "field_wrong_type");
+    }
+
+    // --- number bounds ---
+
+    #[test]
+    fn number_guard_bounds_and_wrong_type() {
+        let policy = policy_with_tool_guard(
+            r#"
+[tools."demo.tool".arguments.fields.limit]
+type = "number"
+min = 1
+max = 100
+"#,
+        );
+        assert_eq!(
+            decide_tool_argument_guards(
+                &policy,
+                "default",
+                "demo.tool",
+                Some(&json!({"limit": 10}))
+            )
+            .unwrap()
+            .decision,
+            Decision::Allow
+        );
+        let below = decide_tool_argument_guards(
+            &policy,
+            "default",
+            "demo.tool",
+            Some(&json!({"limit": 0})),
+        )
+        .unwrap();
+        assert_eq!(below.reason_category, "number_below_minimum");
+        let above = decide_tool_argument_guards(
+            &policy,
+            "default",
+            "demo.tool",
+            Some(&json!({"limit": 1000})),
+        )
+        .unwrap();
+        assert_eq!(above.reason_category, "number_above_maximum");
+        let wrong_type = decide_tool_argument_guards(
+            &policy,
+            "default",
+            "demo.tool",
+            Some(&json!({"limit": "10"})),
+        )
+        .unwrap();
+        assert_eq!(wrong_type.reason_category, "field_wrong_type");
+    }
+
+    // --- array: length + allowed elements ---
+
+    #[test]
+    fn array_guard_length_and_allowed_elements() {
+        let policy = policy_with_tool_guard(
+            r#"
+[tools."demo.tool".arguments.fields.fields]
+type = "array"
+min_items = 1
+max_items = 2
+allowed_elements = ["id", "title"]
+"#,
+        );
+        assert_eq!(
+            decide_tool_argument_guards(
+                &policy,
+                "default",
+                "demo.tool",
+                Some(&json!({"fields": ["id"]}))
+            )
+            .unwrap()
+            .decision,
+            Decision::Allow
+        );
+        let too_short = decide_tool_argument_guards(
+            &policy,
+            "default",
+            "demo.tool",
+            Some(&json!({"fields": []})),
+        )
+        .unwrap();
+        assert_eq!(too_short.reason_category, "array_too_short");
+        let too_long = decide_tool_argument_guards(
+            &policy,
+            "default",
+            "demo.tool",
+            Some(&json!({"fields": ["id", "title", "status"]})),
+        )
+        .unwrap();
+        assert_eq!(too_long.reason_category, "array_too_long");
+        let not_allowed = decide_tool_argument_guards(
+            &policy,
+            "default",
+            "demo.tool",
+            Some(&json!({"fields": ["id", "secret"]})),
+        )
+        .unwrap();
+        assert_eq!(not_allowed.reason_category, "array_element_not_allowed");
+    }
+
+    // --- url guard ---
+
+    fn url_policy() -> McpPolicyFile {
+        policy_with_tool_guard(
+            r#"
+[tools."demo.tool".arguments.fields.url]
+type = "url"
+schemes = ["https"]
+hosts = ["api.example.invalid"]
+ports = [443]
+path_prefixes = ["/v1/"]
+"#,
+        )
+    }
+
+    #[test]
+    fn url_guard_allows_matching_url() {
+        let policy = url_policy();
+        let decision = decide_tool_argument_guards(
+            &policy,
+            "default",
+            "demo.tool",
+            Some(&json!({"url": "https://api.example.invalid/v1/search?q=x"})),
+        )
+        .unwrap();
+        assert_eq!(decision.decision, Decision::Allow);
+    }
+
+    #[test]
+    fn url_guard_denies_wrong_scheme() {
+        let policy = url_policy();
+        let decision = decide_tool_argument_guards(
+            &policy,
+            "default",
+            "demo.tool",
+            Some(&json!({"url": "http://api.example.invalid/v1/search"})),
+        )
+        .unwrap();
+        assert_eq!(decision.reason_category, "url_scheme_not_allowed");
+    }
+
+    #[test]
+    fn url_guard_denies_unlisted_host() {
+        let policy = url_policy();
+        let decision = decide_tool_argument_guards(
+            &policy,
+            "default",
+            "demo.tool",
+            Some(&json!({"url": "https://evil.example/v1/search"})),
+        )
+        .unwrap();
+        assert_eq!(decision.reason_category, "url_host_not_allowed");
+    }
+
+    #[test]
+    fn url_guard_denies_userinfo_confusable_authority() {
+        let policy = url_policy();
+        let decision = decide_tool_argument_guards(
+            &policy,
+            "default",
+            "demo.tool",
+            Some(&json!({"url": "https://api.example.invalid@evil.example/v1/x"})),
+        )
+        .unwrap();
+        assert_eq!(decision.reason_category, "url_malformed");
+    }
+
+    #[test]
+    fn url_guard_denies_percent_encoded_value() {
+        let policy = url_policy();
+        let decision = decide_tool_argument_guards(
+            &policy,
+            "default",
+            "demo.tool",
+            Some(&json!({"url": "https://api.example.invalid/v1/%2e%2e"})),
+        )
+        .unwrap();
+        assert_eq!(decision.reason_category, "url_malformed");
+    }
+
+    /// A raw `..` path segment must not be able to defeat a `path_prefixes`
+    /// allowlist: `/api/../admin` has a raw string that starts with `/api/`
+    /// but a downstream HTTP server would commonly resolve it to `/admin`.
+    #[test]
+    fn url_guard_denies_dot_dot_path_traversal() {
+        let policy = policy_with_tool_guard(
+            r#"
+[tools."demo.tool".arguments.fields.url]
+type = "url"
+path_prefixes = ["/api/"]
+"#,
+        );
+        for path in [
+            "/api/../admin",
+            "/api/./allowed",
+            "/api/a/../../admin",
+            "/api//../admin",
+        ] {
+            let url = format!("https://api.example.invalid{path}");
+            let decision = decide_tool_argument_guards(
+                &policy,
+                "default",
+                "demo.tool",
+                Some(&json!({"url": url})),
+            )
+            .unwrap();
+            assert_eq!(
+                decision.reason_category, "url_malformed",
+                "path={path} should be rejected as malformed, got {decision:?}"
+            );
+        }
+        // A genuinely allowed path (no dot segments) still passes.
+        let allowed = decide_tool_argument_guards(
+            &policy,
+            "default",
+            "demo.tool",
+            Some(&json!({"url": "https://api.example.invalid/api/widgets"})),
+        )
+        .unwrap();
+        assert_eq!(allowed.decision, Decision::Allow);
+    }
+
+    #[test]
+    fn url_guard_denies_out_of_prefix_path() {
+        let policy = url_policy();
+        let decision = decide_tool_argument_guards(
+            &policy,
+            "default",
+            "demo.tool",
+            Some(&json!({"url": "https://api.example.invalid/v2/search"})),
+        )
+        .unwrap();
+        assert_eq!(decision.reason_category, "url_path_prefix_not_allowed");
+    }
+
+    #[test]
+    fn url_guard_denies_wrong_port() {
+        let policy = policy_with_tool_guard(
+            r#"
+[tools."demo.tool".arguments.fields.url]
+type = "url"
+schemes = ["https"]
+ports = [8443]
+"#,
+        );
+        let decision = decide_tool_argument_guards(
+            &policy,
+            "default",
+            "demo.tool",
+            Some(&json!({"url": "https://api.example.invalid/x"})),
+        )
+        .unwrap();
+        assert_eq!(decision.reason_category, "url_port_not_allowed");
+    }
+
+    #[test]
+    fn url_guard_uses_explicit_port_when_present() {
+        let policy = policy_with_tool_guard(
+            r#"
+[tools."demo.tool".arguments.fields.url]
+type = "url"
+ports = [8443]
+"#,
+        );
+        let decision = decide_tool_argument_guards(
+            &policy,
+            "default",
+            "demo.tool",
+            Some(&json!({"url": "https://api.example.invalid:8443/x"})),
+        )
+        .unwrap();
+        assert_eq!(decision.decision, Decision::Allow);
+    }
+
+    // --- nested selector ---
+
+    #[test]
+    fn nested_selector_resolves_object_field() {
+        let policy = policy_with_tool_guard(
+            r#"
+[tools."demo.tool".arguments.fields."filter.status"]
+type = "enum"
+values = ["open", "closed"]
+"#,
+        );
+        let allowed = decide_tool_argument_guards(
+            &policy,
+            "default",
+            "demo.tool",
+            Some(&json!({"filter": {"status": "open"}})),
+        )
+        .unwrap();
+        assert_eq!(allowed.decision, Decision::Allow);
+        let denied = decide_tool_argument_guards(
+            &policy,
+            "default",
+            "demo.tool",
+            Some(&json!({"filter": {"status": "archived"}})),
+        )
+        .unwrap();
+        assert_eq!(denied.reason_category, "enum_value_not_allowed");
+    }
+
+    #[test]
+    fn nested_selector_denies_when_intermediate_missing_or_wrong_type() {
+        let policy = policy_with_tool_guard(
+            r#"
+[tools."demo.tool".arguments.fields."filter.status"]
+type = "enum"
+values = ["open"]
+"#,
+        );
+        let missing_filter =
+            decide_tool_argument_guards(&policy, "default", "demo.tool", Some(&json!({}))).unwrap();
+        assert_eq!(missing_filter.reason_category, "field_missing");
+        let wrong_type_filter = decide_tool_argument_guards(
+            &policy,
+            "default",
+            "demo.tool",
+            Some(&json!({"filter": "not-an-object"})),
+        )
+        .unwrap();
+        assert_eq!(wrong_type_filter.reason_category, "field_missing");
+    }
+
+    #[test]
+    fn nested_selector_resolves_array_index() {
+        let policy = policy_with_tool_guard(
+            r#"
+[tools."demo.tool".arguments.fields."items.0.id"]
+type = "exact"
+value = "abc"
+"#,
+        );
+        let allowed = decide_tool_argument_guards(
+            &policy,
+            "default",
+            "demo.tool",
+            Some(&json!({"items": [{"id": "abc"}]})),
+        )
+        .unwrap();
+        assert_eq!(allowed.decision, Decision::Allow);
+        let out_of_range = decide_tool_argument_guards(
+            &policy,
+            "default",
+            "demo.tool",
+            Some(&json!({"items": []})),
+        )
+        .unwrap();
+        assert_eq!(out_of_range.reason_category, "field_missing");
+    }
+
+    // --- method param guards apply beyond resources/read ---
+
+    #[test]
+    fn method_param_guard_applies_to_custom_method() {
+        let policy = policy_with_method_guard(
+            r#"
+[methods."demo/method".params]
+require_keys = ["destination"]
+
+[methods."demo/method".params.fields.destination]
+type = "enum"
+values = ["eng-alerts"]
+"#,
+        );
+        let allowed = decide_method_param_guards(
+            &policy,
+            "default",
+            "demo/method",
+            Some(&json!({"destination": "eng-alerts"})),
+        )
+        .unwrap();
+        assert_eq!(allowed.decision, Decision::Allow);
+        let denied = decide_method_param_guards(
+            &policy,
+            "default",
+            "demo/method",
+            Some(&json!({"destination": "random"})),
+        )
+        .unwrap();
+        assert_eq!(denied.decision, Decision::Deny);
+    }
+
+    #[test]
+    fn scalar_matches_does_not_coerce_across_types() {
+        assert!(!ScalarValue::Int(5).matches(&json!("5")));
+        assert!(!ScalarValue::Str("5".to_string()).matches(&json!(5)));
+        assert!(ScalarValue::Int(5).matches(&json!(5)));
+        assert!(ScalarValue::Bool(true).matches(&json!(true)));
+    }
+
+    // --- server-scoped guards ---
+
+    fn server_scoped_tool_guard_policy() -> McpPolicyFile {
+        parse_mcp_policy(
+            r#"
+schema_version = "ef-mcp-policy/v0.2"
+name = "server-scoped-guard"
+
+[servers.production.tools]
+allow = ["github.create_issue"]
+
+[servers.production.tools."github.create_issue".arguments]
+require_keys = ["org"]
+
+[servers.production.tools."github.create_issue".arguments.fields.org]
+type = "enum"
+values = ["approved-org"]
+"#,
+        )
+        .expect("valid server-scoped policy")
+    }
+
+    #[test]
+    fn server_scoped_tool_guard_is_enforced_for_matching_server() {
+        let policy = server_scoped_tool_guard_policy();
+        let allowed = decide_tool_argument_guards(
+            &policy,
+            "production",
+            "github.create_issue",
+            Some(&json!({"org": "approved-org"})),
+        )
+        .expect("server-scoped guard configured");
+        assert_eq!(allowed.decision, Decision::Allow);
+
+        let denied = decide_tool_argument_guards(
+            &policy,
+            "production",
+            "github.create_issue",
+            Some(&json!({"org": "other-org"})),
+        )
+        .expect("server-scoped guard configured");
+        assert_eq!(denied.decision, Decision::Deny);
+        assert_eq!(denied.reason_category, "enum_value_not_allowed");
+    }
+
+    /// A server-scoped guard must not leak onto a different server scope: a
+    /// tool call routed through a different `server_name` (or the default
+    /// scope) sees no guard at all here, since neither a global nor a
+    /// matching server-scoped guard is configured for it.
+    #[test]
+    fn server_scoped_tool_guard_does_not_apply_to_a_different_server() {
+        let policy = server_scoped_tool_guard_policy();
+        assert!(decide_tool_argument_guards(
+            &policy,
+            "default",
+            "github.create_issue",
+            Some(&json!({"org": "other-org"})),
+        )
+        .is_none());
+        assert!(decide_tool_argument_guards(
+            &policy,
+            "staging",
+            "github.create_issue",
+            Some(&json!({"org": "other-org"})),
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn server_scoped_method_param_guard_is_enforced() {
+        let policy = parse_mcp_policy(
+            r#"
+schema_version = "ef-mcp-policy/v0.2"
+name = "server-scoped-method-guard"
+
+[servers.production.methods]
+allow = ["tools/list", "tools/call", "demo/method"]
+
+[servers.production.methods."demo/method".params]
+require_keys = ["destination"]
+
+[servers.production.methods."demo/method".params.fields.destination]
+type = "enum"
+values = ["eng-alerts"]
+"#,
+        )
+        .expect("valid policy");
+
+        let allowed = decide_method_param_guards(
+            &policy,
+            "production",
+            "demo/method",
+            Some(&json!({"destination": "eng-alerts"})),
+        )
+        .expect("server-scoped guard configured");
+        assert_eq!(allowed.decision, Decision::Allow);
+
+        let denied = decide_method_param_guards(
+            &policy,
+            "production",
+            "demo/method",
+            Some(&json!({"destination": "other"})),
+        )
+        .expect("server-scoped guard configured");
+        assert_eq!(denied.decision, Decision::Deny);
+
+        assert!(decide_method_param_guards(
+            &policy,
+            "default",
+            "demo/method",
+            Some(&json!({"destination": "other"})),
+        )
+        .is_none());
+    }
+
+    /// When both a global and a server-scoped guard are configured for the
+    /// same tool, both must pass (logical AND) — a request that satisfies
+    /// one but not the other is still denied.
+    #[test]
+    fn global_and_server_scoped_tool_guards_both_must_pass() {
+        let policy = parse_mcp_policy(
+            r#"
+schema_version = "ef-mcp-policy/v0.2"
+name = "global-and-server-guard"
+
+[tools]
+allow = ["github.create_issue"]
+
+[tools."github.create_issue".arguments]
+require_keys = ["repo"]
+
+[servers.production.tools]
+allow = ["github.create_issue"]
+
+[servers.production.tools."github.create_issue".arguments.fields.org]
+type = "enum"
+values = ["approved-org"]
+"#,
+        )
+        .expect("valid policy");
+
+        // Satisfies the global require_keys guard but not the server-scoped
+        // enum guard.
+        let fails_server_guard = decide_tool_argument_guards(
+            &policy,
+            "production",
+            "github.create_issue",
+            Some(&json!({"repo": "x", "org": "other-org"})),
+        )
+        .expect("guard configured");
+        assert_eq!(fails_server_guard.decision, Decision::Deny);
+        assert_eq!(fails_server_guard.reason_category, "enum_value_not_allowed");
+
+        // Satisfies the server-scoped enum guard but not the global
+        // require_keys guard.
+        let fails_global_guard = decide_tool_argument_guards(
+            &policy,
+            "production",
+            "github.create_issue",
+            Some(&json!({"org": "approved-org"})),
+        )
+        .expect("guard configured");
+        assert_eq!(fails_global_guard.decision, Decision::Deny);
+        assert_eq!(fails_global_guard.reason_category, "required_key_missing");
+
+        // Satisfies both.
+        let allowed = decide_tool_argument_guards(
+            &policy,
+            "production",
+            "github.create_issue",
+            Some(&json!({"repo": "x", "org": "approved-org"})),
+        )
+        .expect("guard configured");
+        assert_eq!(allowed.decision, Decision::Allow);
+
+        // Outside the "production" server scope, only the global guard
+        // applies.
+        let default_scope = decide_tool_argument_guards(
+            &policy,
+            "default",
+            "github.create_issue",
+            Some(&json!({"repo": "x", "org": "anything-goes-here"})),
+        )
+        .expect("global guard still configured");
+        assert_eq!(default_scope.decision, Decision::Allow);
     }
 }

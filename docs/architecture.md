@@ -11,7 +11,7 @@ plus an experimental MCP stdio boundary proxy.
 - `etherfence-detectors`: posture finding heuristics over inventory
 - `etherfence-policy`: scan-only TOML posture policy evaluation
 - `etherfence-report`: human-readable, JSON, Markdown, and SARIF report rendering
-- `etherfence-mcp`: experimental MCP stdio boundary proxy (policy, audit log, proxy engine)
+- `etherfence-mcp`: experimental MCP stdio boundary proxy (policy — including the v1.5.0 `ef-mcp-policy/v0.2` argument/param field guards, audit log, proxy engine)
 - `etherfence-setup`: local `setup` onboarding command family — client detection/wrapping (`detect`/`plan`/`apply`/`rollback`/`doctor`), the v1.2.0 client catalog (`catalog.rs`), MCP server capability classification/starter-policy recommendation (`classification.rs`), the v1.3.0 MCP server trust and integrity assessment (`trust.rs`), and the v1.4.0 integrity baseline/drift comparison (`baseline.rs`)
 
 ## Scan data flow
@@ -71,6 +71,21 @@ plus an experimental MCP stdio boundary proxy.
     plus an optional `ETHERFENCE_REAL_MCP_CMD` real-server smoke test that
     is skipped by default.
 
+v1.5.0 adds an optional schema extension, `ef-mcp-policy/v0.2`: after the
+tool/method/path decision above resolves (steps 5-8) and is still `allow`,
+`decide_tool_argument_guards`/`decide_method_param_guards` in
+`etherfence-mcp::policy` evaluate any configured `require_keys`/
+`forbid_keys`/`fields` guard against the request's `arguments`/`params`
+object — the same pure, request-content-only evaluation style as the v0.4.0
+path guard, and the only decision function this feature adds. There is no
+second implementation: `mcp-proxy`'s `inspect_client_line`/
+`inspect_server_line` (step 5-10 above) and the serverless `mcp-policy
+check` command (`policy_ux::dry_run_check`) call these exact same functions,
+so a dry run and a live decision can never diverge. `ef-mcp-policy/v0.1`
+policies are unaffected — the new fields are additive, and a v0.2-only
+construct under `schema_version = "ef-mcp-policy/v0.1"` is rejected at
+policy-load time (step 2), before any request is inspected.
+
 See `docs/mcp-proxy.md` for details and limitations.
 
 ## Client catalog and MCP capability classification (v1.2.0)
@@ -129,6 +144,23 @@ Command/argument fingerprints are SHA-256 hashes computed over already
 locally-read text, never persisted in raw form. Rendering (`--format
 json`/human) happens in `etherfence-cli`, mirroring the v1.2.0/v1.3.0
 rendering split exactly.
+
+## Argument-aware MCP runtime policy (v1.5.0)
+
+`ef-mcp-policy/v0.2` adds no new module, crate, or trust boundary: the
+schema types (`ArgumentGuard`, `ScalarValue`, `FieldGuard`), the bounded
+selector parser/resolver, the hand-rolled URL-guard parser, and the
+evaluator all live in `etherfence-mcp::policy` alongside the v0.1 types they
+extend. `etherfence-mcp::audit` gains three additive `AuditRecord` fields
+(`guard_key`, `guard_selector`, `guard_reason_category`); `etherfence-mcp::
+policy_ux` extends `explain_policy`/`dry_run_check`'s existing summaries;
+`etherfence-cli` extends the existing `mcp-policy` subcommand rendering and
+gains four new `init` profiles backed by four new checked-in example
+policies under `examples/policies/`. No new dependency was added — URL and
+selector parsing are hand-rolled, deterministic, string-level operations,
+matching how the v0.4.0 path guard's `LexicalPath` normalizer is already
+implemented. This feature narrows an already-allowed decision; it never
+widens one, infers intent, or inspects free-text content.
 
 ## Runtime posture
 

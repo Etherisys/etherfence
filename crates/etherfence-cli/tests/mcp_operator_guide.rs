@@ -226,6 +226,7 @@ fn readme_example_policy_count_matches_checked_in_policies() {
         13 => "Thirteen",
         14 => "Fourteen",
         15 => "Fifteen",
+        16 => "Sixteen",
         other => panic!(
             "add a number-word mapping for {other} checked-in MCP example policies, \
              then update README.md's stated count to match"

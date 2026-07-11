@@ -299,6 +299,66 @@ Fail-closed cases:
   guarded path-like value with bidi/zero-width characters -> denied before
   forwarding.
 
+### Argument/param field guards (v1.5.0, `ef-mcp-policy/v0.2`)
+
+v1.5.0 adds an optional, versioned schema extension, `ef-mcp-policy/v0.2`,
+that narrows an already-allowed tool call or method by constraining specific
+fields inside its `arguments`/`params` object. This exists to **contain**
+the consequences of a mistaken or prompt-injected agent — not to detect
+prompt injection, infer intent, or evaluate free-text content. Like the path
+guard above, it is deliberately narrow: no general regex/scripting/
+expression language, no shell-command parsing, no DLP/SQL analysis, and no
+claim that a guarded call makes the wrapped server safe overall.
+
+`ef-mcp-policy/v0.1` policies are unaffected: parsing and decisions for a
+`schema_version = "ef-mcp-policy/v0.1"` file are unchanged by this feature,
+and a v0.2-only construct under that schema_version is a load-time error
+naming `ef-mcp-policy/v0.2`.
+
+```toml
+schema_version = "ef-mcp-policy/v0.2"
+
+[tools."github.create_issue".arguments]
+require_keys = ["org", "repo"]
+
+[tools."github.create_issue".arguments.fields.org]
+type = "enum"
+values = ["my-org"]
+```
+
+Six field-guard primitives (`exact`, `enum`, `string`, `number`, `array`,
+`url`) plus object-level `require_keys`/`forbid_keys`, addressable via a
+bounded, non-regex selector syntax (dotted object keys / array indices, up
+to 8 segments). Full schema in
+[`docs/mcp-policy-ux.md`](mcp-policy-ux.md#ef-mcp-policyv02-argumentparam-field-guards)
+and `specs/004-argument-aware-mcp-policy/contracts/ef-mcp-policy-v0.2.md`.
+
+Decision rules:
+
+1. Guards apply only where configured; an unguarded field behaves exactly as
+   it does today.
+2. The v0.1 path guard (if any) is evaluated first, unchanged; v0.2 field
+   guards are evaluated only when that decision is still `Allow`, and the
+   first failing guard wins. There is exactly one decision evaluator, shared
+   by the live proxy and `mcp-policy check` — never two implementations.
+3. A missing guarded key, a value of the wrong JSON type, a malformed value
+   (an unparseable URL, a URL with userinfo in its authority, or any
+   `%`-encoded URL value), or an unresolvable selector all deny fail-closed
+   for that guard.
+4. The URL guard's "effective port" is the value's explicit port, else the
+   scheme's registered default (`http`→80, `https`→443 only); other schemes
+   require an explicit port for a port allowlist to ever match.
+5. Unlike the v0.1 path guard, which the proxy only ever evaluates for
+   `resources/read`, the v0.2 params guard applies to **any** method with a
+   configured `[methods."<method>".params]` guard, in both directions
+   (client→server and, newly, server→client).
+
+Audit records for a v0.2 guard decision add `guard_key`, `guard_selector`,
+and `guard_reason_category` — safe identifiers only, mirroring `path_rule`/
+`path_key`/`path_classification`. The evaluated field value, the full
+arguments/params object, and any URL (including its query string) are never
+logged or echoed in a denial response.
+
 ## `tools/list` filtering
 
 The proxy records the id of each forwarded client `tools/list` request. When a
@@ -433,6 +493,13 @@ Fields:
   as `inside_allowed_root`, `outside_allowed_roots`, `inside_denied_root`,
   `path_parse_error`, or `unicode_suspicious_path_value`, never the raw path or
   URI
+- `guard_key`, `guard_selector`, `guard_reason_category`: optional v1.5.0 safe
+  metadata for configured `ef-mcp-policy/v0.2` argument/param field guards
+  only. `guard_reason_category` is a closed-set string such as
+  `enum_value_not_allowed`, `required_key_missing`, `field_missing`,
+  `field_wrong_type`, `string_prefix_mismatch`, `number_below_minimum`,
+  `array_element_not_allowed`, or `url_host_not_allowed` — never the guarded
+  value
 - `decision`: `allow`, `deny`, or `policy_error`
 - `reason`: the policy or fail-safe reason for the decision
 
@@ -582,8 +649,10 @@ non-goals.
 - stdio transport only; HTTP/SSE MCP transports are not supported.
 - Newline-delimited JSON-RPC framing only; each message must be one line.
 - Exact tool-name and method-name matching only; no wildcard (except the
-  `"*` method allow wildcard), prefix, regex, argument-aware, or
-  schema-aware rules.
+  `"*` method allow wildcard), prefix, or regex matching of names. As of
+  v1.5.0, `ef-mcp-policy/v0.2` adds bounded, non-regex argument/param field
+  guards (see above) — but there is still no general schema-aware,
+  content-inspecting, or free-text-analyzing policy language.
 - Per-server scoping is selected explicitly with `--server-name`; the proxy
   does not auto-discover or authenticate MCP server identity.
 - The proxy inspects every client→server JSON-RPC request method and
@@ -593,8 +662,10 @@ non-goals.
 - It does not inspect tool results, resource contents, prompt responses,
   or sampling responses beyond what is needed for `tools/list` response
   filtering.
-- No filesystem path-scoped argument policy in this release; argument
-  values are never inspected or logged.
+- Argument/param values are inspected only where a path guard (v0.4.0) or a
+  v0.2 field guard (v1.5.0) is explicitly configured for that key/selector;
+  they are never inspected otherwise, and are never written to the audit log
+  or a denial response regardless.
 - JSON-RPC batch arrays are not unpacked. A batch line in either inspected
   direction is denied fail closed — answered with a single null-id JSON-RPC
   error toward the sender, audited as `batch_denied`, and never forwarded —

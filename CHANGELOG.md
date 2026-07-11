@@ -11,9 +11,105 @@ v0.1.x line is scan-only; nothing in v0.1.x performs runtime blocking, MCP
 proxying, daemon mode, shell hooks, command interception, terminal-command
 scanning, or network interception. v0.2.x adds one opt-in runtime
 component: an MCP stdio boundary proxy, whose CLI surface and
-`ef-mcp-policy/v0.1` policy schema are stable as of v1.0.0. EtherFence still
+`ef-mcp-policy/v0.1` policy schema are stable as of v1.0.0. v1.5.0 adds an
+optional, additive `ef-mcp-policy/v0.2` schema extension for argument/param
+field guards; `ef-mcp-policy/v0.1` policies are unaffected. EtherFence still
 has no daemon mode, shell hooks, command interception, terminal-command
 scanning, or network interception.
+
+## [1.5.0] - 2026-07-11
+
+### Added
+
+- New versioned MCP proxy policy schema extension `ef-mcp-policy/v0.2`,
+  additive over `ef-mcp-policy/v0.1`: every existing v0.1 policy continues
+  to parse and evaluate byte-for-byte identically, and a v0.2-only
+  construct (`require_keys`/`forbid_keys`/`fields`) under `schema_version =
+  "ef-mcp-policy/v0.1"` is rejected at load time with an error naming
+  `ef-mcp-policy/v0.2`. Documented in `docs/mcp-policy-ux.md` and
+  `specs/004-argument-aware-mcp-policy/contracts/ef-mcp-policy-v0.2.md`.
+- **Argument/param field guards**, configurable per guarded `tools/call`
+  `arguments` object or method `params` object: object-level `require_keys`/
+  `forbid_keys`, plus six per-field primitives addressed through one
+  bounded, non-regex selector syntax (dotted object keys / array indices,
+  up to 8 segments) — `exact` (one scalar), `enum` (a finite scalar set),
+  `string` (length bounds, literal prefix), `number` (inclusive min/max),
+  `array` (length bounds, a finite allowed-element set), and `url` (scheme
+  allowlist, normalized-hostname allowlist, effective-port allowlist —
+  explicit port or the scheme's default, `http`→80/`https`→443 only — and
+  boundary-safe path-prefix allowlist). Guards apply only where configured;
+  an unguarded field's behavior is unchanged.
+- Fail-closed per guard: a missing guarded key, a value of the wrong JSON
+  type, a malformed value, or an unresolvable selector all deny that one
+  guard's decision. The URL guard specifically rejects, without attempting
+  to decode or partially parse them, any value containing `%` (percent
+  encoding is how allowlist checks get bypassed), userinfo (`@`) in its
+  authority (the classic `trusted.example@evil.example` confusable-host
+  attack), or a `.`/`..` path segment (a path-prefix allowlist check on the
+  raw string alone would otherwise be bypassable, since a downstream server
+  commonly resolves `/api/../admin` to `/admin`). A `number` guard's `min`/
+  `max` and any `exact`/`enum`/`allowed_elements` scalar must be finite —
+  `NaN`/`+-infinity` are rejected at load time rather than silently
+  disabling the bound they appear in (every comparison against `NaN` is
+  `false`).
+- One shared, pure decision evaluator
+  (`decide_tool_argument_guards`/`decide_method_param_guards` in
+  `etherfence-mcp::policy`) used by both the live `mcp-proxy`
+  (`inspect_client_line`/`inspect_server_line`) and the serverless
+  `mcp-policy check` dry run (`policy_ux::dry_run_check`) — no duplicated
+  decision logic, so a dry run and a live proxy decision can never
+  diverge. v0.2 guards are evaluated only when the existing v0.1
+  method/tool/path decision is still `allow`; the v0.1 path guard's own
+  precedence and its `resources/read`-only scope are completely unchanged.
+  The v0.2 params guard is new, additive capability applicable to any
+  method (not just `resources/read`) and, for the first time, to
+  server→client method params as well as client→server.
+- Argument/param guards may be configured globally
+  (`[tools."<tool>".arguments]` / `[methods."<method>".params]`) and/or per
+  server (`[servers."<name>".tools."<tool>".arguments]` /
+  `[servers."<name>".methods."<method>".params]`); when both are configured
+  for the same tool/method, both must pass (guards only narrow, so there is
+  no "more specific wins" override). A server-scoped guard never applies
+  outside its own server scope.
+- `etherfence mcp-policy validate` rejects (fail closed, at load time):
+  duplicate/conflicting `require_keys`/`forbid_keys` on the same key,
+  invalid or unbounded selectors (empty/too many segments, disallowed
+  characters, suspicious Unicode via the existing hardening), invalid URL
+  guard schemes/hosts/ports, impossible numeric/length/array ranges
+  (`min > max`), empty `enum`/`allowed_elements` lists, unsupported guard
+  types, and v0.2-only constructs under a v0.1 `schema_version`.
+- `etherfence mcp-policy explain` gains an `Argument/param field guards:`
+  section listing every configured v0.2 guard, its scope, and its
+  primitive kind. `etherfence mcp-policy check` reports a `Guard decision:
+  key=... selector=... reason_category=...` line and structured
+  `guard_key`/`guard_selector`/`guard_reason_category` fields when a v0.2
+  guard produced the decision, using the same closed-set reason-category
+  vocabulary as the audit log (e.g. `enum_value_not_allowed`,
+  `required_key_missing`, `forbidden_key_present`, `field_missing`,
+  `field_wrong_type`, `string_prefix_mismatch`, `number_below_minimum`,
+  `array_element_not_allowed`, `url_host_not_allowed`).
+- `etherfence mcp-policy init` gains four new profiles demonstrating v0.2
+  guards, each backed by a new checked-in example policy:
+  `github-scoped-orgs`, `messaging-named-destinations`,
+  `browser-approved-hosts`, `readonly-operation-guard`.
+- `AuditRecord` gains three additive fields — `guard_key`, `guard_selector`,
+  `guard_reason_category` — mirroring the existing `path_rule`/`path_key`/
+  `path_classification` trio. The evaluated field value, the full
+  arguments/params object, and any URL (including its query string) are
+  never written to the audit log or echoed in a JSON-RPC denial response —
+  only safe rule/guard identifiers, selector/key names, decisions, and
+  closed-set reason categories.
+- No new crate dependency: URL parsing/normalization and selector
+  resolution are hand-rolled, deterministic, string-level operations in
+  `crates/etherfence-mcp/src/policy.rs`, matching how the v0.4.0 path
+  guard's lexical path normalizer is already implemented.
+- **Non-goals** (explicitly not implemented): natural-language analysis or
+  prompt-injection detection/intent inference; a general regular-expression,
+  scripting, or expression policy language; shell-command parsing or
+  command-content allowlisting; DLP/content inspection or SQL analysis
+  beyond the six structured primitives above; remote MCP proxying; a
+  daemon or control plane; automatic policy widening; and no claim that a
+  v0.2-guarded/allowed tool call makes the wrapped MCP server safe overall.
 
 ## [1.4.0] - 2026-07-11
 

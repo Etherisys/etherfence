@@ -1,0 +1,16 @@
+schema_version = "ef-mcp-policy/v0.2"
+name = "mcp-messaging-named-destinations"
+
+# v1.5.0 example: allow a messaging-send tool, but constrain delivery to a
+# small, named set of destinations, and forbid a "bypass"-style escape-hatch
+# argument some messaging tools expose, regardless of its value.
+[tools]
+allow = ["messaging.send"]
+
+[tools."messaging.send".arguments]
+require_keys = ["destination"]
+forbid_keys = ["bypass"]
+
+[tools."messaging.send".arguments.fields.destination]
+type = "enum"
+values = ["eng-alerts", "on-call"]

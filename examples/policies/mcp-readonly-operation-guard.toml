@@ -1,0 +1,25 @@
+schema_version = "ef-mcp-policy/v0.2"
+name = "mcp-readonly-operation-guard"
+
+# v1.5.0 example: allow a general-purpose data tool, but lock its `operation`
+# field to read-only values, bound the `limit` field numerically, and
+# constrain a nested `filter.status` selector to a named enum -- demonstrating
+# the bounded nested-selector syntax alongside the enum/number primitives.
+[tools]
+allow = ["data.query"]
+
+[tools."data.query".arguments]
+require_keys = ["operation"]
+
+[tools."data.query".arguments.fields.operation]
+type = "enum"
+values = ["read", "list", "get"]
+
+[tools."data.query".arguments.fields.limit]
+type = "number"
+min = 1
+max = 100
+
+[tools."data.query".arguments.fields."filter.status"]
+type = "enum"
+values = ["open", "closed"]

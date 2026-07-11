@@ -637,11 +637,54 @@
   (`ef-baseline/v0.1.3`), `mcp-proxy`, `ef-mcp-policy/v0.1`, and every
   other existing `setup` subcommand are unchanged
 
+## v1.5.0 - argument-aware MCP runtime policy
+
+- New versioned schema extension `ef-mcp-policy/v0.2`, additive over
+  `ef-mcp-policy/v0.1`: existing v0.1 policies parse and evaluate
+  identically; a v0.2-only construct under `schema_version =
+  "ef-mcp-policy/v0.1"` fails to load with an error naming
+  `ef-mcp-policy/v0.2`
+- Six field-guard primitives, configurable per guarded `tools/call`
+  `arguments` object or method `params` object, plus object-level
+  `require_keys`/`forbid_keys`: exact-value, finite-enum, string
+  length/prefix, numeric bounds, array length/allowed-element sets, and URL
+  scheme/normalized-hostname/effective-port/path-prefix allowlists — all
+  reachable via one bounded, non-regex selector syntax (dotted object
+  keys/array indices, max 8 segments)
+- Every guard fails closed for its own field on a missing key, wrong JSON
+  type, malformed value (including any URL with userinfo in its authority
+  or percent-encoding — both rejected outright rather than decoded), or an
+  unresolvable selector; an unguarded field's behavior is unchanged
+- One shared, pure decision evaluator (`decide_tool_argument_guards`/
+  `decide_method_param_guards` in `etherfence-mcp::policy`) used by both the
+  live `mcp-proxy` and the serverless `mcp-policy check` dry run — no
+  duplicated decision logic; v0.2 guards are evaluated only when the
+  existing v0.1 method/tool/path decision is still `allow`, and never
+  change v0.1-only policy behavior
+- `mcp-policy validate`/`explain`/`init`/`check` all extended for v0.2:
+  `validate` rejects duplicate/conflicting guards, invalid/unbounded
+  selectors, invalid URL guard hosts/ports/schemes, impossible ranges,
+  empty enums, and unsupported guard types; `explain` lists every
+  configured guard; `check` reports guard key/selector/reason-category;
+  four new `init` profiles (`github-scoped-orgs`,
+  `messaging-named-destinations`, `browser-approved-hosts`,
+  `readonly-operation-guard`) with matching checked-in example policies
+- Audit records add `guard_key`/`guard_selector`/`guard_reason_category` —
+  safe identifiers and a closed-set reason category only; the evaluated
+  field value, the full arguments/params object, and any URL (including
+  its query string) are never logged or echoed in a denial response
+- Non-goals: no prompt-injection detection or natural-language/intent
+  analysis, no general regex/scripting/expression policy language, no
+  shell-command parsing or command-content allowlisting, no DLP/content
+  inspection or SQL analysis beyond the six structured primitives, no
+  remote MCP proxying, no daemon/control plane, no automatic policy
+  widening, and no claim that a guarded/allowed call makes the wrapped MCP
+  server safe overall
+
 ## v0.2.x ideas
 
 - Expand tested config schemas and platform paths
 - Add baseline fingerprint migration notes if needed
-- Add richer machine-readable policy checks
 - Improve documentation for safe enterprise rollout
 - Consider MCP proxy policy evolution (patterns, richer server identity binding) once real-world examples stabilize
 

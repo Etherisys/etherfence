@@ -14,14 +14,18 @@ pub mod unicode;
 
 pub use audit::{redacted_argument_keys, redacted_param_keys, AuditLog, AuditRecord};
 pub use policy::{
-    decide_method, decide_tool_argument_paths, decide_tool_call, is_always_allowed_method,
-    load_mcp_policy, parse_mcp_policy, Decision, McpPolicyFile, MethodDirection, MethodRules,
-    PolicyDecision, ServerPolicy, ToolRules, ALWAYS_ALLOWED_METHODS, DEFAULT_ALLOWED_METHODS,
-    SUPPORTED_MCP_POLICY_SCHEMA_VERSION,
+    decide_method, decide_method_param_guards, decide_method_param_paths,
+    decide_tool_argument_guards, decide_tool_argument_paths, decide_tool_call,
+    is_always_allowed_method, load_mcp_policy, parse_mcp_policy, ArgumentGuard, Decision,
+    FieldGuard, GuardPolicyDecision, McpPolicyFile, MethodDirection, MethodRules,
+    PathPolicyDecision, PolicyDecision, ScalarValue, ServerPolicy, ToolRules,
+    ALWAYS_ALLOWED_METHODS, DEFAULT_ALLOWED_METHODS, SUPPORTED_MCP_POLICY_SCHEMA_VERSION,
+    SUPPORTED_MCP_POLICY_SCHEMA_VERSIONS, SUPPORTED_MCP_POLICY_SCHEMA_VERSION_V2,
 };
 pub use policy_ux::{
-    dry_run_check, explain_policy, CheckOutcome, GuardScope, GuardSummary, MethodPolicySummary,
-    PathRuleSummary, PolicyExplanation, ServerScopeSummary, ToolPolicySummary,
+    dry_run_check, explain_policy, ArgumentGuardSummary, CheckOutcome, FieldGuardSummary,
+    GuardScope, GuardSummary, MethodPolicySummary, PathRuleSummary, PolicyExplanation,
+    ServerScopeSummary, ToolPolicySummary,
 };
 pub use proxy::exit_code;
 pub use proxy::{

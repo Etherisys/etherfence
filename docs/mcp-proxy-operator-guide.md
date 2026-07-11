@@ -131,6 +131,35 @@ different outcomes for the same tool name, if that name only appears in one
 server's scoped section. Global `deny` always wins regardless of
 `--server-name`.
 
+## Narrowing an allowed call with field guards (v1.5.0, `ef-mcp-policy/v0.2`)
+
+Everything above decides *whether* a tool call or method is allowed at all.
+As of v1.5.0, an optional `schema_version = "ef-mcp-policy/v0.2"` policy can
+also constrain *which arguments* an already-allowed call may use — so that if
+the calling agent is mistaken or prompt-injected, the blast radius of an
+otherwise-allowed tool is contained to a known-safe subset:
+
+```toml
+schema_version = "ef-mcp-policy/v0.2"
+
+[tools."github.create_issue".arguments]
+require_keys = ["org"]
+
+[tools."github.create_issue".arguments.fields.org]
+type = "enum"
+values = ["my-org"]
+```
+
+This is a narrowing layer, not a detector: it does not analyze prompts, infer
+intent, or evaluate free text — it deterministically checks required/
+forbidden keys and per-field constraints (exact value, enum, string length/
+prefix, numeric bounds, array length/allowed elements, or URL scheme/host/
+port/path) against the request's actual JSON shape. Switching to v0.2 does
+not change anything about your existing `[tools]`/`[methods]`/`[path_rules]`
+sections — bump `schema_version` and add guard tables only where you want
+them. Full syntax, the six primitives, and the migration note are in
+[`docs/mcp-policy-ux.md`](mcp-policy-ux.md#ef-mcp-policyv02-argumentparam-field-guards).
+
 ## How `tools/list` filtering works
 
 When the client sends `tools/list`, the proxy remembers that request (by
@@ -261,6 +290,8 @@ schemas are never logged for `tools_list_filtered`.
 | Proxy exits with code `4` | Either the audit log file could not be opened at startup, or an internal pipe I/O error occurred. | Check the `--audit-log` path is writable; check stderr for the specific error. |
 | Client's tool picker shows fewer tools than the real server advertises | Working as intended: `tools/list` filtering removed denied/default-denied tools. | Run `etherfence mcp-policy explain <policy.toml>` to see the full allow/deny picture, or `mcp-policy check` the exact `tools/call` you expect to work. |
 | Every non-`tools/list`/`tools/call` request is denied even though you didn't write a `[methods]` deny rule | No `[methods]` section exists in the policy at all, so the built-in default (`tools/list`+`tools/call` only) applies. | Add an explicit `[methods]` section with the methods you need in `allow`. |
+| `validate`/proxy startup fails with an error naming `ef-mcp-policy/v0.2` | The policy uses `require_keys`/`forbid_keys`/`fields` guard syntax but `schema_version` is still `ef-mcp-policy/v0.1`. | Bump `schema_version` to `"ef-mcp-policy/v0.2"`; nothing else in the file needs to change. |
+| A `tools/call` you expect to succeed is denied with a `guard_reason_category` like `enum_value_not_allowed` or `required_key_missing` | A v0.2 field guard is configured for that tool and the request's argument doesn't satisfy it. | Run `etherfence mcp-policy explain <policy.toml>` to see the configured guards, or `mcp-policy check` the exact request. |
 | A tool name works with one `--server-name` but not another, using the same policy file | The tool is only in one server's `[servers.<name>.tools]` scope, or a global deny is masking a server-specific allow. | `mcp-policy explain <policy.toml>` prints every server scope's rules side by side. |
 | `resources/read` (or another method) is denied even though you expected it to be allowed | Method policy is bidirectional and separate from tool policy: an allowed `tools/call` does not imply other methods are allowed. | Add the method to `[methods].allow` explicitly, or check with `mcp-policy check --request '{"...","method":"resources/read",...}'`. |
 | A tool/method/path name containing unusual characters is denied with a Unicode-related reason | v0.4.1 Unicode/homograph hardening denies bidi controls, zero-width characters, and non-ASCII text in policy-matched names before normal policy matching runs. | This is by design, not a bug — use plain ASCII names in policy and requests. |

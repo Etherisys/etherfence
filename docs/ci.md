@@ -110,6 +110,13 @@ See [`docs/mcp-policy-ux.md`](mcp-policy-ux.md) for the full command
 reference and [`docs/examples/workflows/mcp-policy-gate.yml`](examples/workflows/mcp-policy-gate.yml)
 for a full example.
 
+The same `validate`/`explain`/`check` commands work unchanged against a
+`schema_version = "ef-mcp-policy/v0.2"` policy — for example one of the
+checked-in `examples/policies/mcp-github-scoped-orgs.toml`-style profiles —
+if you also want to gate on the v1.5.0 argument/param field guards
+documented in [`docs/mcp-policy-ux.md`](mcp-policy-ux.md#ef-mcp-policyv02-argumentparam-field-guards).
+The example policy this document uses below stays on `ef-mcp-policy/v0.1`.
+
 ## Dry-running MCP policy decisions in CI without starting an MCP server
 
 `etherfence mcp-policy check --policy <policy.toml> --request <json>` dry-runs
@@ -211,4 +218,7 @@ in this document add or require:
 - shell hooks, terminal-command scanning, or network/TLS interception
 - DLP or content inspection
 - arbitrary MCP tool execution
-- any change to `ef-mcp-policy/v0.1` or to `mcp-proxy` runtime enforcement
+- any change to `ef-mcp-policy/v0.1` parsing/evaluation or to `mcp-proxy`
+  runtime enforcement (the optional, additive `ef-mcp-policy/v0.2`
+  argument/param field guards — see `docs/mcp-policy-ux.md` — do not change
+  v0.1 behavior and are not required by anything in this document)

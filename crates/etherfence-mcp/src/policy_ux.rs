@@ -9,7 +9,7 @@ use std::collections::BTreeSet;
 
 use crate::audit::AuditRecord;
 use crate::policy::{
-    Decision, McpPolicyFile, MethodDirection, MethodRules, PathKeyGuard, ToolRules,
+    ArgumentGuard, Decision, McpPolicyFile, MethodDirection, MethodRules, ToolRules,
 };
 use crate::proxy::{
     inspect_client_line, inspect_server_line, ClientAction, ServerAction, TrackedRequests,
@@ -75,6 +75,29 @@ pub struct GuardSummary {
     pub uri_keys: Vec<String>,
 }
 
+/// One v0.2 field-guard entry within an [`ArgumentGuardSummary`]: the
+/// selector it targets and the primitive kind it was configured with
+/// (`"exact"`/`"enum"`/`"string"`/`"number"`/`"array"`/`"url"`). Configured
+/// bounds/allowlists are policy source, not runtime secrets, so `explain`
+/// may print them in full — only *runtime request values* are redacted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FieldGuardSummary {
+    pub selector: String,
+    pub kind: &'static str,
+}
+
+/// A v0.2 `require_keys`/`forbid_keys`/`fields` argument guard, summarized
+/// for `mcp-policy explain`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArgumentGuardSummary {
+    pub scope: GuardScope,
+    pub server_name: Option<String>,
+    pub key: String,
+    pub require_keys: Vec<String>,
+    pub forbid_keys: Vec<String>,
+    pub fields: Vec<FieldGuardSummary>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PolicyExplanation {
     pub name: String,
@@ -84,6 +107,7 @@ pub struct PolicyExplanation {
     pub servers: Vec<ServerScopeSummary>,
     pub path_rules: Vec<PathRuleSummary>,
     pub guards: Vec<GuardSummary>,
+    pub argument_guards: Vec<ArgumentGuardSummary>,
     pub warnings: Vec<String>,
 }
 
@@ -115,9 +139,22 @@ pub fn explain_policy(policy: &McpPolicyFile) -> PolicyExplanation {
         .collect();
 
     let mut guards = Vec::new();
-    collect_tool_guards(&policy.tools, GuardScope::GlobalTool, None, &mut guards);
+    let mut argument_guards = Vec::new();
+    collect_tool_guards(
+        &policy.tools,
+        GuardScope::GlobalTool,
+        None,
+        &mut guards,
+        &mut argument_guards,
+    );
     if let Some(methods) = &policy.methods {
-        collect_method_guards(methods, GuardScope::GlobalMethod, None, &mut guards);
+        collect_method_guards(
+            methods,
+            GuardScope::GlobalMethod,
+            None,
+            &mut guards,
+            &mut argument_guards,
+        );
     }
     for (server_name, server) in &policy.servers {
         collect_tool_guards(
@@ -125,6 +162,7 @@ pub fn explain_policy(policy: &McpPolicyFile) -> PolicyExplanation {
             GuardScope::ServerTool,
             Some(server_name.clone()),
             &mut guards,
+            &mut argument_guards,
         );
         if let Some(methods) = &server.methods {
             collect_method_guards(
@@ -132,6 +170,7 @@ pub fn explain_policy(policy: &McpPolicyFile) -> PolicyExplanation {
                 GuardScope::ServerMethod,
                 Some(server_name.clone()),
                 &mut guards,
+                &mut argument_guards,
             );
         }
     }
@@ -152,6 +191,7 @@ pub fn explain_policy(policy: &McpPolicyFile) -> PolicyExplanation {
         servers,
         path_rules,
         guards,
+        argument_guards,
         warnings,
     }
 }
@@ -179,15 +219,20 @@ fn collect_tool_guards(
     scope: GuardScope,
     server_name: Option<String>,
     guards: &mut Vec<GuardSummary>,
+    argument_guards: &mut Vec<ArgumentGuardSummary>,
 ) {
     for (tool_name, guard) in &rules.path_guards {
         if let Some(arguments) = &guard.arguments {
-            guards.push(guard_summary(
-                scope,
-                server_name.clone(),
-                tool_name.clone(),
-                arguments,
-            ));
+            if let Some(summary) =
+                guard_summary(scope, server_name.clone(), tool_name.clone(), arguments)
+            {
+                guards.push(summary);
+            }
+            if let Some(summary) =
+                argument_guard_summary(scope, server_name.clone(), tool_name.clone(), arguments)
+            {
+                argument_guards.push(summary);
+            }
         }
     }
 }
@@ -197,15 +242,20 @@ fn collect_method_guards(
     scope: GuardScope,
     server_name: Option<String>,
     guards: &mut Vec<GuardSummary>,
+    argument_guards: &mut Vec<ArgumentGuardSummary>,
 ) {
     for (method_name, guard) in &rules.path_guards {
         if let Some(params) = &guard.params {
-            guards.push(guard_summary(
-                scope,
-                server_name.clone(),
-                method_name.clone(),
-                params,
-            ));
+            if let Some(summary) =
+                guard_summary(scope, server_name.clone(), method_name.clone(), params)
+            {
+                guards.push(summary);
+            }
+            if let Some(summary) =
+                argument_guard_summary(scope, server_name.clone(), method_name.clone(), params)
+            {
+                argument_guards.push(summary);
+            }
         }
     }
 }
@@ -214,16 +264,44 @@ fn guard_summary(
     scope: GuardScope,
     server_name: Option<String>,
     key: String,
-    guard: &PathKeyGuard,
-) -> GuardSummary {
-    GuardSummary {
+    guard: &ArgumentGuard,
+) -> Option<GuardSummary> {
+    let path_rule = guard.path_rule.clone()?;
+    Some(GuardSummary {
         scope,
         server_name,
         key,
-        path_rule: guard.path_rule.clone(),
+        path_rule,
         path_keys: guard.path_keys.clone(),
         uri_keys: guard.uri_keys.clone(),
+    })
+}
+
+fn argument_guard_summary(
+    scope: GuardScope,
+    server_name: Option<String>,
+    key: String,
+    guard: &ArgumentGuard,
+) -> Option<ArgumentGuardSummary> {
+    if guard.require_keys.is_empty() && guard.forbid_keys.is_empty() && guard.fields.is_empty() {
+        return None;
     }
+    let fields = guard
+        .fields
+        .iter()
+        .map(|(selector, field_guard)| FieldGuardSummary {
+            selector: selector.clone(),
+            kind: field_guard.kind(),
+        })
+        .collect();
+    Some(ArgumentGuardSummary {
+        scope,
+        server_name,
+        key,
+        require_keys: guard.require_keys.clone(),
+        forbid_keys: guard.forbid_keys.clone(),
+        fields,
+    })
 }
 
 fn build_warnings(
@@ -327,6 +405,9 @@ pub struct CheckOutcome {
     pub path_rule: Option<String>,
     pub path_key: Option<String>,
     pub path_classification: Option<String>,
+    pub guard_key: Option<String>,
+    pub guard_selector: Option<String>,
+    pub guard_reason_category: Option<String>,
 }
 
 /// Dry-run one JSON-RPC request/notification line against `policy` using the
@@ -368,6 +449,9 @@ fn outcome_from_audit(audit: Option<AuditRecord>, forwarded: bool) -> CheckOutco
             path_rule: record.path_rule,
             path_key: record.path_key,
             path_classification: record.path_classification,
+            guard_key: record.guard_key,
+            guard_selector: record.guard_selector,
+            guard_reason_category: record.guard_reason_category,
         },
         None => CheckOutcome {
             allowed: forwarded,
@@ -385,6 +469,9 @@ fn outcome_from_audit(audit: Option<AuditRecord>, forwarded: bool) -> CheckOutco
             path_rule: None,
             path_key: None,
             path_classification: None,
+            guard_key: None,
+            guard_selector: None,
+            guard_reason_category: None,
         },
     }
 }
@@ -621,5 +708,80 @@ path_rule = "project_readonly"
         let outcome = dry_run_check(&policy, "default", MethodDirection::ServerToClient, request);
         assert!(!outcome.allowed);
         assert!(!outcome.forwarded);
+    }
+
+    // --- v0.2 guard explain/check ---
+
+    const V2_GUARD_POLICY: &str = r#"
+schema_version = "ef-mcp-policy/v0.2"
+name = "v2-explain-check"
+
+[tools]
+allow = ["github.create_issue"]
+
+[tools."github.create_issue".arguments]
+require_keys = ["org"]
+
+[tools."github.create_issue".arguments.fields.org]
+type = "enum"
+values = ["my-org"]
+"#;
+
+    #[test]
+    fn explain_lists_v2_argument_guard() {
+        let policy = parse_mcp_policy(V2_GUARD_POLICY).unwrap();
+        let explanation = explain_policy(&policy);
+        assert_eq!(explanation.argument_guards.len(), 1);
+        let guard = &explanation.argument_guards[0];
+        assert_eq!(guard.key, "github.create_issue");
+        assert_eq!(guard.require_keys, vec!["org"]);
+        assert_eq!(guard.fields.len(), 1);
+        assert_eq!(guard.fields[0].selector, "org");
+        assert_eq!(guard.fields[0].kind, "enum");
+    }
+
+    #[test]
+    fn check_surfaces_v2_guard_reason_category() {
+        let policy = parse_mcp_policy(V2_GUARD_POLICY).unwrap();
+        let request = r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"github.create_issue","arguments":{"org":"other-org"}}}"#;
+        let outcome = dry_run_check(&policy, "default", MethodDirection::ClientToServer, request);
+        assert!(!outcome.allowed);
+        assert_eq!(outcome.guard_key.as_deref(), Some("github.create_issue"));
+        assert_eq!(outcome.guard_selector.as_deref(), Some("org"));
+        assert_eq!(
+            outcome.guard_reason_category.as_deref(),
+            Some("enum_value_not_allowed")
+        );
+    }
+
+    /// SC-004: `mcp-policy check` (this module's `dry_run_check`) must reach
+    /// exactly the same decision as the live proxy's `inspect_client_line`
+    /// for a request that triggers a v0.2 guard — verified here by calling
+    /// both directly on the identical input and comparing outcomes, proving
+    /// they share one evaluator rather than two implementations that happen
+    /// to agree today.
+    #[test]
+    fn check_and_live_proxy_agree_on_v2_guard_decision() {
+        let policy = parse_mcp_policy(V2_GUARD_POLICY).unwrap();
+        for (id, org) in [(1, "my-org"), (2, "other-org")] {
+            let request = format!(
+                r#"{{"jsonrpc":"2.0","id":{id},"method":"tools/call","params":{{"name":"github.create_issue","arguments":{{"org":"{org}"}}}}}}"#
+            );
+            let check_outcome = dry_run_check(
+                &policy,
+                "default",
+                MethodDirection::ClientToServer,
+                &request,
+            );
+            let proxy_inspected = crate::proxy::inspect_client_line(&policy, "default", &request);
+            let proxy_forwarded = matches!(proxy_inspected.action, ClientAction::Forward);
+            assert_eq!(check_outcome.forwarded, proxy_forwarded, "org={org}");
+            let proxy_audit = proxy_inspected.audit.expect("audit");
+            assert_eq!(check_outcome.decision, proxy_audit.decision, "org={org}");
+            assert_eq!(
+                check_outcome.guard_reason_category, proxy_audit.guard_reason_category,
+                "org={org}"
+            );
+        }
     }
 }

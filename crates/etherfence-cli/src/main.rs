@@ -279,6 +279,30 @@ const MCP_POLICY_PROFILES: &[McpPolicyProfile] = &[
         description: "Project-root-only resources/read over file:// URIs, plus tool policy.",
         content: include_str!("../../../examples/policies/mcp-resources-project-only.toml"),
     },
+    McpPolicyProfile {
+        name: "github-scoped-orgs",
+        description:
+            "v0.2: GitHub issue tool restricted to a named organization/repository via enum/prefix field guards.",
+        content: include_str!("../../../examples/policies/mcp-github-scoped-orgs.toml"),
+    },
+    McpPolicyProfile {
+        name: "messaging-named-destinations",
+        description:
+            "v0.2: Messaging tool restricted to named destinations, with a forbidden bypass key.",
+        content: include_str!("../../../examples/policies/mcp-messaging-named-destinations.toml"),
+    },
+    McpPolicyProfile {
+        name: "browser-approved-hosts",
+        description:
+            "v0.2: Browser/API tool restricted to approved HTTPS hosts via the URL field guard.",
+        content: include_str!("../../../examples/policies/mcp-browser-approved-hosts.toml"),
+    },
+    McpPolicyProfile {
+        name: "readonly-operation-guard",
+        description:
+            "v0.2: General-purpose tool restricted to read-only operations with numeric and nested-selector field guards.",
+        content: include_str!("../../../examples/policies/mcp-readonly-operation-guard.toml"),
+    },
 ];
 
 #[derive(Debug, Subcommand)]
@@ -1234,13 +1258,44 @@ fn render_mcp_policy_explanation(explanation: &etherfence_mcp::PolicyExplanation
     }
     let _ = writeln!(out);
 
+    if explanation.argument_guards.is_empty() {
+        let _ = writeln!(out, "Argument/param field guards: (none configured)");
+    } else {
+        let _ = writeln!(out, "Argument/param field guards:");
+        for guard in &explanation.argument_guards {
+            let scope_label = match &guard.server_name {
+                Some(server) => format!("{} (server={server})", guard.scope.as_str()),
+                None => guard.scope.as_str().to_string(),
+            };
+            let _ = writeln!(out, "  {scope_label} {:?}", guard.key);
+            if !guard.require_keys.is_empty() {
+                let _ = writeln!(
+                    out,
+                    "    require_keys: {}",
+                    format_list(&guard.require_keys)
+                );
+            }
+            if !guard.forbid_keys.is_empty() {
+                let _ = writeln!(out, "    forbid_keys: {}", format_list(&guard.forbid_keys));
+            }
+            for field in &guard.fields {
+                let _ = writeln!(
+                    out,
+                    "    fields.{:?} -> type={}",
+                    field.selector, field.kind
+                );
+            }
+        }
+    }
+    let _ = writeln!(out);
+
     let _ = writeln!(
         out,
-        "Unicode/homograph hardening: always enabled (v0.4.1) -- bidi controls, zero-width/invisible characters, and non-ASCII policy/runtime identifiers are rejected at parse time or denied at runtime before matching."
+        "Unicode/homograph hardening: always enabled (v0.4.1) -- bidi controls, zero-width/invisible characters, and non-ASCII policy/runtime identifiers are rejected at parse time or denied at runtime before matching. v0.2 field-guard selector segments are covered by the same hardening."
     );
     let _ = writeln!(
         out,
-        "Audit redaction posture: when --audit-log is used, only decisions, reasons, method/tool names, safe path classification, and argument/param key names are recorded; argument/param values, full paths, and URIs are never logged."
+        "Audit redaction posture: when --audit-log is used, only decisions, reasons, method/tool names, safe path classification, guard/selector names, and argument/param key names are recorded; argument/param values, full paths, URIs, and guarded field values are never logged."
     );
     let _ = writeln!(out);
 
@@ -1295,6 +1350,15 @@ fn render_mcp_check_outcome(outcome: &etherfence_mcp::CheckOutcome) -> String {
             rule,
             outcome.path_key.as_deref().unwrap_or("<none>"),
             outcome.path_classification.as_deref().unwrap_or("<none>")
+        );
+    }
+    if let Some(guard_key) = &outcome.guard_key {
+        let _ = writeln!(
+            out,
+            "Guard decision: key={:?} selector={:?} reason_category={:?}",
+            guard_key,
+            outcome.guard_selector.as_deref().unwrap_or("<none>"),
+            outcome.guard_reason_category.as_deref().unwrap_or("<none>")
         );
     }
     let _ = writeln!(out, "Reason: {}", outcome.reason);

@@ -135,6 +135,38 @@ component. Its trust boundary assumptions:
   confusables into ASCII equivalents, does not implement
   locale-specific path equivalence, and does not add content inspection, DLP,
   URL filtering, network interception, a daemon, or a control plane.
+- v1.5.0 adds an optional schema extension, `ef-mcp-policy/v0.2`, that lets
+  an operator constrain individual fields inside an already-allowed
+  `tools/call` `arguments` object or a method's `params` object:
+  required/forbidden keys, exact-value/enum allowlists, string length/
+  prefix, numeric bounds, array length/allowed-element sets, and URL
+  scheme/normalized-host/effective-port/path-prefix allowlists, addressed
+  through a bounded, non-regex selector syntax (dotted keys/array indices,
+  max 8 segments). This is a **containment** control for an already-allowed
+  call, layered on top of (never a replacement for) the v0.3.0 method
+  policy, v0.4.0 path guard, and v0.4.1 Unicode hardening above — evaluated
+  only when the decision so far is still `allow`, by the same shared
+  evaluator both `mcp-proxy` and `mcp-policy check` call. Every guard fails
+  closed for its own field on a missing key, wrong JSON type, malformed
+  value, or unresolvable selector; an unguarded field is unaffected.
+  `ef-mcp-policy/v0.1` policies parse and evaluate identically to before
+  this change; a v0.2-only construct under `schema_version =
+  "ef-mcp-policy/v0.1"` is a load-time (not runtime) failure. Audit records
+  add `guard_key`/`guard_selector`/`guard_reason_category` — safe
+  identifiers and a closed-set category string only, never the evaluated
+  value, the full arguments/params object, or a raw URL (including its
+  query string). **Explicit non-goals**, so this addendum cannot be
+  mistaken for broader coverage than it has: this feature does not analyze
+  natural language, detect prompt injection, or infer intent — guards are
+  purely deterministic, declarative constraints on argument shape/value; it
+  does not add a general regular-expression, scripting, or expression
+  policy language; it does not parse shell commands or allowlist command
+  content; it does not add DLP/content inspection, SQL analysis, or any
+  free-text evaluation beyond the six structured primitives; it does not
+  add remote MCP proxying, a daemon, or a control plane; it never widens a
+  policy automatically; and passing a v0.2 guard is not a claim that the
+  wrapped MCP server is safe overall, or that unguarded fields on the same
+  call have been considered at all.
 
 ## v1.2.0 addendum: client catalog and MCP capability classification
 
