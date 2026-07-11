@@ -45,30 +45,31 @@
 | Find local agent and MCP configurations | Identify capability, identity, and integrity risks | Enforce least-privilege MCP runtime policy |
 | `etherfence scan` | `etherfence setup detect` | `etherfence mcp-proxy` |
 
-## Demo
+<h2 align="center">See EtherFence in action</h2>
 
-Representative terminal flow:
+<p align="center">
+  <img
+    src="docs/assets/etherfence-demo.gif"
+    alt="EtherFence detects a risky Claude Code filesystem MCP server and denies an unauthorized filesystem write"
+    width="100%"
+  />
+</p>
 
-```text
-$ etherfence setup detect
+<p align="center">
+  Discover risky agent configurations before execution, then enforce
+  deny-by-default MCP controls at runtime.
+</p>
 
-Claude Code
-└── filesystem-server
-    Risk: HIGH
-    Findings:
-    • Unpinned package execution
-    • Broad filesystem capability
-    • Executable integrity not baselined
+The recording runs the real `etherfence` binary against checked-in fixtures:
 
-Recommendation: DENY until reviewed
+- `setup detect --root demo/workspace` inspects a Claude Code MCP config;
+  the configured `npx` filesystem server is parsed, not executed.
+- `mcp-policy check --policy demo/workspace/project-readonly.toml --request
+  demo/workspace/request.json` dry-runs the same serverless decision helpers
+  used by the live proxy and denies `filesystem.write`.
 
-$ etherfence mcp-policy check \
-    --policy project-readonly.toml \
-    --request request.json
-
-DENY filesystem.write
-Reason: tool not permitted by project-readonly policy
-```
+Reproduce it locally with `./demo/run-demo.sh`, or verify the behavior without
+VHS using `./demo/verify-demo.sh`. Details live in [`demo/README.md`](demo/README.md).
 
 ## What EtherFence protects
 
