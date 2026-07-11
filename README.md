@@ -117,6 +117,8 @@ cargo build --release -p etherfence-cli
 | `etherfence mcp-proxy` | MCP stdio boundary proxy | Opt-in, local runtime |
 | `etherfence setup catalog` | Fixed 10-client compatibility/catalog matrix (support tier, local presence) | Local, read-only |
 | `etherfence setup detect` | Per-client MCP server inventory, capability classification, starter-policy recommendation, and trust-and-integrity assessment | Local, read-only |
+| `etherfence setup baseline write` | Write a deterministic MCP server integrity baseline | Local, read-only |
+| `etherfence setup baseline check` | Compare current MCP server state against a baseline and report drift | Local, read-only |
 
 ## `scan` example
 
@@ -253,6 +255,46 @@ certified, malware-free, benign, or definitively malicious, and
 see [`docs/setup-onboarding.md`](docs/setup-onboarding.md) and
 [`docs/json-schema.md`](docs/json-schema.md) for the full schemas.
 
+## `setup baseline` example
+
+```sh
+etherfence setup baseline write --root /home/user --output baseline.json
+etherfence setup baseline check --root /home/user --baseline baseline.json
+etherfence setup baseline check --root /home/user --baseline baseline.json \
+  --format json --fail-on-drift
+```
+
+```text
+EtherFence setup baseline check
+Root: /home/user
+Baseline: baseline.json
+Mode: read-only; the baseline file was not modified.
+
+- Claude Code:filesystem [changed] at ~/.claude.json
+  transport=stdio
+  reasons: command-changed
+  risk: known-source -> known-source (unchanged)
+
+Summary: 2 unchanged, 1 changed, 0 new, 0 missing, 0 unverifiable
+```
+
+`setup baseline write` (schema `ef-setup-baseline/v0.1`) captures a
+deterministic, point-in-time snapshot of discovered MCP servers — identity,
+command/argument fingerprints (hashes, never raw text), package
+identity/version, executable path/hash, environment variable *names*
+(never values), capability labels, and the v1.3.0 trust/risk vocabulary —
+and refuses to overwrite an existing output file unless `--overwrite` is
+passed. `setup baseline check` (schema `ef-setup-baseline-comparison/v0.1`)
+is strictly read-only against the baseline file — it never auto-updates,
+auto-accepts, or silently rewrites it — and classifies every server as
+`unchanged`/`new`/`changed`/`missing`/`unverifiable` with a closed,
+deterministic drift-reason list. `--fail-on-drift`, `--fail-on-new`, and
+`--fail-on-risk-increase` gate CI on drift severity; the full report is
+always printed even when a gate causes a non-zero exit. See
+[`docs/setup-onboarding.md`](docs/setup-onboarding.md) and
+[`docs/json-schema.md`](docs/json-schema.md) for the full schemas and
+safety boundary.
+
 ## CI and team workflow integration
 
 EtherFence is designed to be easy to drop into a team's CI: every command
@@ -297,10 +339,10 @@ active repository workflows — copy the one(s) you want into your own
 | [`docs/mcp-proxy.md`](docs/mcp-proxy.md) | `mcp-proxy` behavior, `ef-mcp-policy/v0.1` schema, limitations |
 | [`docs/mcp-proxy-operator-guide.md`](docs/mcp-proxy-operator-guide.md) | Practical operator walkthrough: before/after, flags, policy/`--server-name` mapping, dry-run and audit-log usage, failure modes, config examples |
 | [`docs/mcp-policy-ux.md`](docs/mcp-policy-ux.md) | `mcp-policy validate/explain/init/check` reference |
-| [`docs/setup-onboarding.md`](docs/setup-onboarding.md) | `setup` onboarding command family safety contract, including `setup catalog` (`ef-setup-catalog/v0.1`), `setup detect`'s MCP capability classification, and its v1.3.0 trust-and-integrity assessment (`ef-setup-detect/v0.2`) |
+| [`docs/setup-onboarding.md`](docs/setup-onboarding.md) | `setup` onboarding command family safety contract, including `setup catalog` (`ef-setup-catalog/v0.1`), `setup detect`'s MCP capability classification and v1.3.0 trust-and-integrity assessment (`ef-setup-detect/v0.2`), and v1.4.0's `setup baseline write`/`check` (`ef-setup-baseline/v0.1`, `ef-setup-baseline-comparison/v0.1`) |
 | [`docs/mcp-clients.md`](docs/mcp-clients.md) | Client configuration templates for wrapping a server with `mcp-proxy` |
 | [`docs/mcp-compatibility-matrix.md`](docs/mcp-compatibility-matrix.md) | What MCP stdio behavior is tested vs. untested |
-| [`docs/json-schema.md`](docs/json-schema.md) / [`docs/sarif.md`](docs/sarif.md) | `scan` JSON and SARIF output shapes, plus `ef-setup-catalog/v0.1` (`setup catalog`) and `ef-setup-detect/v0.2` (`setup detect`) |
+| [`docs/json-schema.md`](docs/json-schema.md) / [`docs/sarif.md`](docs/sarif.md) | `scan` JSON and SARIF output shapes, plus `ef-setup-catalog/v0.1` (`setup catalog`), `ef-setup-detect/v0.2` (`setup detect`), `ef-setup-baseline/v0.1` (`setup baseline write`), and `ef-setup-baseline-comparison/v0.1` (`setup baseline check`) |
 | [`docs/threat-model.md`](docs/threat-model.md) / [`docs/architecture.md`](docs/architecture.md) | Threat model and architecture notes |
 | [`docs/roadmap.md`](docs/roadmap.md) | Release-by-release history and scope |
 | [`docs/release-automation.md`](docs/release-automation.md) / [`docs/release-checklist.md`](docs/release-checklist.md) | How releases are cut |

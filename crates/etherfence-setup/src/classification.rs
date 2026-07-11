@@ -1,10 +1,10 @@
 use etherfence_core::McpServer;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// Fixed capability taxonomy, most-restrictive-first (research.md Decision
 /// 4). This single declaration order serves both output ordering and the
 /// `needs_review` merge rule in `recommend`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum CapabilityLabel {
     Unknown,

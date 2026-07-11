@@ -15,6 +15,71 @@ component: an MCP stdio boundary proxy, whose CLI surface and
 has no daemon mode, shell hooks, command interception, terminal-command
 scanning, or network interception.
 
+## [1.4.0] - 2026-07-11
+
+### Added
+
+- `etherfence setup baseline write --root <path> --output <file>
+  [--overwrite]`: writes a deterministic, point-in-time MCP server
+  integrity baseline. New `ef-setup-baseline/v0.1` schema, documented in
+  `docs/json-schema.md`. Refuses to overwrite an existing output file
+  unless `--overwrite` is passed; never mutates any scanned config, MCP
+  server, or policy file.
+- `etherfence setup baseline check --root <path> --baseline <file>
+  [--format human|json] [--fail-on-drift] [--fail-on-new]
+  [--fail-on-risk-increase]`: compares current MCP server state against a
+  previously written baseline and reports drift. New
+  `ef-setup-baseline-comparison/v0.1` schema. Strictly read-only against
+  `--baseline` — never auto-updates, auto-accepts, or silently rewrites it
+  under any circumstance, including when a gate flag causes a non-zero
+  exit; the full report is always printed first.
+- Every server is classified as `unchanged`, `new`, `changed`, `missing`,
+  or `unverifiable`, with a closed, deterministic 14-value drift-reason
+  enum: `executable-hash-changed`, `command-changed`, `arguments-changed`,
+  `package-identity-changed`, `package-version-changed`,
+  `environment-variable-names-changed`, `transport-changed`,
+  `server-added`, `server-removed`, `capability-set-changed`,
+  `trust-indicator-set-changed`, `artifact-identity-changed`,
+  `risk-increased`, `executable-became-unverifiable`.
+- Collision-safe identity fingerprint derived from agent, normalized
+  config-source path, and server name — never display name alone.
+  Transport is intentionally tracked as an ordinary comparable field
+  rather than folded into the fingerprint, so a server switching
+  transport is reported as `changed`/`transport-changed` instead of one
+  server vanishing and an unrelated one appearing.
+- Fixed monotonic risk ordering over the five v1.3.0 aggregate values
+  (`verified-local` < `known-source` < `unknown` < `needs-review` <
+  `high-risk`). A risk *decrease* is always reported as drift (never
+  silently hidden) but never satisfies `--fail-on-risk-increase` by
+  itself — only a documented increase does.
+- Reuses v1.3.0's discovery (`etherfence_inventory::discover`),
+  capability classification, trust assessment, and local artifact hashing
+  exactly as-is (zero changes to `trust.rs`/`classification.rs` logic —
+  only additive `Deserialize` derives so the baseline round-trips through
+  JSON). Every v1.3.0 file-safety invariant (no-follow open, opened-file
+  identity re-validation, bounded streamed reads, no symlink following) is
+  preserved when re-hashing for comparison; a single-byte change to a
+  hashed executable always produces `changed`/`executable-hash-changed`.
+- Persists/emits only safe, normalized fields: identity, command/argument
+  *fingerprints* (SHA-256 hashes, never raw command/argument text),
+  package identity/version classification, executable path/hash,
+  environment variable *names* (never values), capability labels,
+  trust-indicator IDs/categories/severities, and the v1.3.0 trust/risk
+  vocabulary. Never persists or emits raw environment values, secrets,
+  credentials, file contents, prompts/messages, or MCP protocol traffic.
+- New pure comparison module `crates/etherfence-setup/src/baseline.rs`;
+  all CLI argument parsing, file I/O, and rendering lives in
+  `etherfence-cli`. No new crate, daemon, network access, subprocess
+  execution, malware classification, registry/reputation lookup,
+  download/install action, signature/provenance verification, or
+  sandboxing.
+- `ef-setup-detect/v0.2` and its command are unchanged. The pre-existing,
+  unrelated `scan --write-baseline`/`--baseline` findings-baseline feature
+  (`ef-baseline/v0.1.3`) is unaffected. `mcp-proxy`, `ef-mcp-policy/v0.1`,
+  deny-by-default starter-policy recommendations, and every other existing
+  `setup` subcommand (`detect`, `catalog`, `plan`, `apply`, `rollback`,
+  `doctor`) are unchanged.
+
 ## [1.3.0] - 2026-07-11
 
 ### Added

@@ -248,3 +248,129 @@ fn setup_detect_cli_output_has_no_prohibited_language() {
         &String::from_utf8_lossy(&json.stdout),
     );
 }
+
+// v1.4.0: `setup baseline write`/`check` must follow the same honesty
+// discipline as every other setup command — never claim runtime blocking,
+// interception, or enforcement, and never claim baseline/check performs
+// automatic remediation or acceptance of drift.
+
+#[test]
+fn readme_setup_baseline_section_has_no_prohibited_language() {
+    let text = section(README, "## `setup baseline` example");
+    assert_no_prohibited_terms("README.md `setup baseline` example section", &text);
+    assert!(text.contains("read-only"));
+}
+
+#[test]
+fn setup_onboarding_docs_baseline_section_has_no_prohibited_language() {
+    let text = section(
+        SETUP_ONBOARDING_DOCS,
+        "## `etherfence setup baseline write` / `check` — integrity baseline and drift detection (v1.4.0)",
+    );
+    assert_no_prohibited_terms("docs/setup-onboarding.md setup baseline section", &text);
+    assert!(text.contains("read-only"));
+}
+
+#[test]
+fn json_schema_docs_setup_baseline_sections_have_no_prohibited_language() {
+    let write_text = section(
+        JSON_SCHEMA_DOCS,
+        "## `etherfence setup baseline write` schema (`ef-setup-baseline/v0.1`)",
+    );
+    assert_no_prohibited_terms("docs/json-schema.md ef-setup-baseline section", &write_text);
+
+    let check_text = section(
+        JSON_SCHEMA_DOCS,
+        "## `etherfence setup baseline check` schema (`ef-setup-baseline-comparison/v0.1`)",
+    );
+    assert_no_prohibited_terms(
+        "docs/json-schema.md ef-setup-baseline-comparison section",
+        &check_text,
+    );
+}
+
+fn write_baseline_for_docs_test(root: &std::path::Path, output: &std::path::Path) {
+    let result = run(&[
+        "setup",
+        "baseline",
+        "write",
+        "--root",
+        root.to_str().unwrap(),
+        "--output",
+        output.to_str().unwrap(),
+        "--overwrite",
+    ]);
+    assert!(result.status.success());
+}
+
+fn temp_baseline_path(name: &str) -> std::path::PathBuf {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system time")
+        .as_nanos();
+    std::env::temp_dir().join(format!(
+        "etherfence-baseline-docs-{name}-{}-{nanos}.json",
+        std::process::id()
+    ))
+}
+
+#[test]
+fn setup_baseline_write_cli_output_has_no_prohibited_language() {
+    let root = fixture_root("home");
+    let output = temp_baseline_path("write");
+    write_baseline_for_docs_test(&root, &output);
+    let human = run(&[
+        "setup",
+        "baseline",
+        "write",
+        "--root",
+        root.to_str().unwrap(),
+        "--output",
+        output.to_str().unwrap(),
+        "--overwrite",
+    ]);
+    assert!(human.status.success());
+    assert_no_prohibited_terms(
+        "`setup baseline write` human output",
+        &String::from_utf8_lossy(&human.stdout),
+    );
+}
+
+#[test]
+fn setup_baseline_check_cli_output_has_no_prohibited_language() {
+    let root = fixture_root("home");
+    let output = temp_baseline_path("check");
+    write_baseline_for_docs_test(&root, &output);
+
+    let human = run(&[
+        "setup",
+        "baseline",
+        "check",
+        "--root",
+        root.to_str().unwrap(),
+        "--baseline",
+        output.to_str().unwrap(),
+    ]);
+    assert!(human.status.success());
+    assert_no_prohibited_terms(
+        "`setup baseline check` human output",
+        &String::from_utf8_lossy(&human.stdout),
+    );
+
+    let json = run(&[
+        "setup",
+        "baseline",
+        "check",
+        "--root",
+        root.to_str().unwrap(),
+        "--baseline",
+        output.to_str().unwrap(),
+        "--format",
+        "json",
+    ]);
+    assert!(json.status.success());
+    assert_no_prohibited_terms(
+        "`setup baseline check --format json` output",
+        &String::from_utf8_lossy(&json.stdout),
+    );
+}

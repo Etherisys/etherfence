@@ -291,6 +291,71 @@ classification/starter-policy/trust-assessment guidance only — they never
 imply runtime blocking, interception, or enforcement, and no `--fail-on`
 flag exists for either command.
 
+## `etherfence setup baseline write` schema (`ef-setup-baseline/v0.1`)
+
+New, additive schema (v1.4.0) — does not change `ef-setup-detect/v0.2`.
+Written by `setup baseline write`, read (never written) by `setup baseline
+check`. See `docs/setup-onboarding.md` for the full safety boundary.
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `schemaVersion` | string | `ef-setup-baseline/v0.1`. |
+| `root` | string | Root directory scanned to produce this baseline. |
+| `servers` | array | One entry per discovered MCP server, sorted by `(agent, configSource, serverName, transport)`. |
+
+Each `servers[]` entry:
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `fingerprint` | string | SHA-256 hex identity fingerprint derived from `agent`+`configSource`+`serverName` (never display name alone, never transport — see below). |
+| `agent` | string | Agent display name. |
+| `configSource` | string | Normalized config-source path (same convention as `setup detect`'s `configPath`). |
+| `serverName` | string | MCP server name. |
+| `transport` | string | `stdio`, `remote`, or `unknown`. Deliberately excluded from the fingerprint so a transport change is reported as `transport-changed` drift rather than making the server unrecognizable across runs. |
+| `commandFingerprint` / `argumentsFingerprint` | string, omitted if not applicable | SHA-256 hex of the raw command/argument text — **never the raw text itself**. Omitted for remote/URL-configured servers. |
+| `packageIdentity` / `packageVersionExpression` | string, omitted if absent | Same parsed package identity/version-expression classification as `ef-setup-detect/v0.2`'s `trustAssessment.invocation` fields — never the raw version text. |
+| `executablePath` | string | Same classification as `ef-setup-detect/v0.2`'s `trustAssessment.executablePath`. |
+| `sha256` | string, omitted if absent | Same as `ef-setup-detect/v0.2`'s `trustAssessment.sha256`. |
+| `environmentVariableNames` | array of string | Sorted, deduplicated variable **names only** — values are never persisted. |
+| `capabilityLabels` | array of string | Sorted, deduplicated `capabilities.labels` tokens. |
+| `trustIndicators` | array | Sorted by `id`. Each entry: `id`, `category`, `severity` only — no narrative `summary`/`rationale`/`evidence`/`remediation` text. |
+| `artifactIdentity` / `configurationRisk` / `aggregate` | string | Same vocabulary as `ef-setup-detect/v0.2`'s `trustAssessment` fields. |
+| `reviewState` | string | Always `unreviewed` in v1.4.0 — no command changes this field; present for forward-compatible extension only. |
+
+## `etherfence setup baseline check` schema (`ef-setup-baseline-comparison/v0.1`)
+
+New, additive schema (v1.4.0). Produced by `setup baseline check --format
+json`; the same information is rendered as human text by default.
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `schemaVersion` | string | `ef-setup-baseline-comparison/v0.1`. |
+| `root` | string | Root directory scanned for the current comparison. |
+| `entries` | array | One entry per server identity found in the union of baseline and current state, sorted by `(agent, configSource, serverName, transport)`. |
+
+Each `entries[]` entry:
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `fingerprint` / `agent` / `configSource` / `serverName` / `transport` | — | Same meaning as the baseline schema above. |
+| `status` | string | `unchanged`, `new`, `changed`, `missing`, or `unverifiable`. |
+| `reasons` | array of string | Closed, deterministic drift-reason set (see below), sorted by a fixed canonical order — never insertion order. `["server-added"]` for `new`, `["server-removed"]` for `missing`, `[]` for `unchanged`. |
+| `baselineRisk` / `currentRisk` | string, omitted if not applicable | The `aggregate` value from the baseline/current side respectively. Omitted for `new` (`baselineRisk`) or `missing` (`currentRisk`). |
+| `riskDirection` | string | `increased`, `decreased`, `unchanged`, or `not-applicable` (for `new`/`missing` entries). |
+
+The closed drift-reason enum: `executable-hash-changed`, `command-changed`,
+`arguments-changed`, `package-identity-changed`, `package-version-changed`,
+`environment-variable-names-changed`, `transport-changed`, `server-added`,
+`server-removed`, `capability-set-changed`, `trust-indicator-set-changed`,
+`artifact-identity-changed`, `risk-increased`, `executable-became-unverifiable`.
+No other value may appear without a schema version bump.
+
+`--fail-on-drift`/`--fail-on-new`/`--fail-on-risk-increase` gate the
+process exit code only — they never change the rendered report, which is
+always printed in full first. A risk *decrease* is always visible in
+`reasons`/`riskDirection` but never satisfies `--fail-on-risk-increase` by
+itself. `check` never writes to `--baseline` under any circumstance.
+
 ## Stability expectations
 
 - v0.1.x may add optional fields, new finding IDs, and new agent kinds.

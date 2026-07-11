@@ -9,7 +9,7 @@
 //! limiting language every vocabulary value carries.
 
 use etherfence_core::{EnvVar, McpServer, Severity};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::io::Read;
 use std::path::Path;
@@ -21,7 +21,7 @@ use std::path::Path;
 /// Artifact Identity Confidence. `VerifiedLocal` and `KnownSource` never
 /// imply authenticity, provenance, installation integrity, or safety —
 /// see `docs/setup-onboarding.md` for the exact limiting language.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ArtifactIdentityConfidence {
     VerifiedLocal,
@@ -32,7 +32,7 @@ pub enum ArtifactIdentityConfidence {
 /// Configuration Risk status. `NoKnownIndicators` means only that no
 /// implemented v1.3.0 indicator triggered — never an absence-of-risk
 /// guarantee.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ConfigurationRiskStatus {
     NoKnownIndicators,
@@ -41,7 +41,7 @@ pub enum ConfigurationRiskStatus {
 }
 
 /// Aggregate Assessment status, derived by `aggregate()` below (FR-061).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum AggregateAssessmentStatus {
     VerifiedLocal,
@@ -109,7 +109,7 @@ pub fn configuration_risk_from_indicators(
 /// Fixed canonical order for indicator categories (research.md Decision
 /// 13), most-actionable-first. Used both for `IndicatorCategory::ALL` and
 /// for deterministic indicator sorting via `sort_indicators`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum IndicatorCategory {
     ObscuredLaunch,
@@ -212,7 +212,7 @@ pub enum PackageRunner {
     PipxRun,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum VersionExpressionKind {
     ExactlyPinned,
@@ -304,7 +304,7 @@ impl InvocationAssessment {
 // Executable path classification (spec FR-030-FR-045)
 // ---------------------------------------------------------------------
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ExecutablePathClassification {
     AbsolutePath,

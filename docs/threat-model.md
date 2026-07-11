@@ -207,6 +207,45 @@ folding it silently into the "no new trust boundary" framing above.
   server regardless of this assessment's output — this feature introduces
   no path to a permissive default.
 
+## v1.4.0 addendum: MCP server integrity baseline and drift detection
+
+`etherfence setup baseline write`/`check` add no new trust boundary beyond
+what v1.3.0 already documents above: both commands reuse the exact same
+discovery, classification, and trust-assessment functions, including the
+same bounded local-artifact hashing and its safety invariants (no-follow
+open, opened-file identity re-validation, bounded streamed reads, no
+symlink following). Two new I/O surfaces are added, both treated as
+trusted-operator CLI input per this document's existing CLI-trusted-
+operator-input model (see "v0.2.x addendum" above):
+
+- **`--output` (write)**: an explicit, operator-chosen path. `write`
+  refuses to overwrite an existing file at this path unless `--overwrite`
+  is passed — this is a data-loss safeguard, not a security boundary
+  (there is no untrusted caller in CLI mode).
+- **`--baseline` (check)**: read through the same bounded,
+  regular-file-only read helper (`read_bounded_text_file`,
+  `MAX_BASELINE_FILE_BYTES`) already used by the pre-existing `scan
+  --baseline`. A baseline file with a malformed schema version or invalid
+  JSON fails closed (non-zero exit) rather than being treated as empty.
+  `check` never writes to this path under any circumstance.
+
+**Safety boundary re-affirmed.** Baseline/comparison output persists only
+normalized identity, command/argument *fingerprints* (SHA-256 hashes,
+never raw text), package identity/version classification, executable
+path/hash, environment variable *names* (never values), capability
+labels, trust-indicator IDs/categories/severities, and the v1.3.0
+trust/risk vocabulary. It never persists or emits raw environment values,
+secrets, credentials, file contents, prompts/messages, or MCP protocol
+traffic — the same redaction posture as v1.3.0's trust assessment,
+verified by an automated negative-content test.
+
+**No new process or network surface**, no registry/reputation lookup, no
+download/install action, no signature/provenance verification, no
+sandboxing or subprocess execution, and no change to `mcp-proxy` runtime
+behavior. `check`'s gate flags (`--fail-on-drift`/`--fail-on-new`/
+`--fail-on-risk-increase`) only affect the process exit code, never the
+rendered report or any file on disk.
+
 ## Path handling and Semgrep path-traversal triage
 
 Static analysis (Semgrep) flags file-path handling across EtherFence as a

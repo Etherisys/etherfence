@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/home/example"],
+      "env": {"MCP_ENV_NAME": "fixture-value", "OTHER_ENV_NAME": "fixture-value"}
+    },
+    "docs": {
+      "url": "https://example.invalid/mcp",
+      "env": {"MCP_ENV_NAME": "fixture-value"}
+    }
+  }
+}

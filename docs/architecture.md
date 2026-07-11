@@ -12,7 +12,7 @@ plus an experimental MCP stdio boundary proxy.
 - `etherfence-policy`: scan-only TOML posture policy evaluation
 - `etherfence-report`: human-readable, JSON, Markdown, and SARIF report rendering
 - `etherfence-mcp`: experimental MCP stdio boundary proxy (policy, audit log, proxy engine)
-- `etherfence-setup`: local `setup` onboarding command family — client detection/wrapping (`detect`/`plan`/`apply`/`rollback`/`doctor`), the v1.2.0 client catalog (`catalog.rs`), MCP server capability classification/starter-policy recommendation (`classification.rs`), and the v1.3.0 MCP server trust and integrity assessment (`trust.rs`)
+- `etherfence-setup`: local `setup` onboarding command family — client detection/wrapping (`detect`/`plan`/`apply`/`rollback`/`doctor`), the v1.2.0 client catalog (`catalog.rs`), MCP server capability classification/starter-policy recommendation (`classification.rs`), the v1.3.0 MCP server trust and integrity assessment (`trust.rs`), and the v1.4.0 integrity baseline/drift comparison (`baseline.rs`)
 
 ## Scan data flow
 
@@ -105,6 +105,26 @@ all static, closed-world checks with no live server interaction. Rendering
 `etherfence-cli`, mirroring the v1.2.0 rendering split. `recommendation.tier`
 is untouched and stays `deny`; this feature adds an independent assessment
 alongside it, never a path to a permissive default.
+
+## MCP server integrity baseline and drift detection (v1.4.0)
+
+`etherfence setup baseline write`/`check` are computed by
+`etherfence-setup::baseline` (`build_baseline`, `compare`), a pure
+comparison layer with no new trust boundary and no duplicated engine: it
+reuses `etherfence_inventory::discover` for filesystem reads and the
+crate's existing (crate-private) `server_from_mcp` — the same
+classification (`classification.rs`) and trust-assessment (`trust.rs`)
+path `detect()` already uses — for every raw `McpServer`, called from a
+child module rather than through a new visibility hole. The only new I/O
+is: reading a previously written `--baseline` file (bounded, via the
+existing `MAX_BASELINE_FILE_BYTES` limit already used by the pre-existing
+`scan --baseline`) and writing a new one for `--output` (gated by the
+overwrite-refusal check before any write is attempted). No process starts,
+no network connection opens, and no MCP protocol method is invoked.
+Command/argument fingerprints are SHA-256 hashes computed over already
+locally-read text, never persisted in raw form. Rendering (`--format
+json`/human) happens in `etherfence-cli`, mirroring the v1.2.0/v1.3.0
+rendering split exactly.
 
 ## Runtime posture
 

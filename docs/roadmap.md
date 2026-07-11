@@ -586,6 +586,51 @@
   behavior are unchanged; `setup plan` and `setup doctor` human output is
   byte-identical to their pre-v1.3.0 output
 
+## v1.4.0 - MCP server integrity baseline and drift detection
+
+- `etherfence setup baseline write --root <path> --output <file>
+  [--overwrite]`: writes a deterministic, point-in-time MCP server
+  integrity baseline (`ef-setup-baseline/v0.1`); refuses to overwrite an
+  existing output file unless `--overwrite` is passed
+- `etherfence setup baseline check --root <path> --baseline <file>
+  [--format human|json] [--fail-on-drift] [--fail-on-new]
+  [--fail-on-risk-increase]`: compares current state against a baseline
+  and reports drift (`ef-setup-baseline-comparison/v0.1`); strictly
+  read-only against `--baseline` — never auto-updates, auto-accepts, or
+  rewrites it under any circumstance
+- Every server classified as `unchanged`/`new`/`changed`/`missing`/
+  `unverifiable`, with a closed, deterministic 14-value drift-reason enum
+  (executable hash, command, arguments, package identity/version,
+  environment-variable name set, transport, server added/removed,
+  capability set, trust-indicator set, artifact identity, a documented
+  risk increase, or the executable becoming newly unverifiable)
+- Collision-safe identity fingerprint derived from agent, normalized
+  config-source path, and server name — never display name alone;
+  transport is tracked as a comparable field rather than folded into the
+  fingerprint, so a transport change is reported as drift instead of
+  making the server unrecognizable across runs
+- Fixed monotonic risk ordering over the five trust-assessment aggregate
+  values; a risk decrease is always visible as drift but never satisfies
+  `--fail-on-risk-increase` by itself
+- Reuses v1.3.0's discovery, classification, trust assessment, and local
+  artifact hashing exactly as-is — no new discovery/classification/hashing
+  engine; every v1.3.0 file-safety invariant (no-follow open, opened-file
+  identity re-validation, bounded streamed reads, no symlink following)
+  is preserved when re-hashing for comparison
+- Persists/emits only safe, normalized fields — identity, command/argument
+  *fingerprints* (hashes, never raw text), package identity/version
+  classification, executable path/hash, environment variable *names*
+  (never values), capability labels, trust-indicator IDs/categories/
+  severities, and the v1.3.0 trust/risk vocabulary; never persists or
+  emits raw environment values, secrets, credentials, file contents,
+  prompts/messages, or MCP protocol traffic
+- No new crate, daemon, network access, subprocess execution, malware
+  classification, registry/reputation lookup, download/install action,
+  signature/provenance verification, or sandboxing; `ef-setup-detect/v0.2`,
+  the pre-existing `scan --write-baseline`/`--baseline`
+  (`ef-baseline/v0.1.3`), `mcp-proxy`, `ef-mcp-policy/v0.1`, and every
+  other existing `setup` subcommand are unchanged
+
 ## v0.2.x ideas
 
 - Expand tested config schemas and platform paths

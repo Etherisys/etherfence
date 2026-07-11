@@ -151,6 +151,79 @@ introduces no path to an `"allow"` recommendation. A favorable assessment
 may be described as indicating a server is ready for manual review, but it
 never grants, enables, or implies runtime permission. Existing `mcp-proxy` enforcement behavior, `tools/list` filtering, `tools/call` enforcement, method policy, path policy, and audit behavior are not changed by this feature. The MCP proxy policy schema is not touched either.
 
+## `etherfence setup baseline write` / `check` — integrity baseline and drift detection (v1.4.0)
+
+`etherfence setup baseline write --root <path> --output <file>
+[--overwrite]` captures a deterministic, point-in-time snapshot of every
+discovered MCP server (schema `ef-setup-baseline/v0.1`). `etherfence setup
+baseline check --root <path> --baseline <file> [--format human|json]
+[--fail-on-drift] [--fail-on-new] [--fail-on-risk-increase]` compares
+current state against that snapshot and reports drift (schema
+`ef-setup-baseline-comparison/v0.1`). Both commands reuse v1.3.0's
+discovery, capability classification, and trust assessment exactly as-is —
+no new discovery, classification, or hashing engine.
+
+**What this feature never does.** `check` is strictly read-only against the
+`--baseline` file: it never auto-updates, auto-accepts, or silently
+rewrites it under any circumstance, including when drift is found and
+including when a gate flag causes a non-zero exit. `write` refuses to
+overwrite an existing `--output` file unless `--overwrite` is explicitly
+passed. Neither command starts a process, opens a network connection,
+performs a registry/reputation lookup, downloads or installs anything,
+verifies a cryptographic signature, or changes `mcp-proxy` runtime
+behavior in any way.
+
+**What is persisted or emitted — and what never is.** A baseline entry or
+comparison-report entry contains only: a normalized identity fingerprint
+(agent, config source, server name — see below) plus transport;
+command/argument *fingerprints* (SHA-256 hashes, never the raw command or
+argument text); parsed package identity and version-expression
+classification; executable path classification and its SHA-256 digest
+when available; environment variable **names only**; capability labels;
+trust-indicator IDs/categories/severities; and the v1.3.0 trust/risk
+vocabulary (`artifactIdentity`/`configurationRisk`/`aggregate`). It never
+persists or emits raw environment variable values, secrets, credentials,
+file contents, prompts/messages, MCP protocol traffic, or unredacted
+command/argument text — the same redaction posture as v1.3.0's trust
+assessment.
+
+**Server identity.** A server's identity fingerprint is derived from its
+agent, normalized config-source path, and server name — never display name
+alone, and never raw command text. Transport is deliberately *not* part of
+the fingerprint: it is tracked as an ordinary comparable field instead, so
+a server switching between a local command and a remote URL is reported as
+`changed` with a `transport-changed` reason rather than as one server
+disappearing and an unrelated one appearing.
+
+**Statuses and drift reasons.** Every server is classified as one of
+`unchanged`, `new`, `changed`, `missing`, or `unverifiable`, with a closed,
+deterministic set of drift reasons (executable hash, command, arguments,
+package identity, package version, environment-variable name set,
+transport, server added/removed, capability set, trust-indicator set,
+artifact identity, a documented risk increase, or the executable becoming
+newly unverifiable). `unverifiable` is reported when a previously
+hash-verified executable can no longer be safely hashed (and nothing
+independent of that fact also changed) — distinct from a generic `changed`
+status, so an operator can immediately tell "we lost the ability to verify
+this" apart from "something else about this server changed."
+
+**Risk ordering and gates.** The five trust-assessment aggregate values
+have a fixed severity order (`verified-local` < `known-source` < `unknown`
+< `needs-review` < `high-risk`). A risk *decrease* is still reported as
+drift (never silently hidden) but never satisfies `--fail-on-risk-increase`
+by itself — only a documented increase along that order does.
+`--fail-on-drift` fails on any non-`unchanged` status; `--fail-on-new`
+fails only on `new`; `--fail-on-risk-increase` fails only on a documented
+increase. Any combination of gates may be passed together, and the full
+report is always printed before the process exits, whether or not a gate
+triggers.
+
+**Relationship to the pre-existing `scan --write-baseline`/`--baseline`.**
+That feature (findings baseline, schema `ef-baseline/v0.1.3`) is unrelated
+and unaffected: it tracks `scan`'s security findings, not MCP server
+integrity, and lives under a completely separate flag namespace and schema
+family.
+
 ## v1.1.0 write targets
 
 Only these targets may be rewritten by `setup apply` in v1.1.0:
