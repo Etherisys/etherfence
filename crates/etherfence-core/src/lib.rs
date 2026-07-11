@@ -75,6 +75,110 @@ pub fn read_bounded_text_file(path: &Path, max_bytes: u64) -> io::Result<String>
     })
 }
 
+/// Opens `path` for reading, refusing to follow a symlink at the final
+/// path component. On Unix this is enforced atomically by the kernel via
+/// `O_NOFOLLOW` — mirrors `etherfence-setup::trust`'s `open_no_follow`.
+/// There is no portable `O_NOFOLLOW` equivalent on Windows; there this
+/// performs a plain open and relies on the post-read identity check in
+/// `read_bounded_text_file_no_follow` to detect a swapped file after the
+/// fact.
+fn open_no_follow(path: &Path) -> io::Result<fs::File> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        // O_NOFOLLOW. Value is the same across all Linux architectures
+        // (the only Unix target in this project's CI matrix); avoided
+        // pulling in the `libc` crate for a single constant.
+        const O_NOFOLLOW: i32 = 0o400_000;
+        fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(O_NOFOLLOW)
+            .open(path)
+    }
+    #[cfg(not(unix))]
+    {
+        fs::File::open(path)
+    }
+}
+
+/// Like [`read_bounded_text_file`], but additionally refuses to follow a
+/// symlink at `path`: a pre-open `symlink_metadata` check rejects a
+/// symlink outright, the open itself refuses to follow one at the kernel
+/// level on Unix (`O_NOFOLLOW`, closing the race between the check and
+/// the open), and the opened file's identity is re-validated against a
+/// fresh path-based check after the read completes (catching a
+/// replacement that happens mid-read). Used for files where silently
+/// following a swapped symlink would be misleading rather than merely a
+/// containment concern — currently the v1.4.0 `--baseline` file read.
+pub fn read_bounded_text_file_no_follow(path: &Path, max_bytes: u64) -> io::Result<String> {
+    let pre = fs::symlink_metadata(path)?;
+    if pre.file_type().is_symlink() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{} is a symlink; refusing to follow it", path.display()),
+        ));
+    }
+    if !pre.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{} is not a regular file", path.display()),
+        ));
+    }
+
+    let file = open_no_follow(path)?;
+    let mut handle = same_file::Handle::from_file(file)?;
+    if !handle.as_file().metadata()?.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{} is not a regular file", path.display()),
+        ));
+    }
+
+    let read_limit = max_bytes.saturating_add(1);
+    let mut buf = Vec::new();
+    handle
+        .as_file_mut()
+        .take(read_limit)
+        .read_to_end(&mut buf)?;
+
+    if buf.len() as u64 > max_bytes {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "file {} exceeds the maximum allowed size of {} bytes",
+                path.display(),
+                max_bytes
+            ),
+        ));
+    }
+
+    // Re-check both the lexical path (in case it was replaced with a
+    // symlink or non-regular file while the read was in progress) and
+    // file identity (in case a same-named replacement file coincidentally
+    // matches) before trusting the bytes just read.
+    let post = fs::symlink_metadata(path)?;
+    if post.file_type().is_symlink() || !post.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{} changed identity while being read", path.display()),
+        ));
+    }
+    let post_handle = same_file::Handle::from_path(path)?;
+    if handle != post_handle {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{} was replaced while being read", path.display()),
+        ));
+    }
+
+    String::from_utf8(buf).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("file {} is not valid UTF-8", path.display()),
+        )
+    })
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum AgentKind {
@@ -558,6 +662,76 @@ mod tests {
         // through. The bounded reader must reject it without hanging.
         let result = read_bounded_text_file(path, 1024);
 
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn read_bounded_text_file_no_follow_accepts_a_regular_file() {
+        let path = write_temp_file("no-follow-regular", b"hello");
+        let result = read_bounded_text_file_no_follow(&path, 1024);
+        fs::remove_file(&path).ok();
+        assert_eq!(result.unwrap(), "hello");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_bounded_text_file_no_follow_rejects_a_symlink_to_a_valid_file() {
+        let target = write_temp_file("no-follow-symlink-target", b"hello");
+        let link = target.with_extension("link");
+        std::os::unix::fs::symlink(&target, &link).expect("create symlink");
+
+        let result = read_bounded_text_file_no_follow(&link, 1024);
+
+        fs::remove_file(&link).ok();
+        fs::remove_file(&target).ok();
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_bounded_text_file_no_follow_rejects_a_symlink_to_a_directory() {
+        let dir = std::env::temp_dir();
+        let link = dir.join(format!(
+            "etherfence-core-test-no-follow-dir-link-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&link);
+        std::os::unix::fs::symlink(&dir, &link).expect("create symlink to directory");
+
+        let result = read_bounded_text_file_no_follow(&link, 1024);
+
+        fs::remove_file(&link).ok();
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_bounded_text_file_no_follow_rejects_a_broken_symlink() {
+        let dir = std::env::temp_dir();
+        let missing = dir.join(format!(
+            "etherfence-core-test-no-follow-missing-target-{}",
+            std::process::id()
+        ));
+        let link = dir.join(format!(
+            "etherfence-core-test-no-follow-broken-link-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&link);
+        std::os::unix::fs::symlink(&missing, &link).expect("create broken symlink");
+
+        let result = read_bounded_text_file_no_follow(&link, 1024);
+
+        fs::remove_file(&link).ok();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn read_bounded_text_file_no_follow_rejects_a_directory() {
+        let dir = std::env::temp_dir();
+        let result = read_bounded_text_file_no_follow(&dir, 1024);
         let err = result.unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
     }

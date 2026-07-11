@@ -6,4 +6,5 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+same-file.workspace = true
 serde.workspace = true

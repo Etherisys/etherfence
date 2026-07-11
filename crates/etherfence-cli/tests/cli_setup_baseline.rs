@@ -732,3 +732,63 @@ fn hash_verified_executable_becoming_unreadable_is_unverifiable() {
     // Restore permissions so the temp directory can be cleaned up normally.
     fs::set_permissions(&bin_path, fs::Permissions::from_mode(0o755)).unwrap();
 }
+
+// --- Review findings #2/#3: no-follow baseline read, race-safe write ---
+
+#[cfg(unix)]
+#[test]
+fn check_refuses_a_baseline_path_that_is_a_symlink() {
+    let root = fixture_root("baseline-home");
+    let real_baseline = temp_home("symlink-target").join("baseline.json");
+    assert!(write_baseline(&root, &real_baseline).status.success());
+
+    let link = temp_home("symlink-link-parent").join("baseline.json");
+    fs::create_dir_all(link.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(&real_baseline, &link).unwrap();
+
+    let output = check(&root, &link, &[]);
+    assert!(
+        !output.status.success(),
+        "check must fail closed when --baseline is a symlink"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn write_refuses_to_create_through_a_pre_existing_symlink_without_overwrite() {
+    let root = fixture_root("baseline-home");
+    let real_target = temp_home("write-symlink-target").join("baseline.json");
+    fs::create_dir_all(real_target.parent().unwrap()).unwrap();
+    fs::write(&real_target, "not a real baseline").unwrap();
+
+    let link = temp_home("write-symlink-link-parent").join("baseline.json");
+    fs::create_dir_all(link.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(&real_target, &link).unwrap();
+
+    let result = write_baseline(&root, &link);
+    assert!(
+        !result.status.success(),
+        "write without --overwrite must refuse to create through a pre-existing symlink"
+    );
+    // The symlink's target must be untouched.
+    assert_eq!(
+        fs::read_to_string(&real_target).unwrap(),
+        "not a real baseline"
+    );
+}
+
+#[test]
+fn baseline_entries_carry_a_stable_agent_kind_distinct_from_the_display_name() {
+    let root = fixture_root("baseline-home");
+    let output = temp_home("agent-kind").join("baseline.json");
+    assert!(write_baseline(&root, &output).status.success());
+    let json: Value = serde_json::from_slice(&fs::read(&output).unwrap()).unwrap();
+    let claude_entry = json["servers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["configSource"] == "~/.claude.json" && s["serverName"] == "filesystem")
+        .unwrap();
+    assert_eq!(claude_entry["agentKind"], "claude-code");
+    assert_eq!(claude_entry["agent"], "Claude Code");
+}

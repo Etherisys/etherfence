@@ -172,22 +172,37 @@ non-zero while still printing the full report to stdout.
 **Server identity fingerprint**
 
 - **FR-006**: Each baseline entry and each current-state entry MUST carry a
-  deterministic identity fingerprint derived from the server's agent kind,
-  its normalized config-source identity (the existing `~/...`-normalized
-  `config_path` string already produced by `etherfence-inventory::discover`),
-  and its server name. Two servers differing in any one of these three
-  inputs MUST never produce the same fingerprint. Transport
+  deterministic identity fingerprint derived from the server's **stable
+  agent kind identifier** (a machine key such as `"vs-code"`, never the
+  human-facing agent display name — see FR-006a), its normalized
+  config-source identity (the existing `~/...`-normalized `config_path`
+  string already produced by `etherfence-inventory::discover`), and its
+  server name. Two servers differing in any one of these three inputs MUST
+  never produce the same fingerprint. The three inputs MUST be combined
+  via a canonical, structurally unambiguous encoding (e.g. a JSON array)
+  before hashing — never a delimiter-joined string, since none of these
+  fields is proven to exclude any particular character or the empty
+  string, and a naive join can collide across a field boundary (e.g.
+  `"a"`+`"bc"` joined with separator `X` equals `"ab"`+`"c"` joined the
+  same way if either field could itself contain `X`). Transport
   (`stdio`/`remote`/`unknown`) is deliberately excluded from the
   fingerprint itself: `server_name` is already a unique JSON object key
-  within one `config_source`, and `config_source`+agent are unique per
-  discovered config file, so (agent, config_source, server_name) alone is
-  already collision-free for every entry the discovery engine can produce —
-  folding transport into the fingerprint as well would make a server's
-  transport change indistinguishable from that server being removed and a
-  different one being added, permanently blocking the closed
-  `transport-changed` drift reason (FR-014) from ever being reachable.
-  Transport is instead tracked as a normal mutable field on the matched
-  identity, compared directly to detect `transport-changed` (FR-014).
+  within one `config_source`, and `config_source`+agent kind are unique
+  per discovered config file, so (agent kind, config_source, server_name)
+  alone is already collision-free for every entry the discovery engine can
+  produce — folding transport into the fingerprint as well would make a
+  server's transport change indistinguishable from that server being
+  removed and a different one being added, permanently blocking the
+  closed `transport-changed` drift reason (FR-014) from ever being
+  reachable. Transport is instead tracked as a normal mutable field on the
+  matched identity, compared directly to detect `transport-changed`
+  (FR-014).
+- **FR-006a**: The persisted/emitted `agent` field (human-facing display
+  name, e.g. `"VS Code"`) and `agentKind` field (stable machine key, e.g.
+  `"vs-code"`) are two distinct fields, never conflated. Only `agentKind`
+  is a fingerprint input; `agent` is presentation-only. A future rewording
+  of a display name MUST NOT change any fingerprint or produce spurious
+  `new`/`missing` drift for unrelated servers.
 - **FR-007**: Server matching between a baseline and current state for the
   purpose of computing status/drift MUST use this fingerprint exclusively —
   never display name alone, and never raw command text alone.
@@ -231,8 +246,16 @@ non-zero while still printing the full report to stdout.
   `environment-variable-names-changed`, `transport-changed`,
   `server-added`, `server-removed`, `capability-set-changed`,
   `trust-indicator-set-changed`, `artifact-identity-changed`,
-  `risk-increased`, `executable-became-unverifiable`. No other reason may be
-  introduced without a schema version bump.
+  `configuration-risk-changed`, `risk-increased`,
+  `executable-became-unverifiable`. No other reason may be introduced
+  without a schema version bump. `configuration-risk-changed` MUST fire
+  whenever the recorded `configurationRisk` value differs between
+  baseline and current, in either direction, independent of
+  `risk-increased` (which only fires on an aggregate-rank increase) and
+  independent of how `trust-indicator-set-changed` is computed — this is
+  a direct-comparison guarantee, not an inference from the indicator set,
+  so a configuration-risk change can never be silently absorbed into
+  `unchanged`.
 - **FR-015**: A `new` entry's only drift reason MUST be `server-added`; a
   `missing` entry's only drift reason MUST be `server-removed`.
 - **FR-016**: Argument-set and environment-variable-name-set comparisons
@@ -243,9 +266,12 @@ non-zero while still printing the full report to stdout.
 - **FR-017**: `capability-set-changed` MUST fire when the server's
   classified capability label set (from v1.3.0/v1.2.0 classification)
   differs between baseline and current, compared as a set.
-- **FR-018**: `trust-indicator-set-changed` MUST fire when the set of
-  trust-indicator IDs raised for the server differs between baseline and
-  current, compared as a set of indicator IDs.
+- **FR-018**: `trust-indicator-set-changed` MUST fire when the persisted
+  indicator tuples (`id`, `category`, `severity`) raised for the server
+  differ between baseline and current — the full tuple, not the `id` set
+  alone, so an indicator whose `id` is unchanged but whose `severity` (and
+  therefore its contribution to `configurationRisk`) changed is still
+  detected as drift.
 - **FR-019**: `artifact-identity-changed` MUST fire when the recorded
   `ArtifactIdentityConfidence` value differs between baseline and current,
   independent of whether the aggregate/risk status also changed.
@@ -321,6 +347,33 @@ non-zero while still printing the full report to stdout.
   config, MCP server definition, policy file, or EtherFence setup backup —
   both commands are read-only over the scanned root, exactly like `setup
   detect`.
+- **FR-033a**: `check` MUST refuse (fail closed) to read a `--baseline`
+  path that is a symlink, using the same no-follow discipline as v1.3.0's
+  local artifact hashing (a pre-open `symlink_metadata` check, plus, on
+  Unix, `O_NOFOLLOW` at the actual open, closing the race between the
+  check and the open) — a swapped or attacker-influenced symlink at that
+  path MUST NOT be silently followed and compared against.
+- **FR-033b**: `write` without `--overwrite` MUST use an atomic,
+  exclusive-creation file operation (e.g. `O_CREAT|O_EXCL`) rather than a
+  separate existence-check followed by a write — a file (or symlink)
+  created at `--output` between the check and the write MUST NOT be
+  silently overwritten. `write --overwrite` MUST write to a temporary file
+  in the same directory and atomically rename it into place, so a
+  concurrent reader of `--output` never observes a partially written file.
+  A pre-existing symlink at `--output` MUST be refused when `--overwrite`
+  is absent (never written through) and MUST be replaced, never followed
+  through, when `--overwrite` is present.
+- **FR-033c**: Before comparing against a parsed baseline, `check` MUST
+  validate its internal consistency and fail closed (non-zero exit, no
+  comparison performed) if: any entry's `fingerprint` does not match a
+  fresh recomputation from its own `agentKind`/`configSource`/`serverName`
+  fields; any two entries share a `fingerprint`; any `sha256` value is not
+  exactly 64 lowercase hex characters; `environmentVariableNames`,
+  `capabilityLabels`, or `trustIndicators` (by `id`) are not sorted and
+  deduplicated; or `aggregate` is inconsistent with the entry's own
+  `artifactIdentity`/`configurationRisk` under the same derivation rule
+  FR-021 defines. This guards against hand-edited or corrupted baseline
+  files producing a misleading comparison instead of an honest failure.
 
 **Reuse and safety-invariant preservation**
 

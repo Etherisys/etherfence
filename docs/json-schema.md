@@ -301,18 +301,19 @@ check`. See `docs/setup-onboarding.md` for the full safety boundary.
 | --- | --- | --- |
 | `schemaVersion` | string | `ef-setup-baseline/v0.1`. |
 | `root` | string | Root directory scanned to produce this baseline. |
-| `servers` | array | One entry per discovered MCP server, sorted by `(agent, configSource, serverName, transport)`. |
+| `servers` | array | One entry per discovered MCP server, sorted by `(agentKind, configSource, serverName, transport)`. |
 
 Each `servers[]` entry:
 
 | Field | Type | Description |
 | --- | --- | --- |
-| `fingerprint` | string | SHA-256 hex identity fingerprint derived from `agent`+`configSource`+`serverName` (never display name alone, never transport — see below). |
-| `agent` | string | Agent display name. |
+| `fingerprint` | string | SHA-256 hex identity fingerprint. Derived from a canonical JSON-array encoding of `agentKind`+`configSource`+`serverName` (never a delimiter-joined string — see below), and never transport (see below), and never the human-facing `agent` display name. |
+| `agentKind` | string | Stable machine identifier for the client (`AgentKind::key()`, e.g. `"vs-code"`, `"claude-code"`) — this, not `agent`, is one of the fingerprint's three inputs, so a future rewording of the display name can never change identity or produce spurious `new`/`missing` drift. |
+| `agent` | string | Human-facing display name (e.g. `"VS Code"`). Presentation only — never used for identity, matching, or fingerprinting. |
 | `configSource` | string | Normalized config-source path (same convention as `setup detect`'s `configPath`). |
 | `serverName` | string | MCP server name. |
 | `transport` | string | `stdio`, `remote`, or `unknown`. Deliberately excluded from the fingerprint so a transport change is reported as `transport-changed` drift rather than making the server unrecognizable across runs. |
-| `commandFingerprint` / `argumentsFingerprint` | string, omitted if not applicable | SHA-256 hex of the raw command/argument text — **never the raw text itself**. Omitted for remote/URL-configured servers. |
+| `commandFingerprint` / `argumentsFingerprint` | string, omitted if not applicable | SHA-256 hex of the raw command string / a canonical JSON-array encoding of the argument list — **never the raw text itself**. The argument fingerprint hashes a JSON array (`serde_json::to_vec`), not a delimiter-joined string: a plain join cannot distinguish `[]` from `[""]`, or `["a","b"]` from a single element containing a separator character, since arguments are arbitrary operator-controlled strings with no excluded characters. Omitted for remote/URL-configured servers. |
 | `packageIdentity` / `packageVersionExpression` | string, omitted if absent | Same parsed package identity/version-expression classification as `ef-setup-detect/v0.2`'s `trustAssessment.invocation` fields — never the raw version text. |
 | `executablePath` | string | Same classification as `ef-setup-detect/v0.2`'s `trustAssessment.executablePath`. |
 | `sha256` | string, omitted if absent | Same as `ef-setup-detect/v0.2`'s `trustAssessment.sha256`. |
@@ -331,13 +332,13 @@ json`; the same information is rendered as human text by default.
 | --- | --- | --- |
 | `schemaVersion` | string | `ef-setup-baseline-comparison/v0.1`. |
 | `root` | string | Root directory scanned for the current comparison. |
-| `entries` | array | One entry per server identity found in the union of baseline and current state, sorted by `(agent, configSource, serverName, transport)`. |
+| `entries` | array | One entry per server identity found in the union of baseline and current state, sorted by `(agentKind, configSource, serverName, transport)`. |
 
 Each `entries[]` entry:
 
 | Field | Type | Description |
 | --- | --- | --- |
-| `fingerprint` / `agent` / `configSource` / `serverName` / `transport` | — | Same meaning as the baseline schema above. |
+| `fingerprint` / `agentKind` / `agent` / `configSource` / `serverName` / `transport` | — | Same meaning as the baseline schema above. |
 | `status` | string | `unchanged`, `new`, `changed`, `missing`, or `unverifiable`. |
 | `reasons` | array of string | Closed, deterministic drift-reason set (see below), sorted by a fixed canonical order — never insertion order. `["server-added"]` for `new`, `["server-removed"]` for `missing`, `[]` for `unchanged`. |
 | `baselineRisk` / `currentRisk` | string, omitted if not applicable | The `aggregate` value from the baseline/current side respectively. Omitted for `new` (`baselineRisk`) or `missing` (`currentRisk`). |
@@ -347,14 +348,33 @@ The closed drift-reason enum: `executable-hash-changed`, `command-changed`,
 `arguments-changed`, `package-identity-changed`, `package-version-changed`,
 `environment-variable-names-changed`, `transport-changed`, `server-added`,
 `server-removed`, `capability-set-changed`, `trust-indicator-set-changed`,
-`artifact-identity-changed`, `risk-increased`, `executable-became-unverifiable`.
-No other value may appear without a schema version bump.
+`artifact-identity-changed`, `configuration-risk-changed`, `risk-increased`,
+`executable-became-unverifiable`. No other value may appear without a
+schema version bump. `configuration-risk-changed` fires whenever
+`configurationRisk` itself differs between baseline and current, in either
+direction — a defense-in-depth signal independent of the `trustIndicators`
+comparison (which itself compares the full `(id, category, severity)`
+tuple, not id alone) and of `risk-increased` (which only fires on an
+*increase* in the aggregate rank); this guarantees a configuration-risk
+change is never silently folded into `unchanged`.
 
 `--fail-on-drift`/`--fail-on-new`/`--fail-on-risk-increase` gate the
 process exit code only — they never change the rendered report, which is
 always printed in full first. A risk *decrease* is always visible in
 `reasons`/`riskDirection` but never satisfies `--fail-on-risk-increase` by
-itself. `check` never writes to `--baseline` under any circumstance.
+itself. `check` never writes to `--baseline` under any circumstance: it
+opens the file with symlink-following refused (a pre-open `symlink_metadata`
+check plus, on Unix, `O_NOFOLLOW` at the actual open, closing the race
+between the two) and validates the parsed document's internal consistency
+(fingerprints match their own identity fields, no duplicate fingerprints,
+well-formed `sha256` values, sorted/deduplicated set fields, and
+`aggregate` consistent with `artifactIdentity`/`configurationRisk`) before
+ever comparing against it — a hand-edited or corrupted baseline fails
+closed rather than producing a misleading comparison. `write` without
+`--overwrite` uses atomic exclusive file creation (never a separate
+existence-check-then-write), so a file that appears at `--output` between
+two operations can never be silently overwritten, and a pre-existing
+symlink at that path is refused rather than written through.
 
 ## Stability expectations
 

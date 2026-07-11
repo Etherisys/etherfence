@@ -14,8 +14,19 @@ etherfence setup baseline check --root <path> --baseline <file>
 - `--root` (hidden, like every other `setup` subcommand's `--root`):
   defaults to the same platform-appropriate scan root as `setup detect`.
 - `write --output` is required; `write` fails (non-zero exit, no file
-  written) if `<file>` exists and `--overwrite` is absent.
-- `check --baseline` is required; `check` never writes to `<file>`.
+  written) if `<file>` exists and `--overwrite` is absent, using atomic
+  exclusive file creation (never a separate existence-check then write) so
+  a file that appears concurrently is never silently overwritten, and a
+  pre-existing symlink at that path is refused rather than written
+  through. `write --overwrite` writes to a temp file in the same directory
+  and atomically renames it into place.
+- `check --baseline` is required; `check` never writes to `<file>`. The
+  file is read with symlink-following refused (fails closed if `<file>` is
+  a symlink) and, once parsed, validated for internal consistency
+  (fingerprints match their own identity fields, no duplicate
+  fingerprints, well-formed `sha256`, sorted/deduplicated set fields,
+  `aggregate` consistent with `artifactIdentity`/`configurationRisk`)
+  before ever being compared against.
 - `check --format` defaults to `human`.
 - Gate flags default to off; any combination may be passed together.
 - Exit code: `0` unless a passed gate's condition is met (see spec
@@ -31,6 +42,7 @@ etherfence setup baseline check --root <path> --baseline <file>
   "servers": [
     {
       "fingerprint": "9f2c...",
+      "agentKind": "claude-code",
       "agent": "Claude Code",
       "configSource": "~/.claude.json",
       "serverName": "filesystem",
@@ -64,6 +76,7 @@ the v1.3.0 `TrustAssessment.sha256` convention).
   "entries": [
     {
       "fingerprint": "9f2c...",
+      "agentKind": "claude-code",
       "agent": "Claude Code",
       "configSource": "~/.claude.json",
       "serverName": "filesystem",

@@ -115,12 +115,16 @@ reuses `etherfence_inventory::discover` for filesystem reads and the
 crate's existing (crate-private) `server_from_mcp` — the same
 classification (`classification.rs`) and trust-assessment (`trust.rs`)
 path `detect()` already uses — for every raw `McpServer`, called from a
-child module rather than through a new visibility hole. The only new I/O
-is: reading a previously written `--baseline` file (bounded, via the
-existing `MAX_BASELINE_FILE_BYTES` limit already used by the pre-existing
-`scan --baseline`) and writing a new one for `--output` (gated by the
-overwrite-refusal check before any write is attempted). No process starts,
-no network connection opens, and no MCP protocol method is invoked.
+child module rather than through a new visibility hole. `etherfence-setup`
+also exposes `validate_baseline`, a pure consistency check `etherfence-cli`
+runs immediately after parsing a baseline and before ever comparing
+against it. The only new I/O is: reading a previously written `--baseline`
+file (bounded and no-follow, via the new
+`etherfence_core::read_bounded_text_file_no_follow`, sharing
+`MAX_BASELINE_FILE_BYTES` with the pre-existing `scan --baseline`) and
+writing a new one for `--output` (atomic exclusive creation, or an atomic
+temp-file-plus-rename with `--overwrite`). No process starts, no network
+connection opens, and no MCP protocol method is invoked.
 Command/argument fingerprints are SHA-256 hashes computed over already
 locally-read text, never persisted in raw form. Rendering (`--format
 json`/human) happens in `etherfence-cli`, mirroring the v1.2.0/v1.3.0

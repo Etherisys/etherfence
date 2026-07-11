@@ -34,19 +34,33 @@ scanning, or network interception.
   under any circumstance, including when a gate flag causes a non-zero
   exit; the full report is always printed first.
 - Every server is classified as `unchanged`, `new`, `changed`, `missing`,
-  or `unverifiable`, with a closed, deterministic 14-value drift-reason
+  or `unverifiable`, with a closed, deterministic 15-value drift-reason
   enum: `executable-hash-changed`, `command-changed`, `arguments-changed`,
   `package-identity-changed`, `package-version-changed`,
   `environment-variable-names-changed`, `transport-changed`,
   `server-added`, `server-removed`, `capability-set-changed`,
   `trust-indicator-set-changed`, `artifact-identity-changed`,
-  `risk-increased`, `executable-became-unverifiable`.
-- Collision-safe identity fingerprint derived from agent, normalized
-  config-source path, and server name — never display name alone.
-  Transport is intentionally tracked as an ordinary comparable field
-  rather than folded into the fingerprint, so a server switching
-  transport is reported as `changed`/`transport-changed` instead of one
-  server vanishing and an unrelated one appearing.
+  `configuration-risk-changed`, `risk-increased`,
+  `executable-became-unverifiable`.
+- Collision-safe identity fingerprint derived from a stable agent-kind
+  key (e.g. `"vs-code"`, never the human-facing display name, which is
+  persisted separately as `agent` for readability only), normalized
+  config-source path, and server name — hashed via a canonical JSON-array
+  encoding, not a delimiter-joined string, so no combination of
+  operator-controlled command/argument/path text can collide across a
+  field boundary. Transport is intentionally tracked as an ordinary
+  comparable field rather than folded into the fingerprint, so a server
+  switching transport is reported as `changed`/`transport-changed` instead
+  of one server vanishing and an unrelated one appearing.
+- `check` refuses to read a `--baseline` path that is a symlink (fails
+  closed rather than silently following it), and validates a parsed
+  baseline's internal consistency (fingerprints match their own identity
+  fields, no duplicate fingerprints, well-formed `sha256`, sorted/
+  deduplicated set fields, `aggregate` consistent with its own
+  `artifactIdentity`/`configurationRisk`) before ever comparing against
+  it. `write` without `--overwrite` uses atomic exclusive file creation
+  (never a separate existence-check then write), and `write --overwrite`
+  writes to a temp file and atomically renames it into place.
 - Fixed monotonic risk ordering over the five v1.3.0 aggregate values
   (`verified-local` < `known-source` < `unknown` < `needs-review` <
   `high-risk`). A risk *decrease* is always reported as drift (never

@@ -25,7 +25,8 @@ its own field shape (only its value set would grow).
 | Field | Type | Notes |
 |---|---|---|
 | `fingerprint` | `String` | SHA-256 hex, research.md Decision 3. |
-| `agent` | `String` | `SetupDetection.agent` (display name), copied verbatim. |
+| `agentKind` | `String` | `AgentKind::key()` (stable machine identifier, e.g. `"vs-code"`) — one of the fingerprint's three inputs. **Added during implementation** (review finding #4): the first draft used `AgentKind::display_name()` for both the fingerprint and this field, which would make a future display-name rewording silently reidentify every server for that agent as removed+added. |
+| `agent` | `String` | `AgentKind::display_name()` — human-facing only, never a fingerprint input. |
 | `configSource` | `String` | `SetupDetection.config_path`, copied verbatim. |
 | `serverName` | `String` | `SetupServer.name`, copied verbatim. |
 | `transport` | `ServerTransport` | Reused from `etherfence_setup` (already `Serialize`, kebab-case). |
@@ -71,13 +72,26 @@ boundary.
 
 ## `DriftReason`
 
-Closed enum, exactly the 14 variants from spec FR-014
+Closed enum, exactly the 15 variants from spec FR-014
 (`executable-hash-changed`, `command-changed`, `arguments-changed`,
 `package-identity-changed`, `package-version-changed`,
 `environment-variable-names-changed`, `transport-changed`,
 `server-added`, `server-removed`, `capability-set-changed`,
 `trust-indicator-set-changed`, `artifact-identity-changed`,
-`risk-increased`, `executable-became-unverifiable`).
+`configuration-risk-changed`, `risk-increased`,
+`executable-became-unverifiable`).
+
+**Added during implementation**: `configuration-risk-changed` (review
+finding #5). The original 14-variant design relied on `trust-indicator-
+set-changed` (compared by `id` only) plus `risk-increased` (increase-only)
+to make configuration-risk drift observable; a review found this could in
+principle miss a risk *decrease*, or a same-id severity change, being
+silently folded into `unchanged`. Fixed two ways: `trust-indicator-set-
+changed` now compares the full `(id, category, severity)` tuple (still
+just a `Vec<IndicatorSummary>` equality check, since `IndicatorSummary`
+already derives `PartialEq`), and this new reason directly compares
+`configurationRisk` itself, independent of how indicators are compared —
+belt-and-suspenders rather than relying on one derivation path.
 
 ## `ComparisonStatus`
 
@@ -107,6 +121,7 @@ pub enum RiskDirection {
 | Field | Type | Notes |
 |---|---|---|
 | `fingerprint` | `String` | Same algorithm as `BaselineServerEntry.fingerprint`. |
+| `agentKind` | `String` | From whichever side (baseline/current) has the entry; identical when both do. |
 | `agent` | `String` | From whichever side (baseline/current) has the entry; identical when both do. |
 | `configSource` | `String` | Same. |
 | `serverName` | `String` | Same. |
@@ -128,9 +143,10 @@ pub enum RiskDirection {
 ## Public functions (`etherfence-setup::baseline`)
 
 ```rust
-pub fn fingerprint(agent: &str, config_source: &str, server_name: &str) -> String;
+pub fn fingerprint(agent_kind: &str, config_source: &str, server_name: &str) -> String;
 pub fn build_baseline(root: &Path, items: &[InventoryItem]) -> BaselineDocument;
 pub fn compare(baseline: &BaselineDocument, current_items: &[InventoryItem], root: &Path) -> ComparisonReport;
+pub fn validate_baseline(baseline: &BaselineDocument) -> Result<(), String>;
 pub fn risk_rank(status: AggregateAssessmentStatus) -> u8;
 pub fn drift_gate_triggered(report: &ComparisonReport) -> bool;   // --fail-on-drift
 pub fn new_gate_triggered(report: &ComparisonReport) -> bool;     // --fail-on-new
@@ -147,12 +163,37 @@ leaks them). `build_baseline` instead calls the crate's existing
 same classification/trust-assessment path `detect()` already uses,
 accessible from a child module without any visibility change — so it has
 both the raw fields (for fingerprinting/hashing, never persisted) and the
-derived fields (capabilities/trust/transport) in scope at once. `fingerprint`
-also dropped its fourth (`transport`) parameter — see research.md Decision 3.
+derived fields (capabilities/trust/transport) in scope at once.
+`fingerprint` also dropped its fourth (`transport`) parameter (research.md
+Decision 3) and takes `agent_kind` (a stable machine key), not the display
+name (research.md/review finding #4). Internally, `fingerprint` and the
+argument fingerprint both hash a canonical JSON-array encoding
+(`serde_json::to_vec`) of their inputs rather than a delimiter-joined
+string — review finding #1 found the original `"\u{1}"`-joined encoding
+collision-prone since none of the joined fields is proven to exclude the
+empty string or any particular character.
 
-All seven are pure functions with no I/O; `etherfence-cli` owns reading the
-baseline file, calling `etherfence_setup::detect(&root)` for current state,
-calling these functions, then rendering/exiting.
+`validate_baseline` (added post-review, hardening recommendation): checks
+that a freshly parsed `BaselineDocument` is internally consistent —
+fingerprints match their own identity fields, no duplicate fingerprints,
+well-formed `sha256` hex, sorted/deduplicated set fields, and `aggregate`
+consistent with `artifactIdentity`/`configurationRisk` (reusing `trust.rs`'s
+existing `aggregate()` function, not a reimplementation) — before the
+caller ever compares against it. `etherfence-cli`'s `read_setup_baseline`
+calls this immediately after parsing and fails closed (non-zero exit) on
+any `Err`.
+
+All eight are pure functions with no I/O; `etherfence-cli` owns reading the
+baseline file (via `etherfence_core::read_bounded_text_file_no_follow` —
+review finding #2 — rather than the general `read_bounded_text_file`, so a
+symlinked `--baseline` path fails closed instead of being silently
+followed), calling `etherfence_inventory::discover(&root)` for current
+state, calling these functions, then rendering/exiting. `write` without
+`--overwrite` uses atomic exclusive file creation
+(`OpenOptions::create_new`), and `write --overwrite` writes to a temp file
+in the same directory and atomically renames it into place (review
+finding #3) — neither path is a separate existence-check followed by a
+write.
 
 ## State transitions
 

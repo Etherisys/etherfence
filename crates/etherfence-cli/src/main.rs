@@ -1,11 +1,13 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use etherfence_core::{
-    read_bounded_text_file, BaselineComparison, BaselineFile, BaselineStatus, Finding,
-    PolicyMetadata, ScanReport, Severity, Summary, MAX_BASELINE_FILE_BYTES, MAX_CONFIG_FILE_BYTES,
+    read_bounded_text_file, read_bounded_text_file_no_follow, BaselineComparison, BaselineFile,
+    BaselineStatus, Finding, PolicyMetadata, ScanReport, Severity, Summary,
+    MAX_BASELINE_FILE_BYTES, MAX_CONFIG_FILE_BYTES,
 };
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Parser)]
@@ -462,16 +464,11 @@ fn run_setup_baseline_command(command: SetupBaselineCommand) -> Result<()> {
 }
 
 fn run_setup_baseline_write(root: PathBuf, output: &Path, overwrite: bool) -> Result<()> {
-    if output.exists() && !overwrite {
-        anyhow::bail!(
-            "refusing to overwrite existing baseline file {} (pass --overwrite to replace it)",
-            output.display()
-        );
-    }
     let items = etherfence_inventory::discover(&root);
     let baseline = etherfence_setup::build_baseline(&root, &items);
     let content = serde_json::to_string_pretty(&baseline)
         .context("serializing MCP server integrity baseline")?;
+    let bytes = format!("{content}\n");
     if let Some(parent) = output.parent() {
         if !parent.as_os_str().is_empty() {
             fs::create_dir_all(parent).with_context(|| {
@@ -479,8 +476,42 @@ fn run_setup_baseline_write(root: PathBuf, output: &Path, overwrite: bool) -> Re
             })?;
         }
     }
-    fs::write(output, format!("{content}\n"))
-        .with_context(|| format!("writing baseline file {}", output.display()))?;
+    if overwrite {
+        // Write to a temp file in the same directory, then atomically
+        // rename over the destination. `fs::rename` replaces whatever is
+        // at `output` (including a symlink, which it replaces rather than
+        // follows) as a single filesystem operation — there is no window
+        // where a concurrent reader could see a partially written file.
+        atomic_write_baseline(output, bytes.as_bytes())?;
+    } else {
+        // Exclusive creation closes the TOCTOU race a separate
+        // `output.exists()` check-then-`fs::write()` would have: the
+        // open+create is a single atomic syscall, so a file (or symlink)
+        // created at `output` between a hypothetical check and write can
+        // never be silently overwritten. `create_new` also fails if
+        // `output` is a pre-existing symlink (even a dangling one), so a
+        // fresh baseline is never written through a symlink at this path.
+        use std::io::Write as _;
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(output)
+            .map_err(|error| {
+                if error.kind() == io::ErrorKind::AlreadyExists {
+                    anyhow::anyhow!(
+                        "refusing to overwrite existing baseline file {} (pass --overwrite to replace it)",
+                        output.display()
+                    )
+                } else {
+                    anyhow::Error::new(error).context(format!(
+                        "creating baseline output file {}",
+                        output.display()
+                    ))
+                }
+            })?;
+        file.write_all(bytes.as_bytes())
+            .with_context(|| format!("writing baseline file {}", output.display()))?;
+    }
     print!(
         "{}",
         render_setup_baseline_write_human(&root, output, baseline.servers.len())
@@ -488,19 +519,51 @@ fn run_setup_baseline_write(root: PathBuf, output: &Path, overwrite: bool) -> Re
     Ok(())
 }
 
+/// Writes `content` to a temp file in `path`'s directory, then atomically
+/// renames it over `path`. Used only for the explicit `--overwrite` case;
+/// see `run_setup_baseline_write` for the exclusive-create path used
+/// otherwise.
+fn atomic_write_baseline(path: &Path, content: &[u8]) -> Result<()> {
+    let dir = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let file_name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "baseline".to_string());
+    let tmp = dir.join(format!(
+        ".{file_name}.tmp-etherfence-{}",
+        std::process::id()
+    ));
+    fs::write(&tmp, content)
+        .with_context(|| format!("writing temp baseline file {}", tmp.display()))?;
+    fs::rename(&tmp, path).with_context(|| {
+        format!(
+            "atomically replacing {} with {}",
+            path.display(),
+            tmp.display()
+        )
+    })?;
+    Ok(())
+}
+
 fn read_setup_baseline(path: &Path) -> Result<etherfence_setup::BaselineDocument> {
-    let content = read_bounded_text_file(path, MAX_BASELINE_FILE_BYTES)
+    // No-follow: a `--baseline` path that is a symlink must fail closed
+    // rather than silently comparing against whatever it happens to point
+    // at (see `etherfence_core::read_bounded_text_file_no_follow`'s
+    // doc comment for the exact race this closes versus the general
+    // `read_bounded_text_file` helper used elsewhere in this CLI).
+    let content = read_bounded_text_file_no_follow(path, MAX_BASELINE_FILE_BYTES)
         .with_context(|| format!("reading baseline file {}", path.display()))?;
     let baseline: etherfence_setup::BaselineDocument = serde_json::from_str(&content)
         .with_context(|| format!("parsing baseline file {}", path.display()))?;
-    if baseline.schema_version != etherfence_setup::BASELINE_SCHEMA_VERSION {
-        anyhow::bail!(
-            "baseline file {} has unsupported schema version {:?} (expected {:?})",
-            path.display(),
-            baseline.schema_version,
-            etherfence_setup::BASELINE_SCHEMA_VERSION
-        );
-    }
+    etherfence_setup::validate_baseline(&baseline).map_err(|error| {
+        anyhow::anyhow!(
+            "baseline file {} failed consistency validation: {error}",
+            path.display()
+        )
+    })?;
     Ok(baseline)
 }
 
@@ -651,6 +714,7 @@ fn drift_reason_label(value: etherfence_setup::DriftReason) -> &'static str {
         etherfence_setup::DriftReason::CapabilitySetChanged => "capability-set-changed",
         etherfence_setup::DriftReason::TrustIndicatorSetChanged => "trust-indicator-set-changed",
         etherfence_setup::DriftReason::ArtifactIdentityChanged => "artifact-identity-changed",
+        etherfence_setup::DriftReason::ConfigurationRiskChanged => "configuration-risk-changed",
         etherfence_setup::DriftReason::RiskIncreased => "risk-increased",
         etherfence_setup::DriftReason::ExecutableBecameUnverifiable => {
             "executable-became-unverifiable"

@@ -186,6 +186,7 @@ dependencies = [
 name = "etherfence-core"
 version = "1.4.0"
 dependencies = [
+ "same-file",
  "serde",
 ]
 

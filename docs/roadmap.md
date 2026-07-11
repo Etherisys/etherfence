@@ -599,16 +599,22 @@
   read-only against `--baseline` — never auto-updates, auto-accepts, or
   rewrites it under any circumstance
 - Every server classified as `unchanged`/`new`/`changed`/`missing`/
-  `unverifiable`, with a closed, deterministic 14-value drift-reason enum
+  `unverifiable`, with a closed, deterministic 15-value drift-reason enum
   (executable hash, command, arguments, package identity/version,
   environment-variable name set, transport, server added/removed,
-  capability set, trust-indicator set, artifact identity, a documented
-  risk increase, or the executable becoming newly unverifiable)
-- Collision-safe identity fingerprint derived from agent, normalized
-  config-source path, and server name — never display name alone;
-  transport is tracked as a comparable field rather than folded into the
-  fingerprint, so a transport change is reported as drift instead of
-  making the server unrecognizable across runs
+  capability set, trust-indicator set, artifact identity, configuration
+  risk, a documented risk increase, or the executable becoming newly
+  unverifiable)
+- Collision-safe identity fingerprint derived from a stable agent-kind
+  key (never the human-facing display name, persisted separately for
+  readability), normalized config-source path, and server name, combined
+  via a canonical JSON-array encoding rather than a delimiter-joined
+  string; transport is tracked as a comparable field rather than folded
+  into the fingerprint, so a transport change is reported as drift instead
+  of making the server unrecognizable across runs
+- `check` fails closed on a symlinked `--baseline` path or an internally
+  inconsistent parsed baseline; `write` uses atomic exclusive creation
+  (or atomic rename with `--overwrite`), never a check-then-write race
 - Fixed monotonic risk ordering over the five trust-assessment aggregate
   values; a risk decrease is always visible as drift but never satisfies
   `--fail-on-risk-increase` by itself

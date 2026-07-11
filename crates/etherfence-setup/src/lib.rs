@@ -16,9 +16,10 @@ mod trust;
 
 pub use baseline::{
     build_baseline, compare, drift_gate_triggered, fingerprint, new_gate_triggered,
-    risk_increase_gate_triggered, risk_rank, BaselineDocument, BaselineServerEntry,
-    ComparisonEntry, ComparisonReport, ComparisonStatus, DriftReason, IndicatorSummary,
-    ReviewState, RiskDirection, BASELINE_SCHEMA_VERSION, COMPARISON_SCHEMA_VERSION,
+    risk_increase_gate_triggered, risk_rank, validate_baseline, BaselineDocument,
+    BaselineServerEntry, ComparisonEntry, ComparisonReport, ComparisonStatus, DriftReason,
+    IndicatorSummary, ReviewState, RiskDirection, BASELINE_SCHEMA_VERSION,
+    COMPARISON_SCHEMA_VERSION,
 };
 pub use catalog::{catalog, CatalogClient, CatalogEntry, CatalogSupportTier};
 pub use classification::{

@@ -221,12 +221,26 @@ operator-input model (see "v0.2.x addendum" above):
 - **`--output` (write)**: an explicit, operator-chosen path. `write`
   refuses to overwrite an existing file at this path unless `--overwrite`
   is passed — this is a data-loss safeguard, not a security boundary
-  (there is no untrusted caller in CLI mode).
-- **`--baseline` (check)**: read through the same bounded,
-  regular-file-only read helper (`read_bounded_text_file`,
-  `MAX_BASELINE_FILE_BYTES`) already used by the pre-existing `scan
-  --baseline`. A baseline file with a malformed schema version or invalid
-  JSON fails closed (non-zero exit) rather than being treated as empty.
+  (there is no untrusted caller in CLI mode) — implemented as an atomic
+  exclusive file creation (`create_new`), not a separate existence-check
+  followed by a write, closing the TOCTOU window a naive check-then-write
+  would have and refusing to write through a pre-existing symlink at that
+  path. `write --overwrite` writes to a temp file in the same directory
+  and atomically renames it into place, so a concurrent reader never
+  observes a partially written file.
+- **`--baseline` (check)**: read through a dedicated bounded,
+  no-follow read helper (`etherfence_core::read_bounded_text_file_no_follow`,
+  `MAX_BASELINE_FILE_BYTES`) rather than the general `read_bounded_text_file`
+  used elsewhere — a `--baseline` path that is a symlink is refused
+  outright (a pre-open `symlink_metadata` check, plus `O_NOFOLLOW` on Unix
+  at the actual open, closing the race between the two), and the opened
+  file's identity is re-validated after the read completes. A baseline
+  file with a malformed schema version, invalid JSON, or an internally
+  inconsistent parsed document (fingerprints not matching their own
+  identity fields, duplicate fingerprints, malformed `sha256`, unsorted/
+  duplicate set fields, or an aggregate inconsistent with its own
+  artifact-identity/configuration-risk fields) fails closed (non-zero
+  exit, no comparison performed) rather than being silently accepted.
   `check` never writes to this path under any circumstance.
 
 **Safety boundary re-affirmed.** Baseline/comparison output persists only

@@ -240,3 +240,74 @@ changes.
 
 **Rationale**: Directly specified by the goal prompt; follows constitution
 Principle VI (explicit versioning per externally-consumed schema).
+
+## Post-review corrections (PR #31 review, before merge)
+
+An external review of the initial implementation found five merge-blocking
+correctness issues and one hardening gap, all fixed before merge since
+`v0.1` had not shipped yet. Summarized here since they revise Decisions 3,
+6, and 8 above and the persisted schema itself.
+
+1. **Fingerprint/argument-fingerprint collision (High)**: the original
+   encoding joined fields with the ASCII SOH control character
+   (`"\u{1}"`). This is not collision-free — `[]` and `[""]` both join to
+   `""`, and `["a", "b"]` joins identically to `["a\u{1}b"]` — because
+   `McpServer`/argument fields are arbitrary operator-controlled strings
+   with no proof they exclude the empty string or any particular
+   character. Fixed by hashing a canonical JSON-array encoding
+   (`serde_json::to_vec`) instead: JSON's own string escaping and array
+   structure guarantee two distinct inputs always serialize to different
+   byte sequences. Applies to both the identity `fingerprint()` (Decision
+   3) and the new `arguments_fingerprint()` (previously folded into the
+   generic `content_fingerprint` helper). Added fixture tests for `[]` vs
+   `[""]`, `["a","b"]` vs `["a\u{1}b"]`, multiple empty arguments, and
+   Unicode/control-character arguments.
+2. **Symlinked `--baseline` silently followed (High)**: `read_bounded_text_file`
+   (the general-purpose helper, still correct and unchanged for its
+   existing trusted-operator-input callers) uses `fs::metadata`/
+   `fs::File::open`, both of which follow symlinks — so a `--baseline`
+   path that was a symlink would be silently read through. Fixed by adding
+   a new, additive `etherfence_core::read_bounded_text_file_no_follow`
+   (pre-open `symlink_metadata` rejection, `O_NOFOLLOW` on Unix closing
+   the check-then-open race, and a post-read `same_file::Handle` identity
+   re-check mirroring `trust.rs`'s existing `hash_eligible_file_bounded`
+   pattern exactly) and switching only `read_setup_baseline` to use it.
+3. **`write` overwrite-refusal TOCTOU race (High)**: the original
+   implementation checked `output.exists()` then called `fs::write()` —
+   two separate syscalls with a window in between. Fixed: without
+   `--overwrite`, `OpenOptions::create_new(true)` performs the check and
+   the write as one atomic operation (and also refuses a pre-existing
+   symlink at that path, since `create_new` fails if anything already
+   exists there); with `--overwrite`, the new content is written to a
+   temp file in the same directory and atomically `fs::rename`d into
+   place (which replaces a destination symlink rather than following it).
+4. **Fingerprint used display name, not a stable key (Medium-High)**: the
+   original `fingerprint()` call site passed `AgentKind::display_name()`
+   (e.g. `"VS Code"`) — presentation text that could be reworded in a
+   future release without any security-relevant change, which would have
+   silently reidentified every server for that agent as removed+added.
+   Fixed by using `AgentKind::key()` (e.g. `"vs-code"`) as the fingerprint
+   input, and splitting the persisted field into `agentKind` (the stable
+   key, used for identity) and `agent` (the display name, presentation
+   only, never used for matching).
+5. **Risk decrease could be masked as `unchanged` (Medium)**: the original
+   `trust-indicator-set-changed` compared indicator *IDs* only, and no
+   reason directly compared `configurationRisk`; `risk-increased` only
+   fires on an increase. In principle (e.g. after a future
+   severity-reassignment in `trust.rs`) two entries could share an
+   indicator ID set while `configurationRisk` differs, which would report
+   `unchanged` despite spec FR-023's guarantee that a risk change is
+   always visible. Fixed two ways: `trust-indicator-set-changed` now
+   compares the full `(id, category, severity)` tuple (data-model.md), and
+   a new 15th `DriftReason`, `configuration-risk-changed`, directly
+   compares `configurationRisk` independent of how indicators are
+   compared — see data-model.md's `DriftReason` section.
+
+**Additional hardening (recommended, not required)**: `validate_baseline`
+was added — called by `etherfence-cli` immediately after parsing a
+baseline and before ever comparing against it — to reject a structurally
+valid but internally inconsistent document (fingerprint not matching its
+own identity fields, duplicate fingerprints, malformed `sha256`,
+unsorted/duplicate set fields, or `aggregate` inconsistent with
+`artifactIdentity`/`configurationRisk`) so hand-editing or corruption
+fails closed rather than producing a misleading comparison.

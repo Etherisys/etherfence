@@ -18,13 +18,14 @@
 //! and MCP traffic are never read into any type in this module.
 
 use crate::trust::{
-    AggregateAssessmentStatus, ArtifactIdentityConfidence, ConfigurationRiskStatus,
+    aggregate, AggregateAssessmentStatus, ArtifactIdentityConfidence, ConfigurationRiskStatus,
     ExecutablePathClassification, IndicatorCategory, VersionExpressionKind,
 };
 use crate::{server_from_mcp, CapabilityLabel, ServerTransport};
 use etherfence_core::{InventoryItem, Severity};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::HashSet;
 use std::path::Path;
 
 pub const BASELINE_SCHEMA_VERSION: &str = "ef-setup-baseline/v0.1";
@@ -60,6 +61,14 @@ pub struct IndicatorSummary {
 #[serde(rename_all = "camelCase")]
 pub struct BaselineServerEntry {
     pub fingerprint: String,
+    /// Stable machine identifier (`AgentKind::key()`, e.g. `"vs-code"`) —
+    /// this, not `agent`, is one of the fingerprint's inputs. A future
+    /// rewording of `AgentKind::display_name()` (e.g. "VS Code" ->
+    /// "Visual Studio Code") must never change identity/fingerprints.
+    pub agent_kind: String,
+    /// Human-facing display name (`AgentKind::display_name()`), for
+    /// readability only — never used to derive the fingerprint or to
+    /// match entries across a baseline/current comparison.
     pub agent: String,
     pub config_source: String,
     pub server_name: String,
@@ -114,12 +123,13 @@ pub enum DriftReason {
     CapabilitySetChanged,
     TrustIndicatorSetChanged,
     ArtifactIdentityChanged,
+    ConfigurationRiskChanged,
     RiskIncreased,
     ExecutableBecameUnverifiable,
 }
 
 impl DriftReason {
-    pub const ALL: [DriftReason; 14] = [
+    pub const ALL: [DriftReason; 15] = [
         DriftReason::ExecutableHashChanged,
         DriftReason::CommandChanged,
         DriftReason::ArgumentsChanged,
@@ -132,6 +142,7 @@ impl DriftReason {
         DriftReason::CapabilitySetChanged,
         DriftReason::TrustIndicatorSetChanged,
         DriftReason::ArtifactIdentityChanged,
+        DriftReason::ConfigurationRiskChanged,
         DriftReason::RiskIncreased,
         DriftReason::ExecutableBecameUnverifiable,
     ];
@@ -172,6 +183,7 @@ pub enum RiskDirection {
 #[serde(rename_all = "camelCase")]
 pub struct ComparisonEntry {
     pub fingerprint: String,
+    pub agent_kind: String,
     pub agent: String,
     pub config_source: String,
     pub server_name: String,
@@ -205,35 +217,60 @@ fn transport_token(transport: ServerTransport) -> &'static str {
     }
 }
 
-/// Deterministic identity fingerprint derived from three inputs: agent
-/// (display name, unique per `AgentKind` variant), normalized
+/// Deterministic identity fingerprint derived from three inputs: the
+/// agent's *stable machine key* (`AgentKind::key()`, e.g. `"vs-code"` —
+/// never its human-facing `display_name()`, which is presentation text
+/// that can be reworded without any security-relevant change), normalized
 /// config-source identity (inventory's existing `~/`-normalized
-/// `config_path` convention), and server name. Joined with the ASCII SOH
-/// control character (`\u{1}`), which cannot appear in any of these
-/// printable-text inputs, so simple concatenation cannot collide across a
-/// field boundary.
+/// `config_path` convention), and server name.
+///
+/// Encoded as a JSON array (`serde_json::to_vec`) before hashing, not a
+/// delimiter-joined string: a naive `join("\u{1}")` (the first
+/// implementation) is not collision-free, because `McpServer` fields are
+/// arbitrary operator-controlled strings with no proof they exclude any
+/// particular character — `["a", "b"]` and `["a\u{1}b"]` would hash
+/// identically under a plain join. JSON's own string escaping guarantees
+/// that two distinct 3-tuples of strings always serialize to different
+/// byte sequences, so encoding as `["agent_kind","config_source","server_name"]`
+/// and hashing *that* is unambiguous regardless of what characters any
+/// input contains.
 ///
 /// Transport is deliberately *not* part of the fingerprint even though the
 /// server-identity requirement names it as an input for collision
 /// avoidance: `server_name` is already a unique JSON object key within one
-/// `config_source`, and `config_source`+`agent` are unique per discovered
-/// config file, so (agent, config_source, server_name) alone is already
-/// collision-free for every entry `etherfence_inventory::discover` can
-/// produce — two distinct real servers can never share this triple. Folding
-/// transport into the fingerprint as well would make a server's transport
-/// change indistinguishable from that server being removed and a different
-/// one being added (the fingerprint would change), making the closed
-/// `transport-changed` drift reason permanently unreachable. Keeping
-/// transport out of the fingerprint and comparing it as a normal mutable
-/// field (see `drift_reasons_for_pair`) is what makes `transport-changed`
-/// an observable, fixture-testable drift reason instead of dead code.
-pub fn fingerprint(agent: &str, config_source: &str, server_name: &str) -> String {
-    let joined = format!("{agent}\u{1}{config_source}\u{1}{server_name}");
-    format!("{:x}", Sha256::digest(joined.as_bytes()))
+/// `config_source`, and `config_source`+agent are unique per discovered
+/// config file, so (agent_kind, config_source, server_name) alone is
+/// already collision-free for every entry `etherfence_inventory::discover`
+/// can produce — two distinct real servers can never share this triple.
+/// Folding transport into the fingerprint as well would make a server's
+/// transport change indistinguishable from that server being removed and
+/// a different one being added (the fingerprint would change), making the
+/// closed `transport-changed` drift reason permanently unreachable.
+/// Keeping transport out of the fingerprint and comparing it as a normal
+/// mutable field (see `drift_reasons_for_pair`) is what makes
+/// `transport-changed` an observable, fixture-testable drift reason
+/// instead of dead code.
+pub fn fingerprint(agent_kind: &str, config_source: &str, server_name: &str) -> String {
+    let encoded = serde_json::to_vec(&(agent_kind, config_source, server_name))
+        .expect("a tuple of &str always serializes to JSON");
+    format!("{:x}", Sha256::digest(&encoded))
 }
 
 fn content_fingerprint(value: &str) -> String {
     format!("{:x}", Sha256::digest(value.as_bytes()))
+}
+
+/// Fingerprints an argument sequence as a canonical JSON array
+/// (`serde_json::to_vec`) rather than a delimiter-joined string: a plain
+/// `args.join("\u{1}")` cannot distinguish `[]` from `[""]`, or
+/// `["a", "b"]` from `["a\u{1}b"]`, since `McpServer.args` accepts
+/// arbitrary strings with no guarantee they exclude the empty string or
+/// any particular control character. JSON array encoding is
+/// position/length-unambiguous by construction, so two distinct argument
+/// sequences always hash differently.
+fn arguments_fingerprint(args: &[String]) -> String {
+    let encoded = serde_json::to_vec(args).expect("a slice of String always serializes to JSON");
+    format!("{:x}", Sha256::digest(&encoded))
 }
 
 // ---------------------------------------------------------------------
@@ -249,7 +286,7 @@ fn capability_sort_key(label: CapabilityLabel) -> usize {
 
 fn sort_entry_key(entry: &BaselineServerEntry) -> (String, String, String, &'static str) {
     (
-        entry.agent.clone(),
+        entry.agent_kind.clone(),
         entry.config_source.clone(),
         entry.server_name.clone(),
         transport_token(entry.transport),
@@ -291,12 +328,14 @@ pub fn build_baseline(root: &Path, items: &[InventoryItem]) -> BaselineDocument 
                 .collect();
             trust_indicators.sort_by(|a, b| a.id.cmp(&b.id));
 
+            let agent_kind = item.agent.key().to_string();
             let agent = item.agent.display_name().to_string();
             let config_source = item.config_path.clone();
-            let fp = fingerprint(&agent, &config_source, &setup_server.name);
+            let fp = fingerprint(&agent_kind, &config_source, &setup_server.name);
 
             servers.push(BaselineServerEntry {
                 fingerprint: fp,
+                agent_kind,
                 agent,
                 config_source,
                 server_name: setup_server.name.clone(),
@@ -305,7 +344,7 @@ pub fn build_baseline(root: &Path, items: &[InventoryItem]) -> BaselineDocument 
                     .then(|| mcp_server.command.as_deref().map(content_fingerprint))
                     .flatten(),
                 arguments_fingerprint: invocation_applicable
-                    .then(|| content_fingerprint(&mcp_server.args.join("\u{1}"))),
+                    .then(|| arguments_fingerprint(&mcp_server.args)),
                 package_identity: setup_server
                     .trust_assessment
                     .invocation
@@ -333,6 +372,116 @@ pub fn build_baseline(root: &Path, items: &[InventoryItem]) -> BaselineDocument 
         root: root.display().to_string(),
         servers,
     }
+}
+
+// ---------------------------------------------------------------------
+// Baseline consistency validation (hardening: fail closed on a
+// hand-edited or corrupted baseline rather than silently comparing
+// against misleading data)
+// ---------------------------------------------------------------------
+
+fn is_valid_sha256_hex(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+/// Validates that a freshly parsed `BaselineDocument` is internally
+/// consistent *before* it is ever compared against, so that hand-editing
+/// or corruption fails closed (a descriptive `Err`) instead of silently
+/// producing a misleading comparison. Pure function, no I/O — the caller
+/// (`etherfence-cli`) decides how to report the error.
+pub fn validate_baseline(baseline: &BaselineDocument) -> Result<(), String> {
+    if baseline.schema_version != BASELINE_SCHEMA_VERSION {
+        return Err(format!(
+            "unsupported schema version {:?} (expected {:?})",
+            baseline.schema_version, BASELINE_SCHEMA_VERSION
+        ));
+    }
+
+    let mut seen_fingerprints = HashSet::new();
+    let mut seen_identities = HashSet::new();
+    for entry in &baseline.servers {
+        let expected_fingerprint =
+            fingerprint(&entry.agent_kind, &entry.config_source, &entry.server_name);
+        if entry.fingerprint != expected_fingerprint {
+            return Err(format!(
+                "server {:?} at {:?} has a fingerprint that does not match its own identity fields (possible hand-editing or corruption)",
+                entry.server_name, entry.config_source
+            ));
+        }
+        if !seen_fingerprints.insert(entry.fingerprint.clone()) {
+            return Err(format!(
+                "duplicate fingerprint {:?} in baseline",
+                entry.fingerprint
+            ));
+        }
+        let identity = (
+            entry.agent_kind.clone(),
+            entry.config_source.clone(),
+            entry.server_name.clone(),
+        );
+        if !seen_identities.insert(identity) {
+            return Err(format!(
+                "duplicate server identity (agentKind={:?}, configSource={:?}, serverName={:?}) in baseline",
+                entry.agent_kind, entry.config_source, entry.server_name
+            ));
+        }
+        if let Some(sha) = &entry.sha256 {
+            if !is_valid_sha256_hex(sha) {
+                return Err(format!(
+                    "server {:?} has a malformed sha256 value",
+                    entry.server_name
+                ));
+            }
+        }
+
+        let mut sorted_env = entry.environment_variable_names.clone();
+        sorted_env.sort();
+        sorted_env.dedup();
+        if sorted_env != entry.environment_variable_names {
+            return Err(format!(
+                "server {:?} environmentVariableNames is not sorted and deduplicated",
+                entry.server_name
+            ));
+        }
+
+        let mut sorted_caps = entry.capability_labels.clone();
+        sorted_caps.sort_by_key(|label| capability_sort_key(*label));
+        sorted_caps.dedup();
+        if sorted_caps != entry.capability_labels {
+            return Err(format!(
+                "server {:?} capabilityLabels is not sorted and deduplicated",
+                entry.server_name
+            ));
+        }
+
+        let ids: Vec<&str> = entry
+            .trust_indicators
+            .iter()
+            .map(|i| i.id.as_str())
+            .collect();
+        let mut sorted_unique_ids = ids.clone();
+        sorted_unique_ids.sort();
+        sorted_unique_ids.dedup();
+        if ids != sorted_unique_ids {
+            return Err(format!(
+                "server {:?} trustIndicators is not sorted by id, or contains a duplicate id",
+                entry.server_name
+            ));
+        }
+
+        let expected_aggregate = aggregate(entry.artifact_identity, entry.configuration_risk);
+        if expected_aggregate != entry.aggregate {
+            return Err(format!(
+                "server {:?} aggregate is inconsistent with its artifactIdentity/configurationRisk",
+                entry.server_name
+            ));
+        }
+    }
+
+    Ok(())
 }
 
 // ---------------------------------------------------------------------
@@ -401,21 +550,29 @@ fn drift_reasons_for_pair(
     if baseline.capability_labels != current.capability_labels {
         reasons.push(DriftReason::CapabilitySetChanged);
     }
-    let baseline_indicator_ids: Vec<&str> = baseline
-        .trust_indicators
-        .iter()
-        .map(|i| i.id.as_str())
-        .collect();
-    let current_indicator_ids: Vec<&str> = current
-        .trust_indicators
-        .iter()
-        .map(|i| i.id.as_str())
-        .collect();
-    if baseline_indicator_ids != current_indicator_ids {
+    // Compares the full `(id, category, severity)` tuple, not just IDs:
+    // an indicator whose id is unchanged but whose severity changed (e.g.
+    // after a future EtherFence version reclassifies it) must still count
+    // as drift, since severity is what `configuration_risk` is actually
+    // derived from (`IndicatorSummary` derives `PartialEq`/`Eq`, and both
+    // sides are already sorted by id, so a direct `Vec` comparison is
+    // exact and order-stable).
+    if baseline.trust_indicators != current.trust_indicators {
         reasons.push(DriftReason::TrustIndicatorSetChanged);
     }
     if baseline.artifact_identity != current.artifact_identity {
         reasons.push(DriftReason::ArtifactIdentityChanged);
+    }
+    // Direct comparison closes a gap a set-of-reasons approach alone could
+    // miss: `configurationRisk` could in principle move (in either
+    // direction) without changing `artifactIdentity`, and without the
+    // indicator *id* set changing if a future version reassigns severity
+    // for an existing id — comparing the field itself, independent of how
+    // indicators are compared above, is what actually guarantees a risk
+    // change is never silently reported as `unchanged` (a decrease must
+    // still surface as drift, per spec FR-023).
+    if baseline.configuration_risk != current.configuration_risk {
+        reasons.push(DriftReason::ConfigurationRiskChanged);
     }
     if risk_rank(current.aggregate) > risk_rank(baseline.aggregate) {
         reasons.push(DriftReason::RiskIncreased);
@@ -456,6 +613,7 @@ pub fn compare(
         let entry = match current_entry {
             None => ComparisonEntry {
                 fingerprint: baseline_entry.fingerprint.clone(),
+                agent_kind: baseline_entry.agent_kind.clone(),
                 agent: baseline_entry.agent.clone(),
                 config_source: baseline_entry.config_source.clone(),
                 server_name: baseline_entry.server_name.clone(),
@@ -498,6 +656,7 @@ pub fn compare(
                 sort_drift_reasons(&mut reasons);
                 ComparisonEntry {
                     fingerprint: baseline_entry.fingerprint.clone(),
+                    agent_kind: current_entry.agent_kind.clone(),
                     agent: current_entry.agent.clone(),
                     config_source: current_entry.config_source.clone(),
                     server_name: current_entry.server_name.clone(),
@@ -526,6 +685,7 @@ pub fn compare(
         }
         entries.push(ComparisonEntry {
             fingerprint: current_entry.fingerprint.clone(),
+            agent_kind: current_entry.agent_kind.clone(),
             agent: current_entry.agent.clone(),
             config_source: current_entry.config_source.clone(),
             server_name: current_entry.server_name.clone(),
@@ -540,13 +700,13 @@ pub fn compare(
 
     entries.sort_by(|a, b| {
         (
-            a.agent.clone(),
+            a.agent_kind.clone(),
             a.config_source.clone(),
             a.server_name.clone(),
             transport_token(a.transport),
         )
             .cmp(&(
-                b.agent.clone(),
+                b.agent_kind.clone(),
                 b.config_source.clone(),
                 b.server_name.clone(),
                 transport_token(b.transport),
@@ -871,5 +1031,264 @@ mod tests {
         assert!(drift_gate_triggered(&new_report));
         assert!(new_gate_triggered(&new_report));
         assert!(!risk_increase_gate_triggered(&new_report));
+    }
+
+    // --- Review finding #1: fingerprint/argument-fingerprint ambiguity ---
+
+    #[test]
+    fn arguments_fingerprint_distinguishes_empty_array_from_array_of_empty_string() {
+        let empty: Vec<String> = vec![];
+        let one_empty: Vec<String> = vec!["".to_string()];
+        assert_ne!(
+            arguments_fingerprint(&empty),
+            arguments_fingerprint(&one_empty)
+        );
+    }
+
+    #[test]
+    fn arguments_fingerprint_does_not_collide_across_element_boundaries() {
+        let two_elements = vec!["a".to_string(), "b".to_string()];
+        let one_element_with_control_char = vec!["a\u{1}b".to_string()];
+        assert_ne!(
+            arguments_fingerprint(&two_elements),
+            arguments_fingerprint(&one_element_with_control_char)
+        );
+    }
+
+    #[test]
+    fn arguments_fingerprint_distinguishes_different_counts_of_empty_arguments() {
+        let one_empty = vec!["".to_string()];
+        let two_empty = vec!["".to_string(), "".to_string()];
+        assert_ne!(
+            arguments_fingerprint(&one_empty),
+            arguments_fingerprint(&two_empty)
+        );
+    }
+
+    #[test]
+    fn arguments_fingerprint_handles_unicode_and_control_characters_without_colliding() {
+        let a = vec!["héllo\u{0}wörld".to_string(), "🎉".to_string()];
+        let b = vec!["héllo".to_string(), "\u{0}wörld\u{1}🎉".to_string()];
+        assert_ne!(arguments_fingerprint(&a), arguments_fingerprint(&b));
+        assert_eq!(arguments_fingerprint(&a), arguments_fingerprint(&a));
+    }
+
+    #[test]
+    fn identity_fingerprint_does_not_collide_across_field_boundaries() {
+        // "a" + "\x01" + "bc" (as a single config_source) must not collide
+        // with "a\x01b" + "\x01" + "c" split differently across fields.
+        let x = fingerprint("a", "\u{1}bc", "d");
+        let y = fingerprint("a\u{1}b", "c", "d");
+        assert_ne!(x, y);
+    }
+
+    #[test]
+    fn fingerprint_uses_agent_kind_not_display_name() {
+        // Review finding #4: a display-name rewording must never change
+        // the fingerprint. build_baseline uses AgentKind::key(), not
+        // display_name(); verify the two differ for at least one variant
+        // and that the fingerprint tracks the stable key.
+        assert_ne!(AgentKind::VsCode.key(), AgentKind::VsCode.display_name());
+        let root = Path::new("/home/example");
+        let items = vec![item(
+            AgentKind::VsCode,
+            "~/.vscode/mcp.json",
+            vec![stdio_server("filesystem", "npx", &["-y", "pkg"])],
+        )];
+        let baseline = build_baseline(root, &items);
+        assert_eq!(
+            baseline.servers[0].fingerprint,
+            fingerprint("vs-code", "~/.vscode/mcp.json", "filesystem")
+        );
+        assert_eq!(baseline.servers[0].agent_kind, "vs-code");
+        assert_eq!(baseline.servers[0].agent, "VS Code");
+    }
+
+    // --- Review finding #5: risk decrease must never report `unchanged` ---
+
+    fn synthetic_entry(
+        configuration_risk: ConfigurationRiskStatus,
+        artifact_identity: ArtifactIdentityConfidence,
+        indicators: Vec<IndicatorSummary>,
+    ) -> BaselineServerEntry {
+        let agg = aggregate(artifact_identity, configuration_risk);
+        BaselineServerEntry {
+            fingerprint: fingerprint("claude-code", "~/.claude.json", "filesystem"),
+            agent_kind: "claude-code".to_string(),
+            agent: "Claude Code".to_string(),
+            config_source: "~/.claude.json".to_string(),
+            server_name: "filesystem".to_string(),
+            transport: ServerTransport::Stdio,
+            command_fingerprint: Some(content_fingerprint("npx")),
+            arguments_fingerprint: Some(arguments_fingerprint(&["pkg".to_string()])),
+            package_identity: None,
+            package_version_expression: None,
+            executable_path: ExecutablePathClassification::PathResolvedCommand,
+            sha256: None,
+            environment_variable_names: Vec::new(),
+            capability_labels: vec![CapabilityLabel::Unknown],
+            trust_indicators: indicators,
+            artifact_identity,
+            configuration_risk,
+            aggregate: agg,
+            review_state: ReviewState::Unreviewed,
+        }
+    }
+
+    #[test]
+    fn configuration_risk_decrease_is_never_reported_as_unchanged() {
+        // Same indicator *id* set on both sides (so a naive id-only
+        // comparison would see no difference), but configuration_risk
+        // itself differs — this must still surface as drift, never
+        // `unchanged` (spec FR-023's "a decrease is always visible").
+        let indicator = IndicatorSummary {
+            id: "EF-TRUST-PIN-001".to_string(),
+            category: IndicatorCategory::PackagePinning,
+            severity: Severity::Medium,
+        };
+        let baseline_entry = synthetic_entry(
+            ConfigurationRiskStatus::NeedsReview,
+            ArtifactIdentityConfidence::KnownSource,
+            vec![indicator.clone()],
+        );
+        let current_entry = synthetic_entry(
+            ConfigurationRiskStatus::NoKnownIndicators,
+            ArtifactIdentityConfidence::KnownSource,
+            vec![indicator],
+        );
+        let reasons = drift_reasons_for_pair(&baseline_entry, &current_entry);
+        assert!(
+            reasons.contains(&DriftReason::ConfigurationRiskChanged),
+            "reasons: {reasons:?}"
+        );
+        assert!(!reasons.is_empty());
+    }
+
+    #[test]
+    fn trust_indicator_severity_change_is_detected_even_with_same_id() {
+        // Same id, different severity — a naive id-only set comparison
+        // would miss this; the full-tuple comparison must not.
+        let baseline_entry = synthetic_entry(
+            ConfigurationRiskStatus::NeedsReview,
+            ArtifactIdentityConfidence::KnownSource,
+            vec![IndicatorSummary {
+                id: "EF-TRUST-PIN-001".to_string(),
+                category: IndicatorCategory::PackagePinning,
+                severity: Severity::Medium,
+            }],
+        );
+        let current_entry = synthetic_entry(
+            ConfigurationRiskStatus::NeedsReview,
+            ArtifactIdentityConfidence::KnownSource,
+            vec![IndicatorSummary {
+                id: "EF-TRUST-PIN-001".to_string(),
+                category: IndicatorCategory::PackagePinning,
+                severity: Severity::High,
+            }],
+        );
+        let reasons = drift_reasons_for_pair(&baseline_entry, &current_entry);
+        assert!(
+            reasons.contains(&DriftReason::TrustIndicatorSetChanged),
+            "reasons: {reasons:?}"
+        );
+    }
+
+    // --- Additional hardening: validate_baseline ---
+
+    fn valid_document(root: &Path, items: &[InventoryItem]) -> BaselineDocument {
+        build_baseline(root, items)
+    }
+
+    #[test]
+    fn validate_baseline_accepts_a_freshly_built_document() {
+        let root = Path::new("/home/example");
+        let items = vec![item(
+            AgentKind::ClaudeCode,
+            "~/.claude.json",
+            vec![stdio_server("filesystem", "npx", &["-y", "pkg"])],
+        )];
+        let doc = valid_document(root, &items);
+        assert!(validate_baseline(&doc).is_ok());
+    }
+
+    #[test]
+    fn validate_baseline_rejects_wrong_schema_version() {
+        let root = Path::new("/home/example");
+        let items = vec![item(
+            AgentKind::ClaudeCode,
+            "~/.claude.json",
+            vec![stdio_server("filesystem", "npx", &["-y", "pkg"])],
+        )];
+        let mut doc = valid_document(root, &items);
+        doc.schema_version = "ef-setup-baseline/v9.9".to_string();
+        assert!(validate_baseline(&doc).is_err());
+    }
+
+    #[test]
+    fn validate_baseline_rejects_fingerprint_mismatch() {
+        let root = Path::new("/home/example");
+        let items = vec![item(
+            AgentKind::ClaudeCode,
+            "~/.claude.json",
+            vec![stdio_server("filesystem", "npx", &["-y", "pkg"])],
+        )];
+        let mut doc = valid_document(root, &items);
+        doc.servers[0].fingerprint = "0".repeat(64);
+        assert!(validate_baseline(&doc).is_err());
+    }
+
+    #[test]
+    fn validate_baseline_rejects_duplicate_fingerprints() {
+        let root = Path::new("/home/example");
+        let items = vec![item(
+            AgentKind::ClaudeCode,
+            "~/.claude.json",
+            vec![stdio_server("filesystem", "npx", &["-y", "pkg"])],
+        )];
+        let mut doc = valid_document(root, &items);
+        let clone = doc.servers[0].clone();
+        doc.servers.push(clone);
+        assert!(validate_baseline(&doc).is_err());
+    }
+
+    #[test]
+    fn validate_baseline_rejects_malformed_sha256() {
+        let root = Path::new("/home/example");
+        let items = vec![item(
+            AgentKind::ClaudeCode,
+            "~/.claude.json",
+            vec![stdio_server("filesystem", "npx", &["-y", "pkg"])],
+        )];
+        let mut doc = valid_document(root, &items);
+        doc.servers[0].sha256 = Some("not-a-valid-hex-digest".to_string());
+        assert!(validate_baseline(&doc).is_err());
+    }
+
+    #[test]
+    fn validate_baseline_rejects_unsorted_environment_variable_names() {
+        let root = Path::new("/home/example");
+        let items = vec![item(
+            AgentKind::ClaudeCode,
+            "~/.claude.json",
+            vec![stdio_server("filesystem", "npx", &["-y", "pkg"])],
+        )];
+        let mut doc = valid_document(root, &items);
+        doc.servers[0].environment_variable_names = vec!["B".to_string(), "A".to_string()];
+        assert!(validate_baseline(&doc).is_err());
+    }
+
+    #[test]
+    fn validate_baseline_rejects_aggregate_inconsistent_with_axes() {
+        let root = Path::new("/home/example");
+        let items = vec![item(
+            AgentKind::ClaudeCode,
+            "~/.claude.json",
+            vec![stdio_server("filesystem", "npx", &["-y", "pkg"])],
+        )];
+        let mut doc = valid_document(root, &items);
+        doc.servers[0].artifact_identity = ArtifactIdentityConfidence::VerifiedLocal;
+        doc.servers[0].configuration_risk = ConfigurationRiskStatus::NoKnownIndicators;
+        doc.servers[0].aggregate = AggregateAssessmentStatus::HighRisk; // inconsistent
+        assert!(validate_baseline(&doc).is_err());
     }
 }

@@ -166,12 +166,20 @@ no new discovery, classification, or hashing engine.
 **What this feature never does.** `check` is strictly read-only against the
 `--baseline` file: it never auto-updates, auto-accepts, or silently
 rewrites it under any circumstance, including when drift is found and
-including when a gate flag causes a non-zero exit. `write` refuses to
-overwrite an existing `--output` file unless `--overwrite` is explicitly
-passed. Neither command starts a process, opens a network connection,
-performs a registry/reputation lookup, downloads or installs anything,
-verifies a cryptographic signature, or changes `mcp-proxy` runtime
-behavior in any way.
+including when a gate flag causes a non-zero exit. It also refuses to
+follow a symlink at `--baseline` (fails closed rather than silently
+comparing against whatever the link happens to point at) and validates a
+parsed baseline's internal consistency before ever comparing against it
+(see "Safety hardening" below). `write` refuses to overwrite an existing
+`--output` file unless `--overwrite` is explicitly passed, using an atomic
+exclusive-creation file operation rather than a separate check-then-write
+(so a file that appears at that path concurrently can never be silently
+overwritten, and a pre-existing symlink there is refused rather than
+written through); with `--overwrite`, the new content is written to a temp
+file and atomically renamed into place. Neither command starts a process,
+opens a network connection, performs a registry/reputation lookup,
+downloads or installs anything, verifies a cryptographic signature, or
+changes `mcp-proxy` runtime behavior in any way.
 
 **What is persisted or emitted — and what never is.** A baseline entry or
 comparison-report entry contains only: a normalized identity fingerprint
@@ -187,25 +195,42 @@ file contents, prompts/messages, MCP protocol traffic, or unredacted
 command/argument text — the same redaction posture as v1.3.0's trust
 assessment.
 
-**Server identity.** A server's identity fingerprint is derived from its
-agent, normalized config-source path, and server name — never display name
-alone, and never raw command text. Transport is deliberately *not* part of
-the fingerprint: it is tracked as an ordinary comparable field instead, so
-a server switching between a local command and a remote URL is reported as
-`changed` with a `transport-changed` reason rather than as one server
-disappearing and an unrelated one appearing.
+**Server identity.** A server's identity fingerprint is derived from a
+*stable machine identifier* for its agent (e.g. `"vs-code"`), its
+normalized config-source path, and its server name — never the
+human-facing display name (e.g. `"VS Code"`, which is persisted separately
+purely for readability and could be reworded in a future release without
+that being a security-relevant change) and never raw command text. The
+three inputs are combined via a canonical, structurally unambiguous
+encoding before hashing, not a delimiter-joined string, since none of them
+is guaranteed to exclude any particular character. Transport is
+deliberately *not* part of the fingerprint: it is tracked as an ordinary
+comparable field instead, so a server switching between a local command
+and a remote URL is reported as `changed` with a `transport-changed`
+reason rather than as one server disappearing and an unrelated one
+appearing.
 
 **Statuses and drift reasons.** Every server is classified as one of
 `unchanged`, `new`, `changed`, `missing`, or `unverifiable`, with a closed,
 deterministic set of drift reasons (executable hash, command, arguments,
 package identity, package version, environment-variable name set,
 transport, server added/removed, capability set, trust-indicator set,
-artifact identity, a documented risk increase, or the executable becoming
-newly unverifiable). `unverifiable` is reported when a previously
-hash-verified executable can no longer be safely hashed (and nothing
-independent of that fact also changed) — distinct from a generic `changed`
-status, so an operator can immediately tell "we lost the ability to verify
-this" apart from "something else about this server changed."
+artifact identity, configuration risk, a documented risk increase, or the
+executable becoming newly unverifiable). `unverifiable` is reported when a
+previously hash-verified executable can no longer be safely hashed (and
+nothing independent of that fact also changed) — distinct from a generic
+`changed` status, so an operator can immediately tell "we lost the ability
+to verify this" apart from "something else about this server changed."
+
+**Safety hardening.** Before ever comparing against a parsed baseline,
+`check` validates that it is internally consistent — every entry's
+fingerprint matches a fresh recomputation from its own identity fields, no
+two entries share a fingerprint, every `sha256` value is well-formed hex,
+every sorted/set-like field is actually sorted and deduplicated, and each
+entry's aggregate status is consistent with its own artifact-identity and
+configuration-risk fields. A hand-edited or corrupted baseline fails
+closed (a clear error, no comparison performed) instead of silently
+producing a misleading report.
 
 **Risk ordering and gates.** The five trust-assessment aggregate values
 have a fixed severity order (`verified-local` < `known-source` < `unknown`
