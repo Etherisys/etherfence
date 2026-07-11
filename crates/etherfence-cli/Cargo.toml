@@ -10,6 +10,7 @@ name = "etherfence"
 path = "src/main.rs"
 
 [dependencies]
+anstream.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 etherfence-core = { path = "../etherfence-core" }
@@ -21,6 +22,7 @@ etherfence-report = { path = "../etherfence-report" }
 etherfence-setup = { path = "../etherfence-setup" }
 serde.workspace = true
 serde_json.workspace = true
+terminal_size.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true

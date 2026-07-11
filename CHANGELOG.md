@@ -21,6 +21,13 @@ scanning, or network interception.
 
 ### Added
 
+- Interactive terminals now show a professional EtherFence startup banner for
+  human-readable command output, reinforcing "AI Agent Security Posture &
+  Runtime Control" while remaining invisible to scripts and CI. The banner is
+  suppressed for JSON, Markdown, SARIF, MCP stdio proxy traffic,
+  redirected/piped stdout, CI environments, `NO_COLOR`, and terminals without
+  ANSI color support.
+
 - New versioned MCP proxy policy schema extension `ef-mcp-policy/v0.2`,
   additive over `ef-mcp-policy/v0.1`: every existing v0.1 policy continues
   to parse and evaluate byte-for-byte identically, and a v0.2-only

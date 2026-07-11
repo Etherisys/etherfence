@@ -174,6 +174,12 @@ cargo build --release -p etherfence-cli
 
 ## Command overview
 
+Interactive terminals show a branded EtherFence startup banner before
+human-readable command output. The banner is automatically suppressed for
+structured output (`--format json`, `--format markdown`, `--format sarif`),
+MCP stdio proxy traffic, redirected/piped stdout, CI environments, `NO_COLOR`,
+and terminals without ANSI color support.
+
 | Command | Purpose | Mode |
 | --- | --- | --- |
 | `etherfence scan` | Posture discovery / CI gate | Local, read-only, scan-only |
