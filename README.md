@@ -76,7 +76,7 @@ cargo build --release -p etherfence-cli
 etherfence setup
 ```
 
-The wizard scans your system for AI clients (Claude Code, Cursor, VS Code, Hermes, OpenCode, etc.), detects MCP servers, flags unsafe configurations (missing package versions, high-risk launch patterns), generates deny-by-default starter policies, and lets you preview every change before applying.
+The wizard scans your system for AI clients (Claude Code, Cursor, VS Code, Hermes, OpenCode, etc.), detects their MCP servers, shows trust assessments, lets you select which servers to protect, and generates deny-by-default starter policies with preview before applying.
 
 **For CI and scripting**, the explicit subcommands remain available:
 

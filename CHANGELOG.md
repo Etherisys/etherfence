@@ -23,34 +23,39 @@ scanning, or network interception.
 
 - **Guided setup wizard**: `etherfence setup` (no subcommand) now launches an
   interactive guided setup experience on TTYs. The wizard scans for AI clients,
-  detects MCP servers, shows trust assessments, and provides step-by-step
-  guidance. On non-TTY (CI, pipes, scripts), it prints clear guidance to use
-  explicit subcommands. (#TBD)
+  detects MCP servers, and provides step-by-step guidance toward applying
+  setup changes. On non-TTY (CI, pipes, scripts), it prints clear guidance to use
+  explicit subcommands.
 - **Safe policy generation**: Generated starter policies now default to
   **deny-all quarantine** (`tools.allow = []`, `methods.allow = ["tools/list"]`)
   instead of the previous wildcard `tools.allow = ["*"]`. This is a security
   correction — policies now fail-closed by default. Operators refine the
-  allowlist explicitly after setup. (#TBD)
+  allowlist explicitly after setup.
 - **Real Hermes config path**: Hermes Agent detection now uses the actual
   `~/.hermes/config.yaml` path (YAML format, `mcp_servers:` key) instead of
-  the incorrect `~/.hermes/config.json` guess. (#TBD)
+  the incorrect `~/.hermes/config.json` guess. Hermes MCP servers are now
+  parsed from YAML config.
+- **Real OpenCode and Antigravity detection**: OpenCode now probes
+  `~/.config/opencode/opencode.{json,jsonc}` and Antigravity probes
+  `~/.gemini/config/mcp_config.json` with binary detection for `agy`.
 - New core types for client detection granularity: `ReadSupport`, `WriteSupportKind`,
-  `ConfigFormat::Yaml`. These lay the groundwork for the client adapter
-  architecture planned for v1.7.0. (#TBD)
+  `ConfigFormat::Yaml`.
 
 ### Changed
 
 - `generated_policy_template()` now produces deny-all policies instead of
   wildcard allow-all. Existing policies written by earlier versions are
-  unaffected; this only changes new policy generation. (#TBD)
+  unaffected; this only changes new policy generation.
 - README Quickstart now leads with `etherfence setup` (guided wizard) and
-  documents explicit subcommands as advanced/CI usage. (#TBD)
+  documents explicit subcommands as advanced/CI usage.
 
 ### Fixed
 
 - Hermes Agent no longer requires the nonexistent `~/.hermes/config.json`
   marker file for detection. The correct `~/.hermes/config.yaml` path is
-  used, with YAML format support. (#TBD)
+  used, with YAML format and MCP server parsing.
+- OpenCode and Antigravity detection now uses real config paths and binary
+  names discovered from live system inspection.
 
 ## [1.5.0] - 2026-07-11
 

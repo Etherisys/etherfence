@@ -1,7 +1,7 @@
 {
   "schema_version": "ef-baseline/v0.1.3",
   "tool": "etherfence",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "findings": [
     {
       "id": "EF-MCP-000",
@@ -454,6 +454,141 @@
       "policy_status": "not_applicable",
       "evidence": [
         "Tirith file present"
+      ]
+    },
+    {
+      "id": "EF-MCP-000",
+      "title": "MCP server configured",
+      "severity": "low",
+      "kind": "mcp-server-configured",
+      "agent": "hermes",
+      "target": "agentmail",
+      "config_path": "~/.hermes/config.yaml",
+      "rationale": "An MCP server is configured for this agent. MCP servers can extend agent access beyond the base application.",
+      "impact": "This is expected in many developer setups, but each server should be reviewed for least privilege and provenance.",
+      "recommendation": "Confirm the server is needed, trusted, pinned where practical, and limited to the minimum required permissions.",
+      "references": [],
+      "fingerprint": "efp1-adb0704c8862bcf2",
+      "baseline_status": "not-applicable",
+      "policy_status": "not_applicable",
+      "evidence": [
+        "server=agentmail",
+        "command=agentmail-mcp"
+      ]
+    },
+    {
+      "id": "EF-MCP-001",
+      "title": "Broad filesystem access hint",
+      "severity": "high",
+      "kind": "broad-filesystem-access",
+      "agent": "hermes",
+      "target": "agentmail",
+      "config_path": "~/.hermes/config.yaml",
+      "rationale": "The MCP server configuration contains values that look like broad filesystem roots or filesystem-capable tooling.",
+      "impact": "A compromised or over-permissioned agent workflow could read or modify more local files than intended.",
+      "recommendation": "Restrict MCP filesystem servers to explicit project directories such as /path/to/project, avoid home-directory or root-level grants, and separate sensitive repos where possible.",
+      "references": [],
+      "fingerprint": "efp1-6cef746e98244c8f",
+      "baseline_status": "not-applicable",
+      "policy_status": "not_applicable",
+      "evidence": [
+        "/home/user/.agentmail/config.json"
+      ]
+    },
+    {
+      "id": "EF-MCP-004",
+      "title": "MCP environment variables exposed",
+      "severity": "low",
+      "kind": "exposed-mcp-environment",
+      "agent": "hermes",
+      "target": "agentmail",
+      "config_path": "~/.hermes/config.yaml",
+      "rationale": "The MCP server receives environment variables from its agent configuration.",
+      "impact": "Environment variables increase the data available to the MCP process and may include operational context or credentials.",
+      "recommendation": "Keep MCP environment values minimal, prefer scoped tokens, and avoid sharing variables that are not required by the server.",
+      "references": [],
+      "fingerprint": "efp1-51f9ecdb7c6ce665",
+      "baseline_status": "not-applicable",
+      "policy_status": "not_applicable",
+      "evidence": [
+        "AGENTMAIL_API_KEY"
+      ]
+    },
+    {
+      "id": "EF-SEC-001",
+      "title": "Secret-looking MCP environment variable name",
+      "severity": "medium",
+      "kind": "secret-looking-env-name",
+      "agent": "hermes",
+      "target": "agentmail",
+      "config_path": "~/.hermes/config.yaml",
+      "rationale": "One or more MCP environment variable names look like they may carry secrets or API credentials.",
+      "impact": "If the MCP server is over-broad, compromised, or logs its environment, these credentials could be exposed.",
+      "recommendation": "Use least-privilege tokens, rotate credentials periodically, avoid long-lived personal tokens, and confirm the server does not log environment values.",
+      "references": [],
+      "fingerprint": "efp1-1c8f6bb576e30fba",
+      "baseline_status": "not-applicable",
+      "policy_status": "not_applicable",
+      "evidence": [
+        "AGENTMAIL_API_KEY"
+      ]
+    },
+    {
+      "id": "EF-MCP-000",
+      "title": "MCP server configured",
+      "severity": "low",
+      "kind": "mcp-server-configured",
+      "agent": "hermes",
+      "target": "stitch",
+      "config_path": "~/.hermes/config.yaml",
+      "rationale": "An MCP server is configured for this agent. MCP servers can extend agent access beyond the base application.",
+      "impact": "This is expected in many developer setups, but each server should be reviewed for least privilege and provenance.",
+      "recommendation": "Confirm the server is needed, trusted, pinned where practical, and limited to the minimum required permissions.",
+      "references": [],
+      "fingerprint": "efp1-52588631ac74d20f",
+      "baseline_status": "not-applicable",
+      "policy_status": "not_applicable",
+      "evidence": [
+        "server=stitch",
+        "command=npx"
+      ]
+    },
+    {
+      "id": "EF-MCP-004",
+      "title": "MCP environment variables exposed",
+      "severity": "low",
+      "kind": "exposed-mcp-environment",
+      "agent": "hermes",
+      "target": "stitch",
+      "config_path": "~/.hermes/config.yaml",
+      "rationale": "The MCP server receives environment variables from its agent configuration.",
+      "impact": "Environment variables increase the data available to the MCP process and may include operational context or credentials.",
+      "recommendation": "Keep MCP environment values minimal, prefer scoped tokens, and avoid sharing variables that are not required by the server.",
+      "references": [],
+      "fingerprint": "efp1-ac68d55189ead8ff",
+      "baseline_status": "not-applicable",
+      "policy_status": "not_applicable",
+      "evidence": [
+        "STITCH_API_KEY"
+      ]
+    },
+    {
+      "id": "EF-SEC-001",
+      "title": "Secret-looking MCP environment variable name",
+      "severity": "medium",
+      "kind": "secret-looking-env-name",
+      "agent": "hermes",
+      "target": "stitch",
+      "config_path": "~/.hermes/config.yaml",
+      "rationale": "One or more MCP environment variable names look like they may carry secrets or API credentials.",
+      "impact": "If the MCP server is over-broad, compromised, or logs its environment, these credentials could be exposed.",
+      "recommendation": "Use least-privilege tokens, rotate credentials periodically, avoid long-lived personal tokens, and confirm the server does not log environment values.",
+      "references": [],
+      "fingerprint": "efp1-e8e183475555c91a",
+      "baseline_status": "not-applicable",
+      "policy_status": "not_applicable",
+      "evidence": [
+        "STITCH_API_KEY"
       ]
     }
   ]
