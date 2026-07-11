@@ -50,23 +50,29 @@
 <p align="center">
   <img
     src="docs/assets/etherfence-demo.gif"
-    alt="EtherFence detects a risky Claude Code filesystem MCP server and denies an unauthorized filesystem write"
+    alt="EtherFence terminal demo: splash, posture scan, MCP setup assessment, and runtime policy denial"
     width="100%"
   />
 </p>
 
 <p align="center">
-  Discover risky agent configurations before execution, then enforce
-  deny-by-default MCP controls at runtime.
+  Discover local AI-agent risks, assess MCP server posture, and enforce
+  deny-by-default runtime controls — all from the real <code>etherfence</code> binary.
 </p>
 
-The recording runs the real `etherfence` binary against checked-in fixtures:
+The recording runs the real `etherfence` binary against checked-in fixtures
+in four scenes:
 
-- `setup detect --root demo/workspace` inspects a Claude Code MCP config;
-  the configured `npx` filesystem server is parsed, not executed.
-- `mcp-policy check --policy demo/workspace/project-readonly.toml --request
-  demo/workspace/request.json` dry-runs the same serverless decision helpers
-  used by the live proxy and denies `filesystem.write`.
+- **Identity splash** — colored ETHERFENCE banner and tagline
+- **Posture scan** — `etherfence scan` discovers a Claude Code filesystem MCP
+  server with broad filesystem access
+- **Setup assessment** — `etherfence setup detect` reports capability,
+  trust indicators, and a deny-by-default starter-policy recommendation
+- **Policy enforcement** — `etherfence mcp-policy check` denies an
+  unauthorized `filesystem.write` request without starting any server
+
+The configured `npx` filesystem server is parsed, never executed. No network
+access, package installation, or live MCP server contact is required.
 
 Reproduce it locally with `./demo/run-demo.sh`, or verify the behavior without
 VHS using `./demo/verify-demo.sh`. [View HD recording](docs/assets/etherfence-demo.mp4).

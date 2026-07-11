@@ -44,6 +44,23 @@ assert_not_contains() {
   fi
 }
 
+# ── scan ──────────────────────────────────────────────────────────────
+scan_output="$(PATH="$fake_bin:$PATH" "$etherfence" scan --root demo/workspace)"
+assert_contains "$scan_output" "EtherFence scan report"
+assert_contains "$scan_output" "Scanned root: demo/workspace"
+assert_contains "$scan_output" "Claude Code"
+assert_contains "$scan_output" "filesystem-server"
+assert_contains "$scan_output" "EF-MCP-001 Broad filesystem access hint"
+assert_contains "$scan_output" "EF-MCP-000 MCP server configured"
+assert_not_contains "$scan_output" "DEMO_TOKEN"
+
+if [[ -s "$ETHERFENCE_DEMO_EXEC_LOG" ]]; then
+  echo "configured package runner was executed unexpectedly during scan:" >&2
+  cat "$ETHERFENCE_DEMO_EXEC_LOG" >&2
+  exit 1
+fi
+
+# ── setup detect ──────────────────────────────────────────────────────
 setup_output="$(PATH="$fake_bin:$PATH" "$etherfence" setup detect --root demo/workspace)"
 assert_contains "$setup_output" "EtherFence setup detect"
 assert_contains "$setup_output" "Root: demo/workspace"
@@ -53,9 +70,9 @@ assert_contains "$setup_output" "capabilities: filesystem"
 assert_contains "$setup_output" "recommendation: deny (needs-review=false)"
 assert_contains "$setup_output" "trust: artifact-identity=known-source configuration-risk=needs-review aggregate=needs-review needs-review=true"
 assert_contains "$setup_output" "EF-TRUST-PIN-001 [medium] package-pinning: Package version is omitted"
-assert_contains "$setup_output" "EF-TRUST-ENV-005 [medium] environment-variable: Environment variable name looks secret-like"
-assert_not_contains "$setup_output" "fixture-only"
 assert_not_contains "$setup_output" "DEMO_TOKEN"
+# No synthetic secret-looking env var in fixture
+assert_not_contains "$setup_output" "secret-like"
 
 if [[ -s "$ETHERFENCE_DEMO_EXEC_LOG" ]]; then
   echo "configured package runner was executed unexpectedly:" >&2
@@ -63,11 +80,13 @@ if [[ -s "$ETHERFENCE_DEMO_EXEC_LOG" ]]; then
   exit 1
 fi
 
+# ── policy validate ───────────────────────────────────────────────────
 validate_output="$($etherfence mcp-policy validate demo/workspace/project-readonly.toml)"
 assert_contains "$validate_output" "OK:"
-assert_contains "$validate_output" "name=\"project-readonly\""
-assert_contains "$validate_output" "schema_version=\"ef-mcp-policy/v0.1\""
+assert_contains "$validate_output" 'name="project-readonly"'
+assert_contains "$validate_output" 'schema_version="ef-mcp-policy/v0.1"'
 
+# ── policy check ──────────────────────────────────────────────────────
 set +e
 policy_output="$($etherfence mcp-policy check --policy demo/workspace/project-readonly.toml --request demo/workspace/request.json)"
 policy_status=$?
@@ -91,5 +110,10 @@ if [[ -s "$ETHERFENCE_DEMO_EXEC_LOG" ]]; then
   cat "$ETHERFENCE_DEMO_EXEC_LOG" >&2
   exit 1
 fi
+
+# ── splash check: tagline is present in --help output ─────────────────
+splash_output="$("$etherfence" --help 2>&1)"
+assert_contains "$splash_output" "AI Agent Security Posture"
+assert_contains "$splash_output" "Runtime Control"
 
 printf '%s\n' "demo verification passed"

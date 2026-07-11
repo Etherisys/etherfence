@@ -1,7 +1,10 @@
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Command, Output};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+#[cfg(unix)]
+use std::path::Path;
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -95,11 +98,9 @@ fn demo_workspace_detects_claude_code_filesystem_server_without_executing_runner
         "trust: artifact-identity=known-source configuration-risk=needs-review aggregate=needs-review needs-review=true"
     ));
     assert!(text.contains("EF-TRUST-PIN-001 [medium] package-pinning: Package version is omitted"));
-    assert!(text.contains(
-        "EF-TRUST-ENV-005 [medium] environment-variable: Environment variable name looks secret-like"
-    ));
-    assert!(!text.contains("fixture-only"));
+    // The fixture intentionally has no synthetic DEMO_TOKEN env var
     assert!(!text.contains("DEMO_TOKEN"));
+    assert!(!text.contains("secret-like"));
 
     #[cfg(unix)]
     assert_eq!(
