@@ -198,10 +198,12 @@ Six field-guard primitives are supported via `type = "..."`:
 
 Every guard fails closed for its own field: a missing key, a value of the
 wrong JSON type, a malformed value (e.g. an unparseable URL, a URL with
-userinfo in its authority, or any `%`-encoded URL value — all rejected as
-ambiguous rather than decoded), or an unresolvable selector all deny that
-guard's decision. A field with no guard configured behaves exactly as it
-does today — guards apply only where configured. See
+userinfo in its authority, any `%`-encoded URL value, or a URL path
+containing a `.`/`..` segment — all rejected as ambiguous rather than decoded
+or normalized, since a downstream server may resolve `/api/../admin` to
+`/admin`), or an unresolvable selector all deny that guard's decision. A
+field with no guard configured behaves exactly as it does today — guards
+apply only where configured. See
 `specs/004-argument-aware-mcp-policy/contracts/ef-mcp-policy-v0.2.md` and
 `specs/004-argument-aware-mcp-policy/data-model.md` for the complete field
 list, validation rules, and the closed set of machine-readable
@@ -214,6 +216,18 @@ decision so far is still `Allow`, and the first failing guard wins. Both the
 live `mcp-proxy` and `mcp-policy check` run through the identical decision
 functions — there is exactly one evaluator, never two implementations that
 merely happen to agree.
+
+**Server scope**: a v0.2 argument/param guard may be configured either
+globally (`[tools."<tool>".arguments]` / `[methods."<method>".params]`) or
+per server (`[servers."<name>".tools."<tool>".arguments]` /
+`[servers."<name>".methods."<method>".params]`), and the two are not
+mutually exclusive. If both are configured for the same tool/method, **both
+must pass** — guards only narrow, so there is no "more specific wins"
+override the way tool/method allow/deny lists have; the global guard is
+checked first only for a deterministic denial reason when both would deny,
+which has no effect on the final decision. A server-scoped guard never
+applies outside its own `server_name`; a request through any other server
+scope (including the default scope) sees only the global guard, if any.
 
 ```toml
 schema_version = "ef-mcp-policy/v0.2"

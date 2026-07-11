@@ -321,8 +321,18 @@ pub fn inspect_client_line(policy: &McpPolicyFile, server_name: &str, line: &str
             tool_for_audit.and_then(|tool| decide_tool_argument_paths(policy, tool, arguments));
         let (decision, reason) = apply_path_decision(decision, reason, path_decision.as_ref());
 
-        let guard_decision =
-            tool_for_audit.and_then(|tool| decide_tool_argument_guards(policy, tool, arguments));
+        // Only consult the v0.2 guard when the decision is still Allow: a
+        // guard that happens to be satisfied is not a meaningful "allow"
+        // signal once the call is already denied for another reason, and
+        // computing/auditing it unconditionally produced confusing
+        // decision/reason combinations (e.g. `decision: deny` alongside a
+        // `guard_reason_category: guard_allowed`).
+        let guard_decision = if decision == Decision::Allow {
+            tool_for_audit
+                .and_then(|tool| decide_tool_argument_guards(policy, server_name, tool, arguments))
+        } else {
+            None
+        };
         let (decision, reason) = apply_guard_decision(decision, reason, guard_decision.as_ref());
 
         let mut audit = AuditRecord::tool_call(
@@ -385,7 +395,11 @@ pub fn inspect_client_line(policy: &McpPolicyFile, server_name: &str, line: &str
             method_decision.reason.clone(),
             path_decision.as_ref(),
         );
-        let guard_decision = decide_method_param_guards(policy, method, params);
+        let guard_decision = if decision == Decision::Allow {
+            decide_method_param_guards(policy, server_name, method, params)
+        } else {
+            None
+        };
         let (decision, reason) = apply_guard_decision(decision, reason, guard_decision.as_ref());
         let mut audit = AuditRecord::method_decision(
             &policy.name,
@@ -514,7 +528,11 @@ pub fn inspect_server_line(
         // server→client direction (v0.1 never guarded params here at all).
         // Only consulted when the method decision is still Allow, matching
         // the same "guards only narrow" precedence used client→server.
-        let guard_decision = decide_method_param_guards(policy, method, params);
+        let guard_decision = if method_decision.decision == Decision::Allow {
+            decide_method_param_guards(policy, server_name, method, params)
+        } else {
+            None
+        };
         let (decision, reason) = apply_guard_decision(
             method_decision.decision,
             method_decision.reason.clone(),
@@ -1918,6 +1936,75 @@ values = ["my-org"]
         assert_eq!(inspected.action, ClientAction::Forward);
         let audit = inspected.audit.expect("audit record");
         assert_eq!(audit.decision, "allow");
+    }
+
+    #[test]
+    fn v2_guard_metadata_is_absent_when_tool_is_already_denied() {
+        // A tool that isn't in the allow list is denied by decide_tool_call
+        // before any v0.2 guard is relevant. The guard must not be computed
+        // or attached to the audit record in that case: a `deny` decision
+        // alongside `guard_reason_category: guard_allowed` would be a
+        // confusing, misleading audit combination.
+        let policy = parse_mcp_policy(
+            r#"
+schema_version = "ef-mcp-policy/v0.2"
+name = "v2-denied-tool-with-guard"
+
+[tools]
+allow = ["other.tool"]
+
+[tools."github.create_issue".arguments.fields.org]
+type = "enum"
+values = ["my-org"]
+"#,
+        )
+        .expect("valid v0.2 policy");
+        let inspected = inspect_client_line(
+            &policy,
+            "default",
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"github.create_issue","arguments":{"org":"my-org"}}}"#,
+        );
+        assert!(matches!(inspected.action, ClientAction::Deny { .. }));
+        let audit = inspected.audit.expect("audit record");
+        assert_eq!(audit.decision, "deny");
+        assert!(
+            audit.guard_key.is_none(),
+            "guard must not be evaluated once the tool is already denied: {audit:?}"
+        );
+    }
+
+    #[test]
+    fn v2_server_scoped_tool_guard_is_enforced_end_to_end() {
+        let policy = parse_mcp_policy(
+            r#"
+schema_version = "ef-mcp-policy/v0.2"
+name = "v2-server-scoped-e2e"
+
+[servers.production.tools]
+allow = ["github.create_issue"]
+
+[servers.production.tools."github.create_issue".arguments.fields.org]
+type = "enum"
+values = ["approved-org"]
+"#,
+        )
+        .expect("valid v0.2 policy");
+
+        let denied = inspect_client_line(
+            &policy,
+            "production",
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"github.create_issue","arguments":{"org":"other-org"}}}"#,
+        );
+        assert!(matches!(denied.action, ClientAction::Deny { .. }));
+        let audit = denied.audit.expect("audit record");
+        assert_eq!(audit.guard_key.as_deref(), Some("github.create_issue"));
+
+        let allowed = inspect_client_line(
+            &policy,
+            "production",
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"github.create_issue","arguments":{"org":"approved-org"}}}"#,
+        );
+        assert_eq!(allowed.action, ClientAction::Forward);
     }
 
     #[test]

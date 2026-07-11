@@ -43,9 +43,15 @@ scanning, or network interception.
   type, a malformed value, or an unresolvable selector all deny that one
   guard's decision. The URL guard specifically rejects, without attempting
   to decode or partially parse them, any value containing `%` (percent
-  encoding is how allowlist checks get bypassed) or userinfo (`@`) in its
+  encoding is how allowlist checks get bypassed), userinfo (`@`) in its
   authority (the classic `trusted.example@evil.example` confusable-host
-  attack).
+  attack), or a `.`/`..` path segment (a path-prefix allowlist check on the
+  raw string alone would otherwise be bypassable, since a downstream server
+  commonly resolves `/api/../admin` to `/admin`). A `number` guard's `min`/
+  `max` and any `exact`/`enum`/`allowed_elements` scalar must be finite —
+  `NaN`/`+-infinity` are rejected at load time rather than silently
+  disabling the bound they appear in (every comparison against `NaN` is
+  `false`).
 - One shared, pure decision evaluator
   (`decide_tool_argument_guards`/`decide_method_param_guards` in
   `etherfence-mcp::policy`) used by both the live `mcp-proxy`
@@ -58,6 +64,13 @@ scanning, or network interception.
   The v0.2 params guard is new, additive capability applicable to any
   method (not just `resources/read`) and, for the first time, to
   server→client method params as well as client→server.
+- Argument/param guards may be configured globally
+  (`[tools."<tool>".arguments]` / `[methods."<method>".params]`) and/or per
+  server (`[servers."<name>".tools."<tool>".arguments]` /
+  `[servers."<name>".methods."<method>".params]`); when both are configured
+  for the same tool/method, both must pass (guards only narrow, so there is
+  no "more specific wins" override). A server-scoped guard never applies
+  outside its own server scope.
 - `etherfence mcp-policy validate` rejects (fail closed, at load time):
   duplicate/conflicting `require_keys`/`forbid_keys` on the same key,
   invalid or unbounded selectors (empty/too many segments, disallowed

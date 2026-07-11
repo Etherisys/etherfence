@@ -468,10 +468,13 @@ fn validate_selector(selector: &str, context: &str) -> Result<()> {
 
 fn validate_field_guard(guard: &FieldGuard, context: &str) -> Result<()> {
     match guard {
-        FieldGuard::Exact { .. } => {}
+        FieldGuard::Exact { value } => validate_scalar_value(value, context)?,
         FieldGuard::Enum { values } => {
             if values.is_empty() {
                 anyhow::bail!("{context} enum guard must configure at least one value");
+            }
+            for value in values {
+                validate_scalar_value(value, context)?;
             }
         }
         FieldGuard::StringGuard {
@@ -480,6 +483,11 @@ fn validate_field_guard(guard: &FieldGuard, context: &str) -> Result<()> {
             ..
         } => validate_bounds(*min_length, *max_length, context)?,
         FieldGuard::NumberGuard { min, max } => {
+            if min.is_some_and(|v| !v.is_finite()) || max.is_some_and(|v| !v.is_finite()) {
+                anyhow::bail!(
+                    "{context} number guard min/max must be finite (NaN and +/-infinity are not allowed)"
+                );
+            }
             if let (Some(min), Some(max)) = (min, max) {
                 if min > max {
                     anyhow::bail!("{context} number guard min must not exceed max");
@@ -497,6 +505,9 @@ fn validate_field_guard(guard: &FieldGuard, context: &str) -> Result<()> {
                     anyhow::bail!(
                         "{context} array guard allowed_elements must not be empty when configured"
                     );
+                }
+                for value in allowed {
+                    validate_scalar_value(value, context)?;
                 }
             }
         }
@@ -556,6 +567,22 @@ fn validate_bounds(min: Option<usize>, max: Option<usize>, context: &str) -> Res
     if let (Some(min), Some(max)) = (min, max) {
         if min > max {
             anyhow::bail!("{context} guard min must not exceed max");
+        }
+    }
+    Ok(())
+}
+
+/// Rejects a non-finite `ScalarValue::Float` (`NaN`, `+inf`, `-inf`). Such a
+/// value can never legitimately equal or bound a real request value, and
+/// `NaN` in particular makes every subsequent comparison silently false
+/// (`NaN < x`, `NaN > x`, and `NaN == x` are all `false`), which would
+/// otherwise disable the guard it appears in without any parse error.
+fn validate_scalar_value(value: &ScalarValue, context: &str) -> Result<()> {
+    if let ScalarValue::Float(f) = value {
+        if !f.is_finite() {
+            anyhow::bail!(
+                "{context} configured value must be finite (NaN and +/-infinity are not allowed)"
+            );
         }
     }
     Ok(())
@@ -972,6 +999,18 @@ fn parse_guarded_url(raw: &str) -> Option<ParsedGuardUrl> {
         let path_end = remainder.find(['?', '#']).unwrap_or(remainder.len());
         remainder[..path_end].to_string()
     };
+    // Reject `.`/`..` path segments outright rather than normalizing them:
+    // a downstream HTTP server or intermediary commonly *does* resolve
+    // `/api/../admin` to `/admin`, which would silently defeat a
+    // `path_prefixes = ["/api/"]` allowlist if this guard only compared the
+    // raw, unnormalized string. This mirrors the guard's existing
+    // reject-ambiguity-rather-than-decode stance for percent-encoding.
+    if path
+        .split('/')
+        .any(|segment| segment == "." || segment == "..")
+    {
+        return None;
+    }
     Some(ParsedGuardUrl {
         scheme,
         host,
@@ -1236,43 +1275,92 @@ fn decide_argument_guard(
     ))
 }
 
+/// Combine an optional global-scope and an optional server-scope argument
+/// guard for the same key. Guards are pure narrowing constraints (they only
+/// ever turn `Allow` into `Deny`, never the reverse), so there is no
+/// meaningful "one wins" precedence to choose between them the way
+/// [`decide_tool_call`]'s allow/deny lists need: both configured guards are
+/// evaluated and **both must pass** (logical AND). The global guard is
+/// checked first so a deny reason is deterministic when both would deny;
+/// this ordering has no effect on the final `Allow`/`Deny` outcome, only on
+/// which reason is reported. Returns `None` only when neither scope has a
+/// guard configured at all (no override).
+fn decide_combined_argument_guard(
+    guard_key: &str,
+    global: Option<&ArgumentGuard>,
+    server: Option<&ArgumentGuard>,
+    container: Option<&Value>,
+) -> Option<GuardPolicyDecision> {
+    let global_decision =
+        global.and_then(|guard| decide_argument_guard(guard_key, guard, container));
+    if global_decision
+        .as_ref()
+        .is_some_and(|decision| decision.decision == Decision::Deny)
+    {
+        return global_decision;
+    }
+    let server_decision =
+        server.and_then(|guard| decide_argument_guard(guard_key, guard, container));
+    if server_decision
+        .as_ref()
+        .is_some_and(|decision| decision.decision == Decision::Deny)
+    {
+        return server_decision;
+    }
+    global_decision.or(server_decision)
+}
+
 /// v0.2 counterpart to [`decide_tool_argument_paths`]: evaluates
 /// `require_keys`/`forbid_keys`/`fields` configured on a tool's `arguments`
-/// guard. Only the global `[tools."<tool>".arguments]` scope is checked,
-/// mirroring the v0.1 path guard's scope exactly (no server-specific
-/// argument-guard scope exists today).
+/// guard. Unlike the v0.1 path guard (which only ever consults the global
+/// `[tools."<tool>".arguments]` scope), this checks **both** the global
+/// scope and, when `server_name` has a matching entry, the server-specific
+/// `[servers."<server_name>".tools."<tool>".arguments]` scope — see
+/// [`decide_combined_argument_guard`] for the combination rule.
 pub fn decide_tool_argument_guards(
     policy: &McpPolicyFile,
+    server_name: &str,
     tool_name: &str,
     arguments: Option<&Value>,
 ) -> Option<GuardPolicyDecision> {
-    let guard = policy
+    let global = policy
         .tools
         .path_guards
-        .get(tool_name)?
-        .arguments
-        .as_ref()?;
-    decide_argument_guard(tool_name, guard, arguments)
+        .get(tool_name)
+        .and_then(|guard| guard.arguments.as_ref());
+    let server = policy
+        .servers
+        .get(server_name)
+        .and_then(|server| server.tools.path_guards.get(tool_name))
+        .and_then(|guard| guard.arguments.as_ref());
+    decide_combined_argument_guard(tool_name, global, server, arguments)
 }
 
 /// v0.2 counterpart to [`decide_method_param_paths`], but — unlike the v0.1
 /// path guard, which the live proxy only ever consults for `resources/read`
 /// — applicable to any method with a configured `params` guard. This is
 /// purely additive new v0.2 capability; it does not change which methods
-/// the v0.1 path guard covers.
+/// the v0.1 path guard covers. Also checks both the global and (when
+/// present) the server-specific `[servers."<server_name>".methods."<method>".params]`
+/// scope, combined per [`decide_combined_argument_guard`].
 pub fn decide_method_param_guards(
     policy: &McpPolicyFile,
+    server_name: &str,
     method: &str,
     params: Option<&Value>,
 ) -> Option<GuardPolicyDecision> {
-    let guard = policy
+    let global = policy
         .methods
-        .as_ref()?
-        .path_guards
-        .get(method)?
-        .params
-        .as_ref()?;
-    decide_argument_guard(method, guard, params)
+        .as_ref()
+        .and_then(|methods| methods.path_guards.get(method))
+        .and_then(|guard| guard.params.as_ref());
+    let server = policy
+        .servers
+        .get(server_name)
+        .and_then(|server| server.methods.as_ref())
+        .and_then(|methods| methods.path_guards.get(method))
+        .and_then(|guard| guard.params.as_ref());
+    decide_combined_argument_guard(method, global, server, params)
 }
 
 /// Deterministic decision for a tool name: deny-list match wins, then
@@ -2440,6 +2528,115 @@ max = 1
     }
 
     #[test]
+    fn rejects_nan_number_guard_min() {
+        let content = r#"
+schema_version = "ef-mcp-policy/v0.2"
+name = "nan-min"
+
+[tools]
+allow = ["demo.tool"]
+
+[tools."demo.tool".arguments.fields.limit]
+type = "number"
+min = nan
+"#;
+        let error = parse_mcp_policy(content).expect_err("NaN min rejected");
+        assert!(error.to_string().contains("must be finite"));
+    }
+
+    #[test]
+    fn rejects_nan_number_guard_max() {
+        let content = r#"
+schema_version = "ef-mcp-policy/v0.2"
+name = "nan-max"
+
+[tools]
+allow = ["demo.tool"]
+
+[tools."demo.tool".arguments.fields.limit]
+type = "number"
+max = nan
+"#;
+        let error = parse_mcp_policy(content).expect_err("NaN max rejected");
+        assert!(error.to_string().contains("must be finite"));
+    }
+
+    #[test]
+    fn rejects_infinite_number_guard_bounds() {
+        for body in ["min = inf", "max = -inf", "min = -inf\nmax = inf"] {
+            let content = format!(
+                r#"
+schema_version = "ef-mcp-policy/v0.2"
+name = "infinite-bound"
+
+[tools]
+allow = ["demo.tool"]
+
+[tools."demo.tool".arguments.fields.limit]
+type = "number"
+{body}
+"#
+            );
+            let error = parse_mcp_policy(&content).expect_err("infinite bound rejected");
+            assert!(
+                error.to_string().contains("must be finite"),
+                "body={body}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_nan_in_exact_and_enum_and_allowed_elements() {
+        let exact = r#"
+schema_version = "ef-mcp-policy/v0.2"
+name = "nan-exact"
+
+[tools]
+allow = ["demo.tool"]
+
+[tools."demo.tool".arguments.fields.score]
+type = "exact"
+value = nan
+"#;
+        assert!(parse_mcp_policy(exact)
+            .expect_err("NaN exact value rejected")
+            .to_string()
+            .contains("must be finite"));
+
+        let enum_guard = r#"
+schema_version = "ef-mcp-policy/v0.2"
+name = "nan-enum"
+
+[tools]
+allow = ["demo.tool"]
+
+[tools."demo.tool".arguments.fields.score]
+type = "enum"
+values = [1.0, nan]
+"#;
+        assert!(parse_mcp_policy(enum_guard)
+            .expect_err("NaN enum value rejected")
+            .to_string()
+            .contains("must be finite"));
+
+        let array_guard = r#"
+schema_version = "ef-mcp-policy/v0.2"
+name = "nan-array"
+
+[tools]
+allow = ["demo.tool"]
+
+[tools."demo.tool".arguments.fields.scores]
+type = "array"
+allowed_elements = [1.0, nan]
+"#;
+        assert!(parse_mcp_policy(array_guard)
+            .expect_err("NaN allowed_elements value rejected")
+            .to_string()
+            .contains("must be finite"));
+    }
+
+    #[test]
     fn rejects_impossible_string_length_range() {
         let content = r#"
 schema_version = "ef-mcp-policy/v0.2"
@@ -2646,6 +2843,7 @@ require_keys = ["org", "repo"]
         );
         let decision = decide_tool_argument_guards(
             &policy,
+            "default",
             "demo.tool",
             Some(&json!({"org": "my-org", "repo": "svc"})),
         )
@@ -2661,9 +2859,13 @@ require_keys = ["org", "repo"]
 require_keys = ["org", "repo"]
 "#,
         );
-        let decision =
-            decide_tool_argument_guards(&policy, "demo.tool", Some(&json!({"org": "my-org"})))
-                .expect("guard configured");
+        let decision = decide_tool_argument_guards(
+            &policy,
+            "default",
+            "demo.tool",
+            Some(&json!({"org": "my-org"})),
+        )
+        .expect("guard configured");
         assert_eq!(decision.decision, Decision::Deny);
         assert_eq!(decision.reason_category, "required_key_missing");
         assert_eq!(decision.selector, "repo");
@@ -2677,8 +2879,8 @@ require_keys = ["org", "repo"]
 require_keys = ["org"]
 "#,
         );
-        let decision =
-            decide_tool_argument_guards(&policy, "demo.tool", None).expect("guard configured");
+        let decision = decide_tool_argument_guards(&policy, "default", "demo.tool", None)
+            .expect("guard configured");
         assert_eq!(decision.decision, Decision::Deny);
         assert_eq!(decision.reason_category, "required_key_missing");
     }
@@ -2691,9 +2893,13 @@ require_keys = ["org"]
 forbid_keys = ["bypass"]
 "#,
         );
-        let decision =
-            decide_tool_argument_guards(&policy, "demo.tool", Some(&json!({"bypass": false})))
-                .expect("guard configured");
+        let decision = decide_tool_argument_guards(
+            &policy,
+            "default",
+            "demo.tool",
+            Some(&json!({"bypass": false})),
+        )
+        .expect("guard configured");
         assert_eq!(decision.decision, Decision::Deny);
         assert_eq!(decision.reason_category, "forbidden_key_present");
     }
@@ -2706,8 +2912,9 @@ forbid_keys = ["bypass"]
 forbid_keys = ["bypass"]
 "#,
         );
-        let decision = decide_tool_argument_guards(&policy, "demo.tool", Some(&json!({"x": 1})))
-            .expect("guard configured");
+        let decision =
+            decide_tool_argument_guards(&policy, "default", "demo.tool", Some(&json!({"x": 1})))
+                .expect("guard configured");
         assert_eq!(decision.decision, Decision::Allow);
     }
 
@@ -2719,7 +2926,10 @@ forbid_keys = ["bypass"]
 path_rule = "unused"
 "#,
         );
-        assert!(decide_tool_argument_guards(&policy, "demo.tool", Some(&json!({}))).is_none());
+        assert!(
+            decide_tool_argument_guards(&policy, "default", "demo.tool", Some(&json!({})))
+                .is_none()
+        );
     }
 
     // --- exact / enum ---
@@ -2733,9 +2943,13 @@ type = "exact"
 value = "read"
 "#,
         );
-        let decision =
-            decide_tool_argument_guards(&policy, "demo.tool", Some(&json!({"mode": "read"})))
-                .unwrap();
+        let decision = decide_tool_argument_guards(
+            &policy,
+            "default",
+            "demo.tool",
+            Some(&json!({"mode": "read"})),
+        )
+        .unwrap();
         assert_eq!(decision.decision, Decision::Allow);
     }
 
@@ -2748,9 +2962,13 @@ type = "exact"
 value = "read"
 "#,
         );
-        let decision =
-            decide_tool_argument_guards(&policy, "demo.tool", Some(&json!({"mode": "write"})))
-                .unwrap();
+        let decision = decide_tool_argument_guards(
+            &policy,
+            "default",
+            "demo.tool",
+            Some(&json!({"mode": "write"})),
+        )
+        .unwrap();
         assert_eq!(decision.decision, Decision::Deny);
         assert_eq!(decision.reason_category, "exact_value_mismatch");
     }
@@ -2764,13 +2982,21 @@ type = "enum"
 values = ["my-org"]
 "#,
         );
-        let allowed =
-            decide_tool_argument_guards(&policy, "demo.tool", Some(&json!({"org": "my-org"})))
-                .unwrap();
+        let allowed = decide_tool_argument_guards(
+            &policy,
+            "default",
+            "demo.tool",
+            Some(&json!({"org": "my-org"})),
+        )
+        .unwrap();
         assert_eq!(allowed.decision, Decision::Allow);
-        let denied =
-            decide_tool_argument_guards(&policy, "demo.tool", Some(&json!({"org": "other-org"})))
-                .unwrap();
+        let denied = decide_tool_argument_guards(
+            &policy,
+            "default",
+            "demo.tool",
+            Some(&json!({"org": "other-org"})),
+        )
+        .unwrap();
         assert_eq!(denied.decision, Decision::Deny);
         assert_eq!(denied.reason_category, "enum_value_not_allowed");
     }
@@ -2784,7 +3010,8 @@ type = "enum"
 values = ["my-org"]
 "#,
         );
-        let decision = decide_tool_argument_guards(&policy, "demo.tool", Some(&json!({}))).unwrap();
+        let decision =
+            decide_tool_argument_guards(&policy, "default", "demo.tool", Some(&json!({}))).unwrap();
         assert_eq!(decision.decision, Decision::Deny);
         assert_eq!(decision.reason_category, "field_missing");
     }
@@ -2802,17 +3029,31 @@ max_length = 4
 "#,
         );
         assert_eq!(
-            decide_tool_argument_guards(&policy, "demo.tool", Some(&json!({"name": "ok"})))
-                .unwrap()
-                .decision,
+            decide_tool_argument_guards(
+                &policy,
+                "default",
+                "demo.tool",
+                Some(&json!({"name": "ok"}))
+            )
+            .unwrap()
+            .decision,
             Decision::Allow
         );
-        let too_short =
-            decide_tool_argument_guards(&policy, "demo.tool", Some(&json!({"name": "a"}))).unwrap();
+        let too_short = decide_tool_argument_guards(
+            &policy,
+            "default",
+            "demo.tool",
+            Some(&json!({"name": "a"})),
+        )
+        .unwrap();
         assert_eq!(too_short.reason_category, "string_too_short");
-        let too_long =
-            decide_tool_argument_guards(&policy, "demo.tool", Some(&json!({"name": "toolong"})))
-                .unwrap();
+        let too_long = decide_tool_argument_guards(
+            &policy,
+            "default",
+            "demo.tool",
+            Some(&json!({"name": "toolong"})),
+        )
+        .unwrap();
         assert_eq!(too_long.reason_category, "string_too_long");
     }
 
@@ -2826,20 +3067,27 @@ prefix = "my-org/"
 "#,
         );
         assert_eq!(
-            decide_tool_argument_guards(&policy, "demo.tool", Some(&json!({"repo": "my-org/svc"})))
-                .unwrap()
-                .decision,
+            decide_tool_argument_guards(
+                &policy,
+                "default",
+                "demo.tool",
+                Some(&json!({"repo": "my-org/svc"}))
+            )
+            .unwrap()
+            .decision,
             Decision::Allow
         );
         let mismatch = decide_tool_argument_guards(
             &policy,
+            "default",
             "demo.tool",
             Some(&json!({"repo": "other-org/svc"})),
         )
         .unwrap();
         assert_eq!(mismatch.reason_category, "string_prefix_mismatch");
         let wrong_type =
-            decide_tool_argument_guards(&policy, "demo.tool", Some(&json!({"repo": 5}))).unwrap();
+            decide_tool_argument_guards(&policy, "default", "demo.tool", Some(&json!({"repo": 5})))
+                .unwrap();
         assert_eq!(wrong_type.reason_category, "field_wrong_type");
     }
 
@@ -2856,21 +3104,39 @@ max = 100
 "#,
         );
         assert_eq!(
-            decide_tool_argument_guards(&policy, "demo.tool", Some(&json!({"limit": 10})))
-                .unwrap()
-                .decision,
+            decide_tool_argument_guards(
+                &policy,
+                "default",
+                "demo.tool",
+                Some(&json!({"limit": 10}))
+            )
+            .unwrap()
+            .decision,
             Decision::Allow
         );
-        let below =
-            decide_tool_argument_guards(&policy, "demo.tool", Some(&json!({"limit": 0}))).unwrap();
+        let below = decide_tool_argument_guards(
+            &policy,
+            "default",
+            "demo.tool",
+            Some(&json!({"limit": 0})),
+        )
+        .unwrap();
         assert_eq!(below.reason_category, "number_below_minimum");
-        let above =
-            decide_tool_argument_guards(&policy, "demo.tool", Some(&json!({"limit": 1000})))
-                .unwrap();
+        let above = decide_tool_argument_guards(
+            &policy,
+            "default",
+            "demo.tool",
+            Some(&json!({"limit": 1000})),
+        )
+        .unwrap();
         assert_eq!(above.reason_category, "number_above_maximum");
-        let wrong_type =
-            decide_tool_argument_guards(&policy, "demo.tool", Some(&json!({"limit": "10"})))
-                .unwrap();
+        let wrong_type = decide_tool_argument_guards(
+            &policy,
+            "default",
+            "demo.tool",
+            Some(&json!({"limit": "10"})),
+        )
+        .unwrap();
         assert_eq!(wrong_type.reason_category, "field_wrong_type");
     }
 
@@ -2888,17 +3154,27 @@ allowed_elements = ["id", "title"]
 "#,
         );
         assert_eq!(
-            decide_tool_argument_guards(&policy, "demo.tool", Some(&json!({"fields": ["id"]})))
-                .unwrap()
-                .decision,
+            decide_tool_argument_guards(
+                &policy,
+                "default",
+                "demo.tool",
+                Some(&json!({"fields": ["id"]}))
+            )
+            .unwrap()
+            .decision,
             Decision::Allow
         );
-        let too_short =
-            decide_tool_argument_guards(&policy, "demo.tool", Some(&json!({"fields": []})))
-                .unwrap();
+        let too_short = decide_tool_argument_guards(
+            &policy,
+            "default",
+            "demo.tool",
+            Some(&json!({"fields": []})),
+        )
+        .unwrap();
         assert_eq!(too_short.reason_category, "array_too_short");
         let too_long = decide_tool_argument_guards(
             &policy,
+            "default",
             "demo.tool",
             Some(&json!({"fields": ["id", "title", "status"]})),
         )
@@ -2906,6 +3182,7 @@ allowed_elements = ["id", "title"]
         assert_eq!(too_long.reason_category, "array_too_long");
         let not_allowed = decide_tool_argument_guards(
             &policy,
+            "default",
             "demo.tool",
             Some(&json!({"fields": ["id", "secret"]})),
         )
@@ -2933,6 +3210,7 @@ path_prefixes = ["/v1/"]
         let policy = url_policy();
         let decision = decide_tool_argument_guards(
             &policy,
+            "default",
             "demo.tool",
             Some(&json!({"url": "https://api.example.invalid/v1/search?q=x"})),
         )
@@ -2945,6 +3223,7 @@ path_prefixes = ["/v1/"]
         let policy = url_policy();
         let decision = decide_tool_argument_guards(
             &policy,
+            "default",
             "demo.tool",
             Some(&json!({"url": "http://api.example.invalid/v1/search"})),
         )
@@ -2957,6 +3236,7 @@ path_prefixes = ["/v1/"]
         let policy = url_policy();
         let decision = decide_tool_argument_guards(
             &policy,
+            "default",
             "demo.tool",
             Some(&json!({"url": "https://evil.example/v1/search"})),
         )
@@ -2969,6 +3249,7 @@ path_prefixes = ["/v1/"]
         let policy = url_policy();
         let decision = decide_tool_argument_guards(
             &policy,
+            "default",
             "demo.tool",
             Some(&json!({"url": "https://api.example.invalid@evil.example/v1/x"})),
         )
@@ -2981,6 +3262,7 @@ path_prefixes = ["/v1/"]
         let policy = url_policy();
         let decision = decide_tool_argument_guards(
             &policy,
+            "default",
             "demo.tool",
             Some(&json!({"url": "https://api.example.invalid/v1/%2e%2e"})),
         )
@@ -2988,11 +3270,54 @@ path_prefixes = ["/v1/"]
         assert_eq!(decision.reason_category, "url_malformed");
     }
 
+    /// A raw `..` path segment must not be able to defeat a `path_prefixes`
+    /// allowlist: `/api/../admin` has a raw string that starts with `/api/`
+    /// but a downstream HTTP server would commonly resolve it to `/admin`.
+    #[test]
+    fn url_guard_denies_dot_dot_path_traversal() {
+        let policy = policy_with_tool_guard(
+            r#"
+[tools."demo.tool".arguments.fields.url]
+type = "url"
+path_prefixes = ["/api/"]
+"#,
+        );
+        for path in [
+            "/api/../admin",
+            "/api/./allowed",
+            "/api/a/../../admin",
+            "/api//../admin",
+        ] {
+            let url = format!("https://api.example.invalid{path}");
+            let decision = decide_tool_argument_guards(
+                &policy,
+                "default",
+                "demo.tool",
+                Some(&json!({"url": url})),
+            )
+            .unwrap();
+            assert_eq!(
+                decision.reason_category, "url_malformed",
+                "path={path} should be rejected as malformed, got {decision:?}"
+            );
+        }
+        // A genuinely allowed path (no dot segments) still passes.
+        let allowed = decide_tool_argument_guards(
+            &policy,
+            "default",
+            "demo.tool",
+            Some(&json!({"url": "https://api.example.invalid/api/widgets"})),
+        )
+        .unwrap();
+        assert_eq!(allowed.decision, Decision::Allow);
+    }
+
     #[test]
     fn url_guard_denies_out_of_prefix_path() {
         let policy = url_policy();
         let decision = decide_tool_argument_guards(
             &policy,
+            "default",
             "demo.tool",
             Some(&json!({"url": "https://api.example.invalid/v2/search"})),
         )
@@ -3012,6 +3337,7 @@ ports = [8443]
         );
         let decision = decide_tool_argument_guards(
             &policy,
+            "default",
             "demo.tool",
             Some(&json!({"url": "https://api.example.invalid/x"})),
         )
@@ -3030,6 +3356,7 @@ ports = [8443]
         );
         let decision = decide_tool_argument_guards(
             &policy,
+            "default",
             "demo.tool",
             Some(&json!({"url": "https://api.example.invalid:8443/x"})),
         )
@@ -3050,6 +3377,7 @@ values = ["open", "closed"]
         );
         let allowed = decide_tool_argument_guards(
             &policy,
+            "default",
             "demo.tool",
             Some(&json!({"filter": {"status": "open"}})),
         )
@@ -3057,6 +3385,7 @@ values = ["open", "closed"]
         assert_eq!(allowed.decision, Decision::Allow);
         let denied = decide_tool_argument_guards(
             &policy,
+            "default",
             "demo.tool",
             Some(&json!({"filter": {"status": "archived"}})),
         )
@@ -3074,10 +3403,11 @@ values = ["open"]
 "#,
         );
         let missing_filter =
-            decide_tool_argument_guards(&policy, "demo.tool", Some(&json!({}))).unwrap();
+            decide_tool_argument_guards(&policy, "default", "demo.tool", Some(&json!({}))).unwrap();
         assert_eq!(missing_filter.reason_category, "field_missing");
         let wrong_type_filter = decide_tool_argument_guards(
             &policy,
+            "default",
             "demo.tool",
             Some(&json!({"filter": "not-an-object"})),
         )
@@ -3096,13 +3426,19 @@ value = "abc"
         );
         let allowed = decide_tool_argument_guards(
             &policy,
+            "default",
             "demo.tool",
             Some(&json!({"items": [{"id": "abc"}]})),
         )
         .unwrap();
         assert_eq!(allowed.decision, Decision::Allow);
-        let out_of_range =
-            decide_tool_argument_guards(&policy, "demo.tool", Some(&json!({"items": []}))).unwrap();
+        let out_of_range = decide_tool_argument_guards(
+            &policy,
+            "default",
+            "demo.tool",
+            Some(&json!({"items": []})),
+        )
+        .unwrap();
         assert_eq!(out_of_range.reason_category, "field_missing");
     }
 
@@ -3122,6 +3458,7 @@ values = ["eng-alerts"]
         );
         let allowed = decide_method_param_guards(
             &policy,
+            "default",
             "demo/method",
             Some(&json!({"destination": "eng-alerts"})),
         )
@@ -3129,6 +3466,7 @@ values = ["eng-alerts"]
         assert_eq!(allowed.decision, Decision::Allow);
         let denied = decide_method_param_guards(
             &policy,
+            "default",
             "demo/method",
             Some(&json!({"destination": "random"})),
         )
@@ -3142,5 +3480,192 @@ values = ["eng-alerts"]
         assert!(!ScalarValue::Str("5".to_string()).matches(&json!(5)));
         assert!(ScalarValue::Int(5).matches(&json!(5)));
         assert!(ScalarValue::Bool(true).matches(&json!(true)));
+    }
+
+    // --- server-scoped guards ---
+
+    fn server_scoped_tool_guard_policy() -> McpPolicyFile {
+        parse_mcp_policy(
+            r#"
+schema_version = "ef-mcp-policy/v0.2"
+name = "server-scoped-guard"
+
+[servers.production.tools]
+allow = ["github.create_issue"]
+
+[servers.production.tools."github.create_issue".arguments]
+require_keys = ["org"]
+
+[servers.production.tools."github.create_issue".arguments.fields.org]
+type = "enum"
+values = ["approved-org"]
+"#,
+        )
+        .expect("valid server-scoped policy")
+    }
+
+    #[test]
+    fn server_scoped_tool_guard_is_enforced_for_matching_server() {
+        let policy = server_scoped_tool_guard_policy();
+        let allowed = decide_tool_argument_guards(
+            &policy,
+            "production",
+            "github.create_issue",
+            Some(&json!({"org": "approved-org"})),
+        )
+        .expect("server-scoped guard configured");
+        assert_eq!(allowed.decision, Decision::Allow);
+
+        let denied = decide_tool_argument_guards(
+            &policy,
+            "production",
+            "github.create_issue",
+            Some(&json!({"org": "other-org"})),
+        )
+        .expect("server-scoped guard configured");
+        assert_eq!(denied.decision, Decision::Deny);
+        assert_eq!(denied.reason_category, "enum_value_not_allowed");
+    }
+
+    /// A server-scoped guard must not leak onto a different server scope: a
+    /// tool call routed through a different `server_name` (or the default
+    /// scope) sees no guard at all here, since neither a global nor a
+    /// matching server-scoped guard is configured for it.
+    #[test]
+    fn server_scoped_tool_guard_does_not_apply_to_a_different_server() {
+        let policy = server_scoped_tool_guard_policy();
+        assert!(decide_tool_argument_guards(
+            &policy,
+            "default",
+            "github.create_issue",
+            Some(&json!({"org": "other-org"})),
+        )
+        .is_none());
+        assert!(decide_tool_argument_guards(
+            &policy,
+            "staging",
+            "github.create_issue",
+            Some(&json!({"org": "other-org"})),
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn server_scoped_method_param_guard_is_enforced() {
+        let policy = parse_mcp_policy(
+            r#"
+schema_version = "ef-mcp-policy/v0.2"
+name = "server-scoped-method-guard"
+
+[servers.production.methods]
+allow = ["tools/list", "tools/call", "demo/method"]
+
+[servers.production.methods."demo/method".params]
+require_keys = ["destination"]
+
+[servers.production.methods."demo/method".params.fields.destination]
+type = "enum"
+values = ["eng-alerts"]
+"#,
+        )
+        .expect("valid policy");
+
+        let allowed = decide_method_param_guards(
+            &policy,
+            "production",
+            "demo/method",
+            Some(&json!({"destination": "eng-alerts"})),
+        )
+        .expect("server-scoped guard configured");
+        assert_eq!(allowed.decision, Decision::Allow);
+
+        let denied = decide_method_param_guards(
+            &policy,
+            "production",
+            "demo/method",
+            Some(&json!({"destination": "other"})),
+        )
+        .expect("server-scoped guard configured");
+        assert_eq!(denied.decision, Decision::Deny);
+
+        assert!(decide_method_param_guards(
+            &policy,
+            "default",
+            "demo/method",
+            Some(&json!({"destination": "other"})),
+        )
+        .is_none());
+    }
+
+    /// When both a global and a server-scoped guard are configured for the
+    /// same tool, both must pass (logical AND) — a request that satisfies
+    /// one but not the other is still denied.
+    #[test]
+    fn global_and_server_scoped_tool_guards_both_must_pass() {
+        let policy = parse_mcp_policy(
+            r#"
+schema_version = "ef-mcp-policy/v0.2"
+name = "global-and-server-guard"
+
+[tools]
+allow = ["github.create_issue"]
+
+[tools."github.create_issue".arguments]
+require_keys = ["repo"]
+
+[servers.production.tools]
+allow = ["github.create_issue"]
+
+[servers.production.tools."github.create_issue".arguments.fields.org]
+type = "enum"
+values = ["approved-org"]
+"#,
+        )
+        .expect("valid policy");
+
+        // Satisfies the global require_keys guard but not the server-scoped
+        // enum guard.
+        let fails_server_guard = decide_tool_argument_guards(
+            &policy,
+            "production",
+            "github.create_issue",
+            Some(&json!({"repo": "x", "org": "other-org"})),
+        )
+        .expect("guard configured");
+        assert_eq!(fails_server_guard.decision, Decision::Deny);
+        assert_eq!(fails_server_guard.reason_category, "enum_value_not_allowed");
+
+        // Satisfies the server-scoped enum guard but not the global
+        // require_keys guard.
+        let fails_global_guard = decide_tool_argument_guards(
+            &policy,
+            "production",
+            "github.create_issue",
+            Some(&json!({"org": "approved-org"})),
+        )
+        .expect("guard configured");
+        assert_eq!(fails_global_guard.decision, Decision::Deny);
+        assert_eq!(fails_global_guard.reason_category, "required_key_missing");
+
+        // Satisfies both.
+        let allowed = decide_tool_argument_guards(
+            &policy,
+            "production",
+            "github.create_issue",
+            Some(&json!({"repo": "x", "org": "approved-org"})),
+        )
+        .expect("guard configured");
+        assert_eq!(allowed.decision, Decision::Allow);
+
+        // Outside the "production" server scope, only the global guard
+        // applies.
+        let default_scope = decide_tool_argument_guards(
+            &policy,
+            "default",
+            "github.create_issue",
+            Some(&json!({"repo": "x", "org": "anything-goes-here"})),
+        )
+        .expect("global guard still configured");
+        assert_eq!(default_scope.decision, Decision::Allow);
     }
 }
