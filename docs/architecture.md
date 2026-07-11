@@ -12,6 +12,7 @@ plus an experimental MCP stdio boundary proxy.
 - `etherfence-policy`: scan-only TOML posture policy evaluation
 - `etherfence-report`: human-readable, JSON, Markdown, and SARIF report rendering
 - `etherfence-mcp`: experimental MCP stdio boundary proxy (policy, audit log, proxy engine)
+- `etherfence-setup`: local `setup` onboarding command family — client detection/wrapping (`detect`/`plan`/`apply`/`rollback`/`doctor`), the v1.2.0 client catalog (`catalog.rs`), and MCP server capability classification/starter-policy recommendation (`classification.rs`)
 
 ## Scan data flow
 
@@ -71,6 +72,21 @@ plus an experimental MCP stdio boundary proxy.
     is skipped by default.
 
 See `docs/mcp-proxy.md` for details and limitations.
+
+## Client catalog and MCP capability classification (v1.2.0)
+
+`etherfence setup catalog` and the classification extension to
+`etherfence setup detect` are new, local-only, read-only components with
+no new trust boundary: both read the same local config files
+`etherfence_inventory::discover` already reads for `scan`/`setup detect`,
+compute their output as pure functions (`etherfence-setup::catalog`,
+`etherfence-setup::classification`), and are rendered by `etherfence-cli`.
+Neither starts a process, opens a network connection, or invokes any MCP
+protocol method — classification matches an already-parsed MCP server's
+`command`/`args` against a small curated, checked-in signature table
+(exact-match only, no heuristics), never the live server. Starter-policy
+recommendations are deny-by-default and describe posture only; they are
+not enforced anywhere and do not change `mcp-proxy`'s decision logic.
 
 ## Runtime posture
 

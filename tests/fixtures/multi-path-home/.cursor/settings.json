@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "filesystem-project": {
+      "command": "npx",
+      "args": ["@modelcontextprotocol/server-filesystem", "/home/user/projects/sub"]
+    }
+  }
+}

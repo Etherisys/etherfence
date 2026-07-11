@@ -115,6 +115,7 @@ cargo build --release -p etherfence-cli
 | `etherfence policy list` / `show <name>` | Inspect built-in scan-only policy profiles | Local, read-only |
 | `etherfence mcp-policy validate/explain/init/check` | Author, validate, explain, and dry-run MCP proxy policies | Local, serverless |
 | `etherfence mcp-proxy` | MCP stdio boundary proxy | Opt-in, local runtime |
+| `etherfence setup catalog` | Fixed 10-client compatibility/catalog matrix (support tier, local presence) | Local, read-only |
 
 ## `scan` example
 
@@ -212,6 +213,39 @@ documented in [`docs/mcp-proxy.md`](docs/mcp-proxy.md),
 (client configuration templates), and
 [`docs/mcp-compatibility-matrix.md`](docs/mcp-compatibility-matrix.md).
 
+## `setup catalog` example
+
+```sh
+etherfence setup catalog
+etherfence setup catalog --format json
+```
+
+```text
+EtherFence setup catalog
+Root: /home/user
+Mode: read-only; no configs, policies, backups, or state were modified.
+
+Client                  Tier               Found  Config path(s)
+Claude-style config     fixture-verified   yes    ~/.claude.json
+Cursor                  fixture-verified   no     -
+VS Code                 fixture-verified   no     -
+Hermes                  advisory-only      no     -
+Antigravity             advisory-only      no     -
+Windsurf                detect-only        no     -
+Gemini CLI              detect-only        no     -
+Codex CLI               detect-only        no     -
+OpenCode                advisory-only      no     -
+Cline / Roo Code        advisory-only      no     -
+```
+
+Prints all 10 fixed clients every run, each labeled honestly by detection
+confidence (`fixture-verified` / `detect-only` / `advisory-only`) rather than
+a single "supported" claim. `etherfence setup detect --format json` also
+carries this release's new, deny-by-default MCP server capability
+classification (`ef-setup-detect/v0.1`) — see
+[`docs/setup-onboarding.md`](docs/setup-onboarding.md) and
+[`docs/json-schema.md`](docs/json-schema.md) for the full schemas.
+
 ## CI and team workflow integration
 
 EtherFence is designed to be easy to drop into a team's CI: every command
@@ -256,10 +290,10 @@ active repository workflows — copy the one(s) you want into your own
 | [`docs/mcp-proxy.md`](docs/mcp-proxy.md) | `mcp-proxy` behavior, `ef-mcp-policy/v0.1` schema, limitations |
 | [`docs/mcp-proxy-operator-guide.md`](docs/mcp-proxy-operator-guide.md) | Practical operator walkthrough: before/after, flags, policy/`--server-name` mapping, dry-run and audit-log usage, failure modes, config examples |
 | [`docs/mcp-policy-ux.md`](docs/mcp-policy-ux.md) | `mcp-policy validate/explain/init/check` reference |
-| [`docs/setup-onboarding.md`](docs/setup-onboarding.md) | v1.1.0 safety contract for the planned `setup` onboarding command family |
+| [`docs/setup-onboarding.md`](docs/setup-onboarding.md) | `setup` onboarding command family safety contract, including `setup catalog` (`ef-setup-catalog/v0.1`) and `setup detect`'s MCP capability classification (`ef-setup-detect/v0.1`) |
 | [`docs/mcp-clients.md`](docs/mcp-clients.md) | Client configuration templates for wrapping a server with `mcp-proxy` |
 | [`docs/mcp-compatibility-matrix.md`](docs/mcp-compatibility-matrix.md) | What MCP stdio behavior is tested vs. untested |
-| [`docs/json-schema.md`](docs/json-schema.md) / [`docs/sarif.md`](docs/sarif.md) | `scan` JSON and SARIF output shapes |
+| [`docs/json-schema.md`](docs/json-schema.md) / [`docs/sarif.md`](docs/sarif.md) | `scan` JSON and SARIF output shapes, plus `ef-setup-catalog/v0.1` (`setup catalog`) and `ef-setup-detect/v0.1` (`setup detect`) |
 | [`docs/threat-model.md`](docs/threat-model.md) / [`docs/architecture.md`](docs/architecture.md) | Threat model and architecture notes |
 | [`docs/roadmap.md`](docs/roadmap.md) | Release-by-release history and scope |
 | [`docs/release-automation.md`](docs/release-automation.md) / [`docs/release-checklist.md`](docs/release-checklist.md) | How releases are cut |

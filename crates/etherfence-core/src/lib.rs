@@ -85,6 +85,11 @@ pub enum AgentKind {
     GeminiCli,
     CodexCli,
     Tirith,
+    Hermes,
+    Antigravity,
+    OpenCode,
+    Cline,
+    RooCode,
 }
 
 impl AgentKind {
@@ -97,6 +102,11 @@ impl AgentKind {
             Self::GeminiCli => "Gemini CLI",
             Self::CodexCli => "Codex CLI",
             Self::Tirith => "Tirith",
+            Self::Hermes => "Hermes",
+            Self::Antigravity => "Antigravity",
+            Self::OpenCode => "OpenCode",
+            Self::Cline => "Cline",
+            Self::RooCode => "Roo Code",
         }
     }
 
@@ -109,6 +119,11 @@ impl AgentKind {
             Self::GeminiCli => "gemini-cli",
             Self::CodexCli => "codex-cli",
             Self::Tirith => "tirith",
+            Self::Hermes => "hermes",
+            Self::Antigravity => "antigravity",
+            Self::OpenCode => "open-code",
+            Self::Cline => "cline",
+            Self::RooCode => "roo-code",
         }
     }
 }

@@ -495,6 +495,40 @@
   comparison changes; no `mcp-proxy` enforcement or `ef-mcp-policy/v0.1`
   changes; no git tag created or pushed for this release
 
+## v1.2.0 - expanded agent integration catalog and MCP server classification
+
+- `etherfence setup catalog` — a new, purely informational, read-only
+  command printing a fixed 10-client compatibility matrix (Claude-style
+  config, Cursor, VS Code, Hermes, Antigravity, Windsurf, Gemini CLI,
+  Codex CLI, OpenCode, Cline / Roo Code) with an honest support tier per
+  client (`fixture-verified` / `detect-only` / `advisory-only` /
+  `unknown`) and local-presence status; new `ef-setup-catalog/v0.1` schema
+- `etherfence setup detect` gains static, local-only, multi-label MCP
+  server capability classification (`filesystem`, `network`, `browser`,
+  `shell / command execution`, `database`, `SaaS / API`,
+  `identity / auth`, `messaging / collaboration`, `security tooling`,
+  `unknown`) derived from a small curated command/package signature table
+  — no live MCP protocol interaction, no network access, no command
+  execution from inspected configs; new `ef-setup-detect/v0.1` schema
+  (the first JSON output `setup detect` has ever had)
+- Deterministic, deny-by-default starter-policy recommendations per MCP
+  server: `tier` is always `deny` in v1.2.0 (`allow` is reserved for a
+  future release, gated behind a fixture-verified safe-capability mapping
+  that does not exist yet); `needs_review` escalates whenever a server's
+  capabilities include `unknown`, `shell / command execution`, or
+  `identity / auth`
+- Both new commands/flags gain a `--format human|json` flag; `setup
+  catalog` has no `--fail-on` flag and always exits `0`
+- 5 new `AgentKind` variants (Hermes, Antigravity, OpenCode, Cline, Roo
+  Code) with presence-only local detection, mirroring the existing Tirith
+  `PresenceOnly` precedent — no config/MCP-server parsing is attempted for
+  them
+- No new crate, daemon, network access, or runtime-enforcement change;
+  `mcp-proxy` and existing `scan`/`setup detect/plan/apply/rollback/doctor`
+  behavior are unchanged aside from the additive `setup detect` fields
+  above; `setup plan` and `setup doctor` human output is byte-identical to
+  their pre-v1.2.0 output
+
 ## v0.2.x ideas
 
 - Expand tested config schemas and platform paths

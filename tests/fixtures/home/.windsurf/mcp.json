@@ -3,6 +3,10 @@
     "repo-context": {
       "command": "node",
       "args": ["repo-context-mcp", "/home/user/repo"]
+    },
+    "devops": {
+      "command": "npx",
+      "args": ["@modelcontextprotocol/server-devops", "/home/user/repo"]
     }
   }
 }

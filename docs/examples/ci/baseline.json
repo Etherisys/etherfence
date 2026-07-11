@@ -208,6 +208,45 @@
       "severity": "low",
       "kind": "mcp-server-configured",
       "agent": "windsurf",
+      "target": "devops",
+      "config_path": "~/.windsurf/mcp.json",
+      "rationale": "An MCP server is configured for this agent. MCP servers can extend agent access beyond the base application.",
+      "impact": "This is expected in many developer setups, but each server should be reviewed for least privilege and provenance.",
+      "recommendation": "Confirm the server is needed, trusted, pinned where practical, and limited to the minimum required permissions.",
+      "references": [],
+      "fingerprint": "efp1-c20a41f1ce930706",
+      "baseline_status": "not-applicable",
+      "policy_status": "not_applicable",
+      "evidence": [
+        "server=devops",
+        "command=npx"
+      ]
+    },
+    {
+      "id": "EF-MCP-001",
+      "title": "Broad filesystem access hint",
+      "severity": "high",
+      "kind": "broad-filesystem-access",
+      "agent": "windsurf",
+      "target": "devops",
+      "config_path": "~/.windsurf/mcp.json",
+      "rationale": "The MCP server configuration contains values that look like broad filesystem roots or filesystem-capable tooling.",
+      "impact": "A compromised or over-permissioned agent workflow could read or modify more local files than intended.",
+      "recommendation": "Restrict MCP filesystem servers to explicit project directories such as /path/to/project, avoid home-directory or root-level grants, and separate sensitive repos where possible.",
+      "references": [],
+      "fingerprint": "efp1-001a5363d64b4d38",
+      "baseline_status": "not-applicable",
+      "policy_status": "not_applicable",
+      "evidence": [
+        "/home/user/repo"
+      ]
+    },
+    {
+      "id": "EF-MCP-000",
+      "title": "MCP server configured",
+      "severity": "low",
+      "kind": "mcp-server-configured",
+      "agent": "windsurf",
       "target": "repo-context",
       "config_path": "~/.windsurf/mcp.json",
       "rationale": "An MCP server is configured for this agent. MCP servers can extend agent access beyond the base application.",

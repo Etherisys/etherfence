@@ -15,6 +15,54 @@ component: an MCP stdio boundary proxy, whose CLI surface and
 has no daemon mode, shell hooks, command interception, terminal-command
 scanning, or network interception.
 
+## [1.2.0] - 2026-07-11
+
+### Added
+
+- New `etherfence setup catalog [--format human|json] [--root <path>]`
+  command: a purely informational, read-only, always-exit-0 command
+  printing a fixed 10-client compatibility matrix (Claude-style config,
+  Cursor, VS Code, Hermes, Antigravity, Windsurf, Gemini CLI, Codex CLI,
+  OpenCode, Cline / Roo Code), each row reporting an honest support tier
+  (`fixture-verified`, `detect-only`, `advisory-only`, or `unknown`) and
+  local-presence status with discovered configuration path(s). New
+  `ef-setup-catalog/v0.1` JSON schema, documented in `docs/json-schema.md`.
+- `etherfence setup detect` gains a new `--format human|json` flag
+  (defaulting to `human`; every pre-v1.2.0 line is preserved unchanged and
+  in order, but two new `capabilities`/`recommendation` lines are appended
+  per server, so default output is **not** byte-identical to pre-v1.2.0 —
+  scripts that need the exact prior shape should use `--format json` or
+  match only on pre-existing lines) and static, local-only, multi-label
+  MCP server capability classification for every
+  detected server: `filesystem`, `network`, `browser`,
+  `shell / command execution`, `database`, `SaaS / API`,
+  `identity / auth`, `messaging / collaboration`, `security tooling`, or
+  `unknown` when no curated rule matches. Classification reads only
+  already-parsed local `command`/`args` fields against a small curated,
+  checked-in signature table — no live MCP protocol interaction, no
+  network access, and no command execution from inspected configs. New
+  `ef-setup-detect/v0.1` JSON schema (the first JSON output `setup detect`
+  has ever had), documented in `docs/json-schema.md`.
+- Deterministic, deny-by-default starter-policy recommendations for every
+  classified MCP server: `tier` is always `deny` in v1.2.0 (`allow` is
+  reserved in the schema for a future release, pending a fixture-verified
+  safe-capability mapping); `needs_review` is `true` whenever a server's
+  capabilities include `unknown`, `shell / command execution`, or
+  `identity / auth`.
+- 5 new `AgentKind` variants with presence-only local detection: Hermes,
+  Antigravity, OpenCode, Cline, and Roo Code, mirroring the existing
+  Tirith `PresenceOnly` precedent. No config/MCP-server parsing is
+  attempted for these clients; they are honestly reported as
+  `advisory-only` in the catalog.
+
+### Notes
+
+- No `mcp-proxy` or `scan` behavior changed. `setup plan` and `setup
+  doctor` human output is byte-identical to their pre-v1.2.0 output — the
+  new `SetupServer` fields (`capabilities`, `recommendation`) are additive
+  and only rendered by `setup detect`. No new crate, daemon, network
+  access, or runtime-enforcement change was introduced.
+
 ## [1.0.1] - 2026-07-10
 
 ### Fixed

@@ -60,7 +60,7 @@ fn scan_fixture_json_has_stable_top_level_schema() {
     assert!(json["inventory"].is_array());
     assert!(json["findings"].is_array());
     assert!(json["summary"].is_object());
-    assert_eq!(json["summary"]["inventory_items"], 7);
+    assert_eq!(json["summary"]["inventory_items"], 12);
 
     let first = json["findings"]
         .as_array()
@@ -109,7 +109,7 @@ fn scan_windows_fixture_json_discovers_windows_style_configs() {
         String::from_utf8_lossy(&output.stderr)
     );
     let json: Value = serde_json::from_slice(&output.stdout).expect("valid JSON output");
-    assert_eq!(json["summary"]["inventory_items"], 6);
+    assert_eq!(json["summary"]["inventory_items"], 11);
     assert!(json["inventory"].as_array().unwrap().iter().any(|item| {
         item["agent"] == "vs-code"
             && item["config_path"] == "~/AppData/Roaming/Code/User/settings.json"
@@ -182,7 +182,7 @@ fn severity_threshold_high_displays_only_high_findings() {
     assert!(!stdout.contains("\nLOW\n"));
     assert!(!stdout.contains("\nINFO\n"));
     assert!(stdout
-        .contains("Summary: 7 inventory item(s), 3 finding(s): high=3, medium=0, low=0, info=0"));
+        .contains("Summary: 12 inventory item(s), 4 finding(s): high=4, medium=0, low=0, info=0"));
 }
 
 #[test]

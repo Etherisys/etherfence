@@ -149,6 +149,56 @@ const CANDIDATES: &[Candidate] = &[
         relative_path: ".tirith/lockfile.json",
         format: ConfigFormat::PresenceOnly,
     },
+    Candidate {
+        agent: AgentKind::Hermes,
+        relative_path: ".hermes/config.json",
+        format: ConfigFormat::PresenceOnly,
+    },
+    Candidate {
+        agent: AgentKind::Hermes,
+        relative_path: "AppData/Roaming/Hermes/config.json",
+        format: ConfigFormat::PresenceOnly,
+    },
+    Candidate {
+        agent: AgentKind::Antigravity,
+        relative_path: ".antigravity/config.json",
+        format: ConfigFormat::PresenceOnly,
+    },
+    Candidate {
+        agent: AgentKind::Antigravity,
+        relative_path: "AppData/Roaming/Antigravity/config.json",
+        format: ConfigFormat::PresenceOnly,
+    },
+    Candidate {
+        agent: AgentKind::OpenCode,
+        relative_path: ".opencode/config.json",
+        format: ConfigFormat::PresenceOnly,
+    },
+    Candidate {
+        agent: AgentKind::OpenCode,
+        relative_path: "AppData/Roaming/OpenCode/config.json",
+        format: ConfigFormat::PresenceOnly,
+    },
+    Candidate {
+        agent: AgentKind::Cline,
+        relative_path: ".cline/config.json",
+        format: ConfigFormat::PresenceOnly,
+    },
+    Candidate {
+        agent: AgentKind::Cline,
+        relative_path: "AppData/Roaming/Cline/config.json",
+        format: ConfigFormat::PresenceOnly,
+    },
+    Candidate {
+        agent: AgentKind::RooCode,
+        relative_path: ".roo/config.json",
+        format: ConfigFormat::PresenceOnly,
+    },
+    Candidate {
+        agent: AgentKind::RooCode,
+        relative_path: "AppData/Roaming/RooCode/config.json",
+        format: ConfigFormat::PresenceOnly,
+    },
 ];
 
 pub fn default_scan_root() -> PathBuf {
@@ -255,10 +305,21 @@ fn parse_candidate(root: &Path, path: &Path, candidate: Candidate) -> Result<Inv
             item.mcp_servers = parsed.servers;
             item.evidence.extend(parsed.warnings);
         }
-        ConfigFormat::PresenceOnly => item.evidence.push("Tirith file present".to_string()),
+        ConfigFormat::PresenceOnly => item.evidence.push(presence_only_evidence(candidate.agent)),
     }
     item.mcp_servers.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(item)
+}
+
+/// Evidence text for a `PresenceOnly` candidate. Preserves the exact,
+/// long-standing "Tirith file present" wording for `Tirith` (referenced by
+/// checked-in CI example output) and uses a generic templated message for
+/// other presence-only agents (research.md Decision 2).
+fn presence_only_evidence(agent: AgentKind) -> String {
+    match agent {
+        AgentKind::Tirith => "Tirith file present".to_string(),
+        _ => format!("{} file present", agent.display_name()),
+    }
 }
 
 /// Deterministic, single-line parse-error evidence. TOML errors in particular

@@ -5,3 +5,8 @@
 etherfence-baseline*.json
 etherfence-report*.json
 etherfence-report*.md
+
+# Claude Code local/session runtime state (not shared tooling config).
+# `.claude/skills/` (the speckit-* skill definitions referenced by
+# `.specify/integrations/claude.manifest.json`) IS tracked.
+.claude/scheduled_tasks.lock

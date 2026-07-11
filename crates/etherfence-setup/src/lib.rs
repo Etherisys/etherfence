@@ -9,12 +9,22 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+mod catalog;
+mod classification;
+
+pub use catalog::{catalog, CatalogClient, CatalogEntry, CatalogSupportTier};
+pub use classification::{
+    classify_server, human_label, recommend, CapabilityLabel, ClassifiedCapabilities,
+    RecommendationTier, StarterPolicyRecommendation,
+};
+
 const BACKUP_MARKER: &str = "etherfence-setup-backup/v1";
 const BACKUP_DIR: &str = ".etherfence/backups";
 const POLICY_DIR: &str = ".etherfence/policies";
 const MANIFEST_FILE: &str = "manifest.json";
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SetupDetection {
     pub agent: String,
     pub config_path: String,
@@ -32,10 +42,13 @@ pub enum WriteSupport {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SetupServer {
     pub name: String,
     pub transport: ServerTransport,
     pub wrapped: bool,
+    pub capabilities: ClassifiedCapabilities,
+    pub recommendation: StarterPolicyRecommendation,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -577,10 +590,14 @@ fn detection_from_inventory(item: InventoryItem) -> SetupDetection {
 }
 
 fn server_from_mcp(server: &McpServer) -> SetupServer {
+    let capabilities = classification::classify_server(server);
+    let recommendation = classification::recommend(&capabilities);
     SetupServer {
         name: server.name.clone(),
         transport: transport_for_server(server),
         wrapped: is_wrapped_server(server),
+        capabilities,
+        recommendation,
     }
 }
 
