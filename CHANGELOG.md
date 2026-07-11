@@ -28,8 +28,12 @@ scanning, or network interception.
   local-presence status with discovered configuration path(s). New
   `ef-setup-catalog/v0.1` JSON schema, documented in `docs/json-schema.md`.
 - `etherfence setup detect` gains a new `--format human|json` flag
-  (defaulting to `human`, preserving prior output exactly) and static,
-  local-only, multi-label MCP server capability classification for every
+  (defaulting to `human`; every pre-v1.2.0 line is preserved unchanged and
+  in order, but two new `capabilities`/`recommendation` lines are appended
+  per server, so default output is **not** byte-identical to pre-v1.2.0 —
+  scripts that need the exact prior shape should use `--format json` or
+  match only on pre-existing lines) and static, local-only, multi-label
+  MCP server capability classification for every
   detected server: `filesystem`, `network`, `browser`,
   `shell / command execution`, `database`, `SaaS / API`,
   `identity / auth`, `messaging / collaboration`, `security tooling`, or

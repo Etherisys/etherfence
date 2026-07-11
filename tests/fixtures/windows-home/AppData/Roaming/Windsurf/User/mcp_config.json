@@ -3,6 +3,13 @@
     "shell-tools": {
       "command": "powershell.exe",
       "args": ["-NoProfile", "-File", "C:\\Users\\example\\tools\\mcp.ps1"]
+    },
+    "workspace-files": {
+      "command": "C:\\Program Files\\nodejs\\npx.cmd",
+      "args": [
+        "@modelcontextprotocol/server-filesystem",
+        "C:\\Users\\example\\workspace"
+      ]
     }
   }
 }

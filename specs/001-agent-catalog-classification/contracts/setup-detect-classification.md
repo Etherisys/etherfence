@@ -7,9 +7,15 @@ etherfence setup detect [--format human|json] [--root <path>]
 ```
 
 - `--format` (**new** optional flag, default `human`): `human` or `json`.
-  Omitting it reproduces today's exact human-text output plus the new
-  capability/recommendation lines described below — no existing line is
-  removed or reworded (constraint: "Preserve existing CLI behavior").
+  Omitting it is **not** byte-identical to pre-v1.2.0 output: every
+  pre-v1.2.0 line is preserved unchanged (none removed, none reworded,
+  none reordered), and two new lines (`capabilities: ...`,
+  `recommendation: ...`) are appended per server. A script that consumes
+  `setup detect`'s human output by looking for specific pre-existing lines
+  is unaffected; a script that assumes the *total* line count or exact
+  byte length of output per server is not preserved MUST switch to
+  `--format json` (constraint: "Preserve existing CLI behavior" means
+  "do not remove or change existing lines," not "emit identical bytes").
 - `--root`: unchanged, existing hidden flag.
 - Read-only, no network access: unchanged existing guarantees.
 
@@ -118,9 +124,12 @@ the JSON `kebab-case` token:
 ## Contract test obligations (see quickstart.md for runnable steps)
 
 1. Running `setup detect` with no `--format` flag on an existing fixture
-   home produces byte-identical output to the pre-v1.2.0 baseline **plus**
-   the new capability/recommendation lines — never a removed or reordered
-   pre-existing line.
+   home produces every pre-v1.2.0 line unchanged, in the same order, with
+   two new lines (`capabilities: ...`, `recommendation: ...`) appended per
+   server — never a removed or reordered pre-existing line. The overall
+   output is **not** byte-identical to the pre-v1.2.0 baseline (it is
+   strictly longer); only `setup plan`/`setup doctor` (item 3 below) are
+   byte-identical.
 2. `setup detect --format json` output validates against the field shape
    above; `recommendation.tier` is `"deny"` for every server in every
    checked-in fixture.

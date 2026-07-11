@@ -1,6 +1,5 @@
 use etherfence_core::McpServer;
 use serde::Serialize;
-use std::path::Path;
 
 /// Fixed capability taxonomy, most-restrictive-first (research.md Decision
 /// 4). This single declaration order serves both output ordering and the
@@ -75,13 +74,16 @@ pub struct ClassifiedCapabilities {
 /// One curated command/package signature rule. Exact-match only — no
 /// substring, regex, or path-shape heuristics (research.md Decision 6).
 struct EvidenceRule {
-    /// The server's `command` field (matched by resolved file-name, e.g.
-    /// `/usr/bin/npx` and `npx` are equivalent) must equal this.
+    /// The server's `command` field (matched by resolved launcher name,
+    /// e.g. `/usr/bin/npx`, `npx.cmd`, and `C:\...\npx.cmd` are all
+    /// equivalent to `npx` — see `launcher_name`) must equal this.
     command: &'static str,
-    /// When `Some`, the server's first argument (the resolved package name
-    /// for an `npx`/`uvx`-style invocation) must also match. When `None`,
-    /// the command alone is sufficient evidence (e.g. a bare shell binary
-    /// invocation is shell/command execution regardless of its arguments).
+    /// When `Some`, the resolved package argument (the first argument
+    /// after skipping recognized launcher flags such as `-y`/`--yes` for
+    /// an `npx`/`uvx`-style invocation — see `resolve_package_arg`) must
+    /// also match. When `None`, the command alone is sufficient evidence
+    /// (e.g. a bare shell binary invocation is shell/command execution
+    /// regardless of its arguments).
     package: Option<&'static str>,
     labels: &'static [CapabilityLabel],
 }
@@ -124,12 +126,12 @@ pub fn classify_server(server: &McpServer) -> ClassifiedCapabilities {
     let mut matches: Vec<(CapabilityLabel, String)> = Vec::new();
 
     if let Some(command) = server.command.as_deref() {
-        let command_name = command_file_name(command);
-        let first_arg = server.args.first().map(String::as_str);
+        let command_name = launcher_name(command);
+        let package_arg = resolve_package_arg(&server.args);
         for rule in EVIDENCE_RULES {
             let matched = command_name == rule.command
                 && match rule.package {
-                    Some(package) => first_arg == Some(package),
+                    Some(package) => package_arg == Some(package),
                     None => true,
                 };
             if !matched {
@@ -153,11 +155,50 @@ pub fn classify_server(server: &McpServer) -> ClassifiedCapabilities {
     ClassifiedCapabilities { labels, evidence }
 }
 
-fn command_file_name(command: &str) -> &str {
-    Path::new(command)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or(command)
+/// Resolves a `command` field to its bare launcher name for matching
+/// against `EvidenceRule::command`, e.g. `/usr/bin/npx`, `npx.cmd`, and
+/// `C:\Program Files\nodejs\npx.cmd` all resolve to `npx`. Splits on both
+/// `/` and `\` explicitly (rather than `std::path::Path`, whose component
+/// parsing is host-OS-dependent and would not recognize `\`-separated
+/// paths when this code runs on Linux) so behavior is identical
+/// regardless of which platform EtherFence itself runs on. Only strips a
+/// trailing `.cmd`/`.exe` suffix — this is normalization of a known
+/// Windows executable-suffix convention, not a fuzzy/substring match.
+fn launcher_name(command: &str) -> &str {
+    let name = command.rsplit(['/', '\\']).next().unwrap_or(command);
+    name.strip_suffix(".cmd")
+        .or_else(|| name.strip_suffix(".exe"))
+        .unwrap_or(name)
+}
+
+/// Recognized launcher flags that precede the package argument in an
+/// `npx`/`uvx`-style invocation and must be skipped when resolving it.
+const LAUNCHER_BOOLEAN_FLAGS: &[&str] = &["-y", "--yes"];
+const LAUNCHER_VALUE_FLAGS: &[&str] = &["--package"];
+
+/// Resolves the package argument for an `npx`/`uvx`-style invocation by
+/// skipping recognized launcher flags (`-y`, `--yes`, `--package <value>`,
+/// `--package=<value>`) rather than always taking `args[0]` literally.
+/// This is still a narrow, closed-world launcher-flag parser, not a
+/// general search: any argument that isn't a recognized flag is returned
+/// immediately as the package candidate, and no argument list is scanned
+/// beyond the first non-flag token (research.md Decision 6 — exact-match
+/// only, no substring/heuristic matching).
+fn resolve_package_arg(args: &[String]) -> Option<&str> {
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        if LAUNCHER_BOOLEAN_FLAGS.contains(&arg.as_str()) {
+            continue;
+        }
+        if let Some(value) = arg.strip_prefix("--package=") {
+            return Some(value);
+        }
+        if LAUNCHER_VALUE_FLAGS.contains(&arg.as_str()) {
+            return iter.next().map(String::as_str);
+        }
+        return Some(arg.as_str());
+    }
+    None
 }
 
 fn rule_evidence(command: &str, package: Option<&str>, label: CapabilityLabel) -> String {
@@ -256,6 +297,116 @@ mod tests {
     }
 
     #[test]
+    fn filesystem_rule_matches_npx_dash_y_flag_before_package() {
+        // Common real-world invocation: `npx -y <package> <args>`.
+        let s = server(
+            "filesystem",
+            Some("npx"),
+            &[
+                "-y",
+                "@modelcontextprotocol/server-filesystem",
+                "/workspace",
+            ],
+        );
+        let classified = classify_server(&s);
+        assert_eq!(classified.labels, vec![CapabilityLabel::Filesystem]);
+        assert_eq!(classified.evidence.len(), 1);
+    }
+
+    #[test]
+    fn filesystem_rule_matches_npx_dash_dash_yes_and_package_flag() {
+        let s = server(
+            "filesystem-yes",
+            Some("npx"),
+            &["--yes", "@modelcontextprotocol/server-filesystem"],
+        );
+        assert_eq!(
+            classify_server(&s).labels,
+            vec![CapabilityLabel::Filesystem]
+        );
+
+        let s = server(
+            "filesystem-package-flag",
+            Some("npx"),
+            &[
+                "--package",
+                "@modelcontextprotocol/server-filesystem",
+                "run",
+            ],
+        );
+        assert_eq!(
+            classify_server(&s).labels,
+            vec![CapabilityLabel::Filesystem]
+        );
+
+        let s = server(
+            "filesystem-package-eq",
+            Some("npx"),
+            &["--package=@modelcontextprotocol/server-filesystem"],
+        );
+        assert_eq!(
+            classify_server(&s).labels,
+            vec![CapabilityLabel::Filesystem]
+        );
+    }
+
+    #[test]
+    fn filesystem_rule_matches_npx_cmd_bare_windows_launcher_name() {
+        // Windows package managers commonly install `npx` as `npx.cmd`.
+        let s = server(
+            "filesystem-cmd",
+            Some("npx.cmd"),
+            &[
+                "@modelcontextprotocol/server-filesystem",
+                "C:\\Users\\example\\workspace",
+            ],
+        );
+        assert_eq!(
+            classify_server(&s).labels,
+            vec![CapabilityLabel::Filesystem]
+        );
+    }
+
+    #[test]
+    fn filesystem_rule_matches_absolute_windows_path_ending_in_npx_cmd() {
+        let s = server(
+            "filesystem-abs-cmd",
+            Some("C:\\Program Files\\nodejs\\npx.cmd"),
+            &["@modelcontextprotocol/server-filesystem"],
+        );
+        assert_eq!(
+            classify_server(&s).labels,
+            vec![CapabilityLabel::Filesystem]
+        );
+    }
+
+    #[test]
+    fn filesystem_rule_matches_absolute_unix_path_ending_in_npx() {
+        let s = server(
+            "filesystem-abs",
+            Some("/usr/local/bin/npx"),
+            &["@modelcontextprotocol/server-filesystem"],
+        );
+        assert_eq!(
+            classify_server(&s).labels,
+            vec![CapabilityLabel::Filesystem]
+        );
+    }
+
+    #[test]
+    fn filesystem_rule_matches_npx_exe_absolute_windows_path() {
+        let s = server(
+            "filesystem-exe",
+            Some("C:/Users/example/AppData/Roaming/npm/npx.exe"),
+            &["-y", "@modelcontextprotocol/server-filesystem"],
+        );
+        assert_eq!(
+            classify_server(&s).labels,
+            vec![CapabilityLabel::Filesystem]
+        );
+    }
+
+    #[test]
     fn shell_rule_matches_bash_regardless_of_args() {
         let s = server("shell-tools", Some("bash"), &["-lc", "echo fixture"]);
         let classified = classify_server(&s);
@@ -305,6 +456,49 @@ mod tests {
         let classified = classify_server(&s);
         assert_eq!(classified.labels, vec![CapabilityLabel::Unknown]);
         assert!(classified.evidence.is_empty());
+    }
+
+    /// Real Windows-shaped fixture coverage: `tests/fixtures/windows-home`
+    /// carries both a pre-existing `npx -y <package>` invocation (Codex)
+    /// and a `C:\...\npx.cmd` absolute-path invocation (Windsurf,
+    /// `workspace-files`). Both must classify identically to their Linux
+    /// bare-`npx` equivalent — proving the launcher-name/flag-skipping fix
+    /// works end-to-end through real parsed fixture data, not just
+    /// hand-built `McpServer` values.
+    #[test]
+    fn windows_home_fixture_npx_variants_classify_as_filesystem() {
+        let root = std::path::Path::new("../../tests/fixtures/windows-home");
+        let items = etherfence_inventory::discover(root);
+
+        let codex = items
+            .iter()
+            .find(|item| item.agent == etherfence_core::AgentKind::CodexCli)
+            .expect("windows-home codex fixture");
+        let filesystem_server = codex
+            .mcp_servers
+            .iter()
+            .find(|s| s.name == "filesystem")
+            .expect("codex filesystem server");
+        assert_eq!(
+            classify_server(filesystem_server).labels,
+            vec![CapabilityLabel::Filesystem],
+            "npx -y <package> (Codex windows-home fixture) should match the filesystem rule"
+        );
+
+        let windsurf = items
+            .iter()
+            .find(|item| item.agent == etherfence_core::AgentKind::Windsurf)
+            .expect("windows-home windsurf fixture");
+        let workspace_files = windsurf
+            .mcp_servers
+            .iter()
+            .find(|s| s.name == "workspace-files")
+            .expect("windsurf workspace-files server");
+        assert_eq!(
+            classify_server(workspace_files).labels,
+            vec![CapabilityLabel::Filesystem],
+            "C:\\...\\npx.cmd (Windsurf windows-home fixture) should match the filesystem rule"
+        );
     }
 
     /// Malformed/unparseable-shaped MCP server entries in
