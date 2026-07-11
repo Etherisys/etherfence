@@ -63,6 +63,10 @@ fn install_fake_runner(dir: &Path, name: &str, log_path: &Path) {
 #[test]
 fn demo_workspace_detects_claude_code_filesystem_server_without_executing_runner() {
     let workspace = demo_workspace();
+    if !workspace.join(".claude.json").exists() {
+        eprintln!("skipping: demo workspace not present (local dev only)");
+        return;
+    }
     let tmp = temp_dir("fake-runner");
     let fake_bin = tmp.join("bin");
     fs::create_dir_all(&fake_bin).expect("create fake bin");
@@ -115,6 +119,10 @@ fn demo_workspace_detects_claude_code_filesystem_server_without_executing_runner
 #[test]
 fn demo_policy_denies_filesystem_write_request() {
     let workspace = demo_workspace();
+    if !workspace.join("request.json").exists() {
+        eprintln!("skipping: demo workspace not present (local dev only)");
+        return;
+    }
     let policy = workspace.join("project-readonly.toml");
     let request = workspace.join("request.json");
 

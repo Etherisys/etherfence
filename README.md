@@ -74,9 +74,12 @@ in three scenes:
 The configured `npx` filesystem server is parsed, never executed. No network
 access, package installation, or live MCP server contact is required.
 
-Reproduce it locally with `./demo/run-demo.sh`, or verify the behavior without
-VHS using `./demo/verify-demo.sh`. [View HD recording](docs/assets/etherfence-demo.mp4).
-Details live in [`demo/README.md`](demo/README.md).
+The demo workspace, VHS tape, and generation/verification scripts live in the
+`demo/` directory of the repository source tree (not shipped in release
+artifacts). To reproduce the recording locally, check out the repository and
+run `./demo/run-demo.sh` (requires VHS, ttyd ≥ 1.7.2, ffmpeg, and DejaVu Sans
+Mono). Verify the underlying behavior without VHS via `./demo/verify-demo.sh`.
+[View HD recording](docs/assets/etherfence-demo.mp4).
 
 ## What EtherFence protects
 
