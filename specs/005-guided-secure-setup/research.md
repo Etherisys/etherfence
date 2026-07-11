@@ -93,3 +93,25 @@ This records design decisions made while scoping v1.6.0 guided setup. Format: De
 **Decision**: No schema version bump for existing schemas (`ef-mcp-policy/v0.2`, `ef-setup-baseline/v0.1`). The generated policy format changes (allow-all → deny-all) but the schema grammar is identical — a policy with `tools.allow = []` is valid under `ef-mcp-policy/v0.2` already.
 
 **Rationale**: The schema grammar is unchanged. Only the *content* of generated policies changes, which is not a schema-level concern.
+
+## Decision 13: Real Client Path Evidence (from live system inspection, July 2026)
+
+**Decision**: Use live system evidence to correct client detection paths rather than guessing from documentation alone.
+
+**Evidence found**:
+
+| Client | Binary | Config Path | Format | MCP Key |
+|---|---|---|---|---|
+| Hermes | `~/.local/bin/hermes` (venv) | `~/.hermes/config.yaml` | YAML | `mcp_servers:` |
+| OpenCode | `~/.local/bin/opencode` → `~/.opencode/bin/opencode` | `~/.config/opencode/opencode.jsonc` | JSONC | `mcp` → `{name}` → `type:"local"` |
+| Antigravity | `~/.local/bin/agy` (172MB binary) | `~/.gemini/config/mcp_config.json` | JSON | `mcpServers` with `serverUrl` |
+| Claude Code | `claude` on PATH | `~/.claude.json` | JSON | `mcpServers` |
+| Codex | not on PATH | `~/.codex/config.toml` | TOML | `[mcp_servers]` |
+
+**Key findings**:
+- Hermes config filename is `config.yaml` (NOT `config.json` as previously hardcoded)
+- OpenCode config filename is `opencode.jsonc` (JSONC with comments), not `config.json`
+- Antigravity binary is named `agy`, not `antigravity` or `gemini`
+- Hermes MCP servers are inline in the main config, not in a separate file
+
+**Rationale**: Documentation-only paths are unreliable — several clients have undocumented or differently-named config files in practice. The only authoritative source is actual filesystem inspection of a real installation.
