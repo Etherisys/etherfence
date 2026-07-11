@@ -13,9 +13,12 @@ identity/version, executable path/hash, env-var names, capability labels,
 trust-indicator IDs, and the v1.3.0 trust/risk vocabulary) and later
 compare live state against it. Comparison classifies every server as
 `unchanged`/`new`/`changed`/`missing`/`unverifiable` using a closed,
-14-value drift-reason enum and a collision-safe 4-field identity
-fingerprint (agent, normalized config source, server name, transport) —
-never display name alone. Three independent CI gate flags
+15-value drift-reason enum and a collision-safe 3-field identity
+fingerprint (a stable agent-kind key, normalized config source, server
+name — hashed via a canonical JSON encoding, never a stable machine key
+alone or a delimiter-joined string) — never display name alone, and
+transport is tracked as a comparable field rather than folded into the
+fingerprint. Three independent CI gate flags
 (`--fail-on-drift`/`--fail-on-new`/`--fail-on-risk-increase`) always render
 the full report before exiting. All new logic is a pure extension living
 entirely in one new `etherfence-setup` module (`baseline.rs`) plus CLI

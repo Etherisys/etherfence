@@ -519,11 +519,40 @@ fn run_setup_baseline_write(root: PathBuf, output: &Path, overwrite: bool) -> Re
     Ok(())
 }
 
-/// Writes `content` to a temp file in `path`'s directory, then atomically
-/// renames it over `path`. Used only for the explicit `--overwrite` case;
-/// see `run_setup_baseline_write` for the exclusive-create path used
-/// otherwise.
+/// A `u64` that is unpredictable in practice (a fresh `RandomState`'s
+/// internal SipHash keys are seeded from OS randomness, mixed here with a
+/// high-resolution timestamp and the process id) without adding a new
+/// dependency for it. Used only to name a temp file an attacker cannot
+/// pre-stage a symlink at — this is not a cryptographic primitive.
+fn unpredictable_suffix() -> u64 {
+    use std::collections::hash_map::RandomState;
+    use std::hash::{BuildHasher, Hasher};
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let mut hasher = RandomState::new().build_hasher();
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    hasher.write_u128(nanos);
+    hasher.write_u32(std::process::id());
+    hasher.finish()
+}
+
+/// Writes `content` to a freshly, exclusively created temp file in
+/// `path`'s directory, then atomically renames it over `path`. Used only
+/// for the explicit `--overwrite` case; see `run_setup_baseline_write` for
+/// the exclusive-create path used when `--overwrite` is absent.
+///
+/// The temp filename is unpredictable and opened with `create_new` (never
+/// a plain `fs::write`, which both creates *and* follows an existing
+/// symlink): an attacker who can write into the same directory cannot
+/// pre-stage a symlink at the exact path this function will use and have
+/// EtherFence write through it — `create_new` fails outright if anything,
+/// including a symlink, already exists at the candidate path, and a
+/// bounded retry loop picks a fresh candidate on that specific collision.
 fn atomic_write_baseline(path: &Path, content: &[u8]) -> Result<()> {
+    use std::io::Write as _;
+
     let dir = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
@@ -532,18 +561,50 @@ fn atomic_write_baseline(path: &Path, content: &[u8]) -> Result<()> {
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_else(|| "baseline".to_string());
-    let tmp = dir.join(format!(
-        ".{file_name}.tmp-etherfence-{}",
-        std::process::id()
-    ));
-    fs::write(&tmp, content)
-        .with_context(|| format!("writing temp baseline file {}", tmp.display()))?;
-    fs::rename(&tmp, path).with_context(|| {
-        format!(
+
+    const MAX_ATTEMPTS: u32 = 16;
+    let mut tmp_file = None;
+    let mut tmp_path = None;
+    for _ in 0..MAX_ATTEMPTS {
+        let candidate = dir.join(format!(
+            ".{file_name}.tmp-etherfence-{:016x}",
+            unpredictable_suffix()
+        ));
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&candidate)
+        {
+            Ok(file) => {
+                tmp_file = Some(file);
+                tmp_path = Some(candidate);
+                break;
+            }
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => {
+                return Err(anyhow::Error::new(error)
+                    .context(format!("creating temp baseline file in {}", dir.display())))
+            }
+        }
+    }
+    let (mut file, tmp) = tmp_file
+        .zip(tmp_path)
+        .context("failed to create a unique temp baseline file after repeated attempts")?;
+
+    if let Err(error) = file.write_all(content) {
+        let _ = fs::remove_file(&tmp);
+        return Err(anyhow::Error::new(error)
+            .context(format!("writing temp baseline file {}", tmp.display())));
+    }
+    drop(file);
+
+    fs::rename(&tmp, path).map_err(|error| {
+        let _ = fs::remove_file(&tmp);
+        anyhow::Error::new(error).context(format!(
             "atomically replacing {} with {}",
             path.display(),
             tmp.display()
-        )
+        ))
     })?;
     Ok(())
 }

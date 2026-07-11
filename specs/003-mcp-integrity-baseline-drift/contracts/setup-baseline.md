@@ -18,8 +18,10 @@ etherfence setup baseline check --root <path> --baseline <file>
   exclusive file creation (never a separate existence-check then write) so
   a file that appears concurrently is never silently overwritten, and a
   pre-existing symlink at that path is refused rather than written
-  through. `write --overwrite` writes to a temp file in the same directory
-  and atomically renames it into place.
+  through. `write --overwrite` writes to an unpredictably named temp file
+  in the same directory, opened via the same atomic exclusive creation
+  (never a plain write, which would follow a pre-staged symlink at a
+  guessable temp path), and atomically renames it into place.
 - `check --baseline` is required; `check` never writes to `<file>`. The
   file is read with symlink-following refused (fails closed if `<file>` is
   a symlink) and, once parsed, validated for internal consistency

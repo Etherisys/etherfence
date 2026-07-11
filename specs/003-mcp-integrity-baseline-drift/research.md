@@ -311,3 +311,30 @@ own identity fields, duplicate fingerprints, malformed `sha256`,
 unsorted/duplicate set fields, or `aggregate` inconsistent with
 `artifactIdentity`/`configurationRisk`) so hand-editing or corruption
 fails closed rather than producing a misleading comparison.
+
+## Post-review follow-up: temp-file symlink race in `write --overwrite`
+
+A second review pass on the fix for finding #3 above found the fix
+itself was incomplete: the atomic-rename path generated a *predictable*
+temp filename (`.{file}.tmp-etherfence-{pid}` — process ids are small,
+sequential, and easy to guess or brute-force) and wrote to it with a
+plain `fs::write`, which both creates *and follows* an existing symlink.
+An attacker able to write into the same output directory could pre-stage
+a symlink at that exact predictable path pointing at any file the
+EtherFence process can write, and have their content silently written
+through it before the rename.
+
+**Fix**: the temp filename now includes a 64-bit suffix derived from a
+fresh `std::collections::hash_map::RandomState`'s hasher (its internal
+keys are seeded from OS randomness) mixed with a high-resolution
+timestamp and the process id — unpredictable in practice without adding
+a new dependency for it. The temp file is opened with
+`OpenOptions::create_new(true)` (fails outright if anything, including a
+symlink, already exists at that exact path) rather than `fs::write`, data
+is written through the already-open handle, the temp file is removed on
+any write/rename error, and a bounded (16-attempt) retry loop picks a
+fresh candidate name only on an exact-name collision. Added
+`write_overwrite_never_writes_through_a_symlink_at_the_anticipated_temp_path`,
+which pre-stages a symlink at the *old* predictable-name pattern and
+confirms both that `--overwrite` still succeeds and that the symlink's
+target is completely untouched.

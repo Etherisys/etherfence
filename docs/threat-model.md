@@ -225,9 +225,12 @@ operator-input model (see "v0.2.x addendum" above):
   exclusive file creation (`create_new`), not a separate existence-check
   followed by a write, closing the TOCTOU window a naive check-then-write
   would have and refusing to write through a pre-existing symlink at that
-  path. `write --overwrite` writes to a temp file in the same directory
-  and atomically renames it into place, so a concurrent reader never
-  observes a partially written file.
+  path. `write --overwrite` writes to an unpredictably named temp file in
+  the same directory (opened via the same atomic exclusive creation, not
+  a plain write, so an attacker who can write into that directory cannot
+  pre-stage a symlink at the exact temp path and have EtherFence write
+  through it) and atomically renames it into place, so a concurrent
+  reader never observes a partially written file.
 - **`--baseline` (check)**: read through a dedicated bounded,
   no-follow read helper (`etherfence_core::read_bounded_text_file_no_follow`,
   `MAX_BASELINE_FILE_BYTES`) rather than the general `read_bounded_text_file`

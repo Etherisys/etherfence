@@ -777,6 +777,64 @@ fn write_refuses_to_create_through_a_pre_existing_symlink_without_overwrite() {
     );
 }
 
+/// Review follow-up: `write --overwrite`'s temp file must be created with
+/// an unpredictable name and opened via exclusive creation, never a plain
+/// `fs::write` at a guessable path — otherwise an attacker who can write
+/// into the same directory could pre-stage a symlink at the anticipated
+/// temp path and have EtherFence write through it. Simulates the attack
+/// by pre-placing a symlink at the *old*, predictable temp-path pattern
+/// (`.{file}.tmp-etherfence-{pid}`) this function used before the fix,
+/// and confirms `--overwrite` still succeeds (because the current
+/// implementation never reuses that predictable name) and the symlink's
+/// target is completely untouched.
+#[cfg(unix)]
+#[test]
+fn write_overwrite_never_writes_through_a_symlink_at_the_anticipated_temp_path() {
+    let root = fixture_root("baseline-home");
+    let output = temp_home("overwrite-temp-race").join("baseline.json");
+    assert!(write_baseline(&root, &output).status.success());
+
+    let attacker_target = output.parent().unwrap().join("attacker-owned-file");
+    fs::write(&attacker_target, "attacker file must survive untouched").unwrap();
+
+    // Pre-stage a symlink at every temp path the pre-fix predictable
+    // naming scheme could have produced for this process, pointing at a
+    // file the test owns and must remain untouched.
+    let dir = output.parent().unwrap();
+    let file_name = output.file_name().unwrap().to_string_lossy().into_owned();
+    let predictable_link = dir.join(format!(
+        ".{file_name}.tmp-etherfence-{}",
+        std::process::id()
+    ));
+    std::os::unix::fs::symlink(&attacker_target, &predictable_link).unwrap();
+
+    let overwritten = run(&[
+        "setup",
+        "baseline",
+        "write",
+        "--root",
+        root.to_str().unwrap(),
+        "--output",
+        output.to_str().unwrap(),
+        "--overwrite",
+    ]);
+    assert!(
+        overwritten.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&overwritten.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(&attacker_target).unwrap(),
+        "attacker file must survive untouched",
+        "write must never write through a symlink at a predictable temp path"
+    );
+    // The pre-staged symlink itself must also be untouched (still a
+    // symlink, still pointing at the same target) — EtherFence's own temp
+    // file must have used a different, unpredictable name entirely.
+    let link_meta = fs::symlink_metadata(&predictable_link).unwrap();
+    assert!(link_meta.file_type().is_symlink());
+}
+
 #[test]
 fn baseline_entries_carry_a_stable_agent_kind_distinct_from_the_display_name() {
     let root = fixture_root("baseline-home");
