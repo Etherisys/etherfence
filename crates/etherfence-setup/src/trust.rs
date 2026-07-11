@@ -1150,38 +1150,6 @@ fn open_no_follow(path: &Path) -> std::io::Result<std::fs::File> {
     }
 }
 
-/// Compares the filesystem identity of two `Metadata` values — device and
-/// inode number on Unix, volume serial number and file index on Windows —
-/// so that "is this still the same underlying file?" does not rely on
-/// length/modified-time alone, which a maliciously (or accidentally)
-/// substituted file can coincidentally match. Never claims a match on a
-/// platform where a stable identity cannot be obtained.
-fn same_file_identity(a: &std::fs::Metadata, b: &std::fs::Metadata) -> bool {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        a.dev() == b.dev() && a.ino() == b.ino()
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt;
-        matches!(
-            (
-                a.volume_serial_number(),
-                b.volume_serial_number(),
-                a.file_index(),
-                b.file_index(),
-            ),
-            (Some(va), Some(vb), Some(ia), Some(ib)) if va == vb && ia == ib
-        )
-    }
-    #[cfg(not(any(unix, windows)))]
-    {
-        let _ = (a, b);
-        false
-    }
-}
-
 /// Computes a SHA-256 identity for an eligible local regular file
 /// (FR-037-FR-045). Only a regular file confirmed immediately before the
 /// open (never a symlink) is eligible. The read is streamed in bounded
@@ -1195,29 +1163,29 @@ fn same_file_identity(a: &std::fs::Metadata, b: &std::fs::Metadata) -> bool {
 /// followed by an unguarded open, or replaced by a different regular file
 /// that happens to match the original's length and modified time. This is
 /// closed two ways: (1) the open itself refuses to follow a symlink at the
-/// final path component (`open_no_follow`, enforced by the kernel on
-/// Unix); (2) every metadata comparison — before the open, on the opened
-/// handle itself (immune to further path-level changes once open), and
-/// after the read completes — includes filesystem file identity
-/// (device+inode / volume+file-index), not just length and modified time,
-/// so a same-named replacement file is detected even when it coincidentally
-/// matches those two fields. Any mismatch, or any I/O error at any step,
-/// discards the computed hash and returns `None` rather than reporting a
-/// possibly-wrong `verified-local` result (FR-042/FR-044) — never a
-/// partial or best-effort hash.
+/// final path component (`open_no_follow`, enforced by the kernel on Unix
+/// via `O_NOFOLLOW` — Windows has no stable equivalent in `std`, so this
+/// specific pre-open symlink-swap race is not fully closable there); (2)
+/// after the read completes, the path is re-checked for filesystem file
+/// identity — not just length and modified time, which a same-named
+/// replacement file can coincidentally match — via `same_file::Handle`
+/// equality, comparing the handle actually opened and hashed against a
+/// fresh handle for the same path. `same_file` is used rather than
+/// hand-rolled platform code because a portable, stable file-identity
+/// comparison (device+inode on Unix, volume+file-index on Windows) is not
+/// exposed by `std` on Windows without an unstable feature. Any mismatch,
+/// or any I/O error at any step, discards the computed hash and returns
+/// `None` rather than reporting a possibly-wrong `verified-local` result
+/// (FR-042/FR-044) — never a partial or best-effort hash.
 fn hash_eligible_file_bounded(path: &Path, max_bytes: u64) -> Option<String> {
     let pre = std::fs::symlink_metadata(path).ok()?;
     if pre.file_type().is_symlink() || !pre.is_file() {
         return None;
     }
 
-    let mut file = open_no_follow(path).ok()?;
-
-    // Validate the *opened handle's* own metadata against the pre-open
-    // check, rather than trusting the open to have resolved to the same
-    // object we just inspected by path.
-    let opened_meta = file.metadata().ok()?;
-    if !opened_meta.is_file() || !same_file_identity(&pre, &opened_meta) {
+    let file = open_no_follow(path).ok()?;
+    let mut handle = same_file::Handle::from_file(file).ok()?;
+    if !handle.as_file().metadata().ok()?.is_file() {
         return None;
     }
 
@@ -1225,7 +1193,7 @@ fn hash_eligible_file_bounded(path: &Path, max_bytes: u64) -> Option<String> {
     let mut buffer = [0u8; 64 * 1024];
     let mut total: u64 = 0;
     loop {
-        let read = file.read(&mut buffer).ok()?;
+        let read = handle.as_file_mut().read(&mut buffer).ok()?;
         if read == 0 {
             break;
         }
@@ -1237,18 +1205,21 @@ fn hash_eligible_file_bounded(path: &Path, max_bytes: u64) -> Option<String> {
     }
     let digest = hasher.finalize();
 
-    // Re-check both the lexical path (in case it was replaced again while
-    // the read was in progress) and file identity (in case a replacement
-    // coincidentally matches length/modified-time) before trusting the
-    // digest just computed.
+    // Re-check both the lexical path (in case it was replaced with a
+    // symlink or non-regular file while the read was in progress) and
+    // file identity (in case a same-named replacement file coincidentally
+    // matches length/modified-time) before trusting the digest just
+    // computed.
     let after = std::fs::symlink_metadata(path).ok()?;
     if after.file_type().is_symlink() || !after.is_file() {
         return None;
     }
-    if !same_file_identity(&pre, &after) {
+    let post_handle = same_file::Handle::from_path(path).ok()?;
+    if handle != post_handle {
         return None;
     }
-    if after.len() != opened_meta.len() || after.modified().ok() != opened_meta.modified().ok() {
+    let handle_meta = handle.as_file().metadata().ok()?;
+    if after.len() != handle_meta.len() || after.modified().ok() != handle_meta.modified().ok() {
         return None;
     }
 
@@ -2464,7 +2435,7 @@ mod user_story_3_tests {
     }
 
     #[test]
-    fn same_file_identity_matches_same_file_and_rejects_different_files() {
+    fn same_file_handle_matches_same_file_and_rejects_different_files() {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -2480,13 +2451,13 @@ mod user_story_3_tests {
         std::fs::write(&path_a, b"content-a").unwrap();
         std::fs::write(&path_b, b"content-a").unwrap(); // same bytes, different file
 
-        let meta_a1 = std::fs::metadata(&path_a).unwrap();
-        let meta_a2 = std::fs::metadata(&path_a).unwrap();
-        let meta_b = std::fs::metadata(&path_b).unwrap();
+        let handle_a1 = same_file::Handle::from_path(&path_a).unwrap();
+        let handle_a2 = same_file::Handle::from_path(&path_a).unwrap();
+        let handle_b = same_file::Handle::from_path(&path_b).unwrap();
 
-        assert!(same_file_identity(&meta_a1, &meta_a2));
-        assert!(
-            !same_file_identity(&meta_a1, &meta_b),
+        assert_eq!(handle_a1, handle_a2);
+        assert_ne!(
+            handle_a1, handle_b,
             "two distinct files with identical content/length/mtime must never be treated as the same file identity"
         );
 
