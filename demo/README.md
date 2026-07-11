@@ -25,7 +25,7 @@ detection and scan engines.
 - `workspace/request.json` — valid JSON-RPC `tools/call` request for `filesystem.write`.
 - `etherfence.tape` — VHS tape for the demo recording.
 - `run-demo.sh` — builds the release binary, renders an HD MP4 directly from VHS, then generates an optimized GIF from the MP4 source.
-- `verify-demo.sh` — builds the release binary and semantically verifies all four demo scenes without VHS.
+- `verify-demo.sh` — builds the release binary and semantically verifies all three demo stages without VHS.
 
 ## Behavioral verification
 
@@ -54,7 +54,7 @@ dependencies, including `ttyd` 1.7.2 or newer, `ffmpeg`, and the
 ```
 
 `run-demo.sh`:
-1. Verifies font availability via `fc-list` where fontconfig is available.
+1. Verifies font availability through `fc-list` (fontconfig required).
 2. Validates `ttyd >= 1.7.2` with portable version parsing.
 3. Builds `target/release/etherfence`.
 4. Renders `docs/assets/etherfence-demo.mp4` directly from VHS (high-quality h264 source).
@@ -85,7 +85,7 @@ test (`cargo test --test cli_demo`) for cross-platform fixture validation.
 |---|---|---|
 | 0–7s | Identity + scan | `etherfence scan --root .` (splash auto-printed before scan output) |
 | 7–15s | Setup assessment | `etherfence setup detect --root .` |
-| 15–23s | Policy denial | `etherfence mcp-policy check` (multiline) |
+| 15–23s | Policy decision preview | `etherfence mcp-policy check` (multiline) |
 
 ## Accessibility
 

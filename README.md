@@ -56,8 +56,8 @@
 </p>
 
 <p align="center">
-  Discover local AI-agent risks, assess MCP server posture, and enforce
-  deny-by-default runtime controls — all from the real <code>etherfence</code> binary.
+  Discover local AI-agent risks, assess MCP server posture, and validate
+  deny-by-default runtime policies — all from the real <code>etherfence</code> binary.
 </p>
 
 The recording runs the real `etherfence` binary against checked-in fixtures
@@ -68,7 +68,7 @@ in three scenes:
   with broad filesystem access
 - **Setup assessment** — `etherfence setup detect` reports capability,
   trust indicators, and a deny-by-default starter-policy recommendation
-- **Policy enforcement** — `etherfence mcp-policy check` denies an
+- **Policy decision preview** — `etherfence mcp-policy check` denies an
   unauthorized `filesystem.write` request without starting any server
 
 The configured `npx` filesystem server is parsed, never executed. No network

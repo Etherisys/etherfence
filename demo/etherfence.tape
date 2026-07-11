@@ -27,7 +27,7 @@ Type "etherfence setup detect --root ."
 Enter 1
 Sleep 7s
 
-# Scene 3 — Runtime policy enforcement (multiline command)
+# Scene 3 — Runtime policy decision preview (multiline command)
 Ctrl+L
 Sleep 300ms
 Type "etherfence mcp-policy check \"

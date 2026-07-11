@@ -28,6 +28,15 @@ scanning, or network interception.
   redirected/piped stdout, CI environments, `NO_COLOR`, and terminals without
   ANSI color support.
 
+- `etherfence setup detect` human-output labels renamed for clarity without
+  changing semantics or JSON schemas: `recommendation: deny (needs-review=...)`
+  → `starter policy: deny` (dropping the separate `needs-review` field from the
+  recommendation line — the tier is always `deny`, and the rationale explains
+  why), and `trust: ... needs-review=true` → `trust assessment: ...
+  review-needed=true` (eliminating confusion with the capability-label-based
+  review flag). Machine-readable `StarterPolicyRecommendation.needsReview` and
+  `TrustAssessment.needsReview` JSON fields are unchanged.
+
 - New versioned MCP proxy policy schema extension `ef-mcp-policy/v0.2`,
   additive over `ef-mcp-policy/v0.1`: every existing v0.1 policy continues
   to parse and evaluate byte-for-byte identically, and a v0.2-only

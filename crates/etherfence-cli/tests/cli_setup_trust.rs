@@ -185,13 +185,13 @@ fn setup_plan_and_doctor_human_output_do_not_mention_trust_assessment() {
     let plan = run(&["setup", "plan", "--root", root.to_str().unwrap()]);
     assert!(plan.status.success());
     let plan_stdout = String::from_utf8_lossy(&plan.stdout);
-    assert!(!plan_stdout.contains("trust:"));
+    assert!(!plan_stdout.contains("trust assessment"));
     assert!(!plan_stdout.contains("trust indicators"));
 
     let doctor = run(&["setup", "doctor", "--root", root.to_str().unwrap()]);
     assert!(doctor.status.success());
     let doctor_stdout = String::from_utf8_lossy(&doctor.stdout);
-    assert!(!doctor_stdout.contains("trust:"));
+    assert!(!doctor_stdout.contains("trust assessment"));
     assert!(!doctor_stdout.contains("trust indicators"));
 }
 
