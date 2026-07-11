@@ -110,22 +110,30 @@ the JSON `kebab-case` token:
 
 ```text
     capabilities: filesystem
-    recommendation: deny (needs-review=false) — denied by default; no
+    starter policy: deny — denied by default; no
       fixture-verified allow rule exists for this capability set
 ```
 
 ```text
     capabilities: shell / command execution
-    recommendation: deny (needs-review=true) — denied by default;
+    starter policy: deny — denied by default;
       flagged for review because capability includes shell / command
       execution
 ```
+
+v1.5.0 renamed the human-output labels without changing semantics:
+`recommendation:` became `starter policy:` (dropping the separate
+`needs-review` field from the recommendation line — the recommendation
+tier is always `deny`, and the rationale explains why), and the trust
+assessment line uses `review-needed` instead of `needs-review` to avoid
+confusion with the capability-label-based review flag. JSON schemas are
+unaffected.
 
 ## Contract test obligations (see quickstart.md for runnable steps)
 
 1. Running `setup detect` with no `--format` flag on an existing fixture
    home produces every pre-v1.2.0 line unchanged, in the same order, with
-   two new lines (`capabilities: ...`, `recommendation: ...`) appended per
+   two new lines (`capabilities: ...`, `starter policy: ...`) appended per
    server — never a removed or reordered pre-existing line. The overall
    output is **not** byte-identical to the pre-v1.2.0 baseline (it is
    strictly longer); only `setup plan`/`setup doctor` (item 3 below) are

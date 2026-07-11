@@ -18,6 +18,7 @@ license = "AGPL-3.0-only"
 repository = "https://github.com/Etherisys-id/etherfence"
 
 [workspace.dependencies]
+anstream = "1.0"
 anyhow = "1.0"
 clap = { version = "4.5", features = ["derive"] }
 dialoguer = "0.11"
@@ -27,4 +28,5 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_yaml = "0.9"
 sha2 = "0.10"
+terminal_size = "0.4"
 toml = "0.8"

@@ -1,21 +1,115 @@
-# EtherFence
+<p align="center">
+  <img src="assets/etherfence-logo.png" width="150" alt="EtherFence logo">
+</p>
 
-**Local-first AI agent security posture and MCP runtime control.**
+<h1 align="center">EtherFence</h1>
 
-One-line idea: **Tirith protects terminal commands; EtherFence governs agent
-access.**
+<p align="center">
+  <strong>AI Agent Security Posture &amp; Runtime Control</strong>
+</p>
 
-> **Status: v1.0.0 — production-ready for controlled local-first
-> deployments of its defined scope: `scan`, `mcp-policy`, and the stdio
-> `mcp-proxy` boundary.** This is not a security certification for every MCP
-> server, MCP client, or deployment environment; operators must still
-> review policies, test their chosen servers, and monitor audit logs.
-> `etherfence scan` is conservative, read-only posture discovery.
-> `etherfence mcp-proxy` is an opt-in local MCP stdio boundary proxy built
-> on the stable `ef-mcp-policy/v0.1` schema. `etherfence mcp-policy` is a
-> local, serverless policy-authoring/dry-run tool. See
-> [Security model / non-goals](#security-model--non-goals) below for what is
-> explicitly out of scope.
+<p align="center">
+  See what your AI agents can access.<br>
+  Control what their MCP servers are allowed to do.
+</p>
+
+<p align="center">
+  Local-first · Open source · No cloud control plane · Fail-closed runtime enforcement
+</p>
+
+<p align="center">
+  <a href="https://github.com/Etherisys/etherfence/releases"><img alt="Release" src="https://img.shields.io/github/v/release/Etherisys/etherfence"></a>
+  <a href="https://github.com/Etherisys/etherfence/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/Etherisys/etherfence/ci.yml?branch=main"></a>
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/Etherisys/etherfence"></a>
+  <a href="Cargo.toml"><img alt="Built with Rust" src="https://img.shields.io/badge/built%20with-Rust-orange"></a>
+  <a href="docs/mcp-proxy-operator-guide.md"><img alt="MCP runtime control" src="https://img.shields.io/badge/MCP-runtime%20control-blueviolet"></a>
+  <a href="docs/install.md"><img alt="Platforms: Linux and Windows" src="https://img.shields.io/badge/platforms-Linux%20%7C%20Windows-blue"></a>
+</p>
+
+<p align="center">
+  <a href="#quick-start">Quick Start</a> ·
+  <a href="#what-etherfence-protects">Protection</a> ·
+  <a href="#demo">Demo</a> ·
+  <a href="docs/install.md">Install</a> ·
+  <a href="docs/mcp-proxy-operator-guide.md">MCP Proxy</a> ·
+  <a href="docs/roadmap.md">Roadmap</a> ·
+  <a href="CONTRIBUTING.md">Contributing</a>
+</p>
+
+---
+
+## Protect your AI-agent environment in three steps
+
+| 1. Discover | 2. Assess | 3. Control |
+| --- | --- | --- |
+| Find local agent and MCP configurations | Identify capability, identity, and integrity risks | Enforce least-privilege MCP runtime policy |
+| `etherfence scan` | `etherfence setup detect` | `etherfence mcp-proxy` |
+
+<h2 align="center">See EtherFence in action</h2>
+
+<p align="center">
+  <img
+    src="docs/assets/etherfence-demo.gif"
+    alt="EtherFence terminal demo: splash, posture scan, MCP setup assessment, and runtime policy denial"
+    width="100%"
+  />
+</p>
+
+<p align="center">
+  Discover local AI-agent risks, assess MCP server posture, and validate
+  deny-by-default runtime policies — all from the real <code>etherfence</code> binary.
+</p>
+
+The recording runs the real `etherfence` binary against checked-in fixtures
+in three scenes:
+
+- **Identity + posture scan** — `etherfence scan` prints the colored
+  ETHERFENCE splash, then discovers a Claude Code filesystem MCP server
+  with broad filesystem access
+- **Setup assessment** — `etherfence setup detect` reports capability,
+  trust indicators, and a deny-by-default starter-policy recommendation
+- **Policy decision preview** — `etherfence mcp-policy check` denies an
+  unauthorized `filesystem.write` request without starting any server
+
+The configured `npx` filesystem server is parsed, never executed. No network
+access, package installation, or live MCP server contact is required.
+
+The demo workspace, VHS tape, and generation/verification scripts live in the
+`demo/` directory of the repository source tree (not shipped in release
+artifacts). To reproduce the recording locally, check out the repository and
+run `./demo/run-demo.sh` (requires VHS, ttyd ≥ 1.7.2, ffmpeg, and DejaVu Sans
+Mono). Verify the underlying behavior without VHS via `./demo/verify-demo.sh`.
+[View HD recording](docs/assets/etherfence-demo.mp4).
+
+## What EtherFence protects
+
+| Area | EtherFence today |
+| --- | --- |
+| AI-agent/MCP config posture on this machine | **Protects** — `scan` discovers config files and reports risk hints |
+| MCP stdio traffic to a server explicitly wrapped with `mcp-proxy` | **Protects** — method/tool/path allow-deny enforcement, fail-closed on policy errors |
+| MCP proxy policy authoring and review | **Protects** — `mcp-policy` validates, explains, and dry-runs policies locally |
+| MCP servers *not* wrapped by `mcp-proxy` | **Not protected** — traffic passes through however the server/client normally talk |
+| Non-stdio MCP transports (HTTP/SSE) | **Not supported** |
+| Terminal commands | **Out of scope** — pairs with [Tirith](https://github.com/Etherisys) as complementary terminal-command protection |
+
+<details>
+<summary><strong>Security boundaries and non-goals</strong></summary>
+
+EtherFence is intentionally local and scoped. It does not include daemon mode,
+an API service, a control plane, endpoint agents, shell hooks, terminal-command
+scanning, network/TLS interception, DLP/content inspection, or cloud dependency.
+
+| Boundary | What to expect |
+| --- | --- |
+| Network or TLS traffic | **Never intercepted** |
+| File, prompt, or tool-result content | **Never inspected** — no DLP or content-inspection engine |
+| Running processes, registries, remote/managed configs | **Not read** — `scan` only reads known local config files |
+| Unwrapped MCP servers | **Not controlled** — wrap stdio servers with `mcp-proxy` to enforce runtime policy |
+
+See [Security model / non-goals](#security-model--non-goals) below and
+[`docs/threat-model.md`](docs/threat-model.md) for the full boundary model.
+
+</details>
 
 ## Who this is for
 
@@ -46,25 +140,7 @@ Three local commands, each with a distinct job:
   and dry-run. `validate`/`explain`/`init`/`check` read and reason about an
   `mcp-proxy` policy file without ever starting or contacting an MCP server.
 
-## What EtherFence protects — and does not
-
-| Area | EtherFence today |
-| --- | --- |
-| AI-agent/MCP config posture on this machine | **Protects** — `scan` discovers config files and reports risk hints |
-| MCP stdio traffic to a server explicitly wrapped with `mcp-proxy` | **Protects** — method/tool/path allow-deny enforcement, fail-closed on policy errors |
-| MCP proxy policy authoring and review | **Protects** — `mcp-policy` validates, explains, and dry-runs policies locally |
-| MCP servers *not* wrapped by `mcp-proxy` | **Not protected** — traffic passes through however the server/client normally talk |
-| Non-stdio MCP transports (HTTP/SSE) | **Not supported** |
-| Terminal commands | **Out of scope** — pairs with [Tirith](https://github.com/Etherisys-id) as complementary terminal-command protection |
-| Network or TLS traffic | **Never intercepted** |
-| File, prompt, or tool-result content | **Never inspected** — no DLP or content-inspection engine |
-| Running processes, registries, remote/managed configs | **Not read** — `scan` only reads known local config files |
-
-No daemon mode, API service, control plane, endpoint agent, shell hooks,
-terminal-command scanning, network/TLS interception, DLP/content inspection,
-or cloud dependency exists anywhere in EtherFence today.
-
-## Quickstart
+## Quick start
 
 Run the guided setup wizard:
 
@@ -114,6 +190,12 @@ cargo build --release -p etherfence-cli
 ```
 
 ## Command overview
+
+Interactive terminals show a branded EtherFence startup banner before
+human-readable command output. The banner is automatically suppressed for
+structured output (`--format json`, `--format markdown`, `--format sarif`),
+MCP stdio proxy traffic, redirected/piped stdout, CI environments, `NO_COLOR`,
+and terminals without ANSI color support.
 
 | Command | Purpose | Mode |
 | --- | --- | --- |
@@ -356,19 +438,15 @@ active repository workflows — copy the one(s) you want into your own
 
 ## Security model / non-goals
 
-EtherFence v0.1.x is scan-only. The MCP stdio boundary proxy (v0.2.x+, built
-on the stable `ef-mcp-policy/v0.1` schema as of v1.0.0) adds method-level,
+EtherFence started as scan-only posture discovery. Its MCP stdio boundary
+proxy, built on the stable `ef-mcp-policy/v0.1` schema, adds method-level,
 tool-level, and path-aware policy enforcement for exactly one wrapped server
-at a time; v0.4.1 adds narrow Unicode/homograph hygiene inside policy/runtime
-names and guarded path-like values. `mcp-policy` (v0.6.0+) adds local,
-serverless policy UX with no new enforcement behavior. EtherFence v1.0.0 is
-production-ready for controlled local-first deployments of its defined
-scope — `scan`, `mcp-policy`, and the stdio `mcp-proxy` boundary — with a
-stable CLI and policy schema. This is not a universal certification for
-every MCP server, MCP client, or deployment environment: operators must
-still test their chosen MCP servers and policies and monitor audit logs —
-see [`docs/mcp-compatibility-matrix.md`](docs/mcp-compatibility-matrix.md)
-for exactly what is tested. EtherFence does **not** implement:
+at a time. The `mcp-policy` command adds local, serverless policy UX with no
+new enforcement behavior. This is not a universal certification for every MCP
+server, MCP client, or deployment environment: operators must still test their
+chosen MCP servers and policies and monitor audit logs — see
+[`docs/mcp-compatibility-matrix.md`](docs/mcp-compatibility-matrix.md) for
+exactly what is tested. EtherFence does **not** implement:
 
 - daemon mode, an API service, a control plane, or an endpoint agent
 - network or TLS interception

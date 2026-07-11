@@ -118,4 +118,4 @@ Note `sha256` is omitted (never `null`), `invocation` carries only `applicable: 
 - `capabilities` and `recommendation` objects are byte-for-byte unchanged from `v0.1` (FR-074).
 - `etherfence setup catalog` (`ef-setup-catalog/v0.1`) is entirely unaffected (FR-090).
 - `setup plan`/`setup doctor` human output is unchanged (FR-004/FR-089).
-- Human-readable `etherfence setup detect` (no `--format json`) output gains additive lines per server (mirroring the v1.2.0 `capabilities:`/`recommendation:` line precedent) — existing lines are preserved unchanged and in order; this is **not** byte-identical to `v0.2`'s predecessor human output for the same reason `v0.1` wasn't byte-identical to pre-v1.2.0 output (documented honestly, not claimed as unchanged).
+- Human-readable `etherfence setup detect` (no `--format json`) output gains additive lines per server (mirroring the v1.2.0 `capabilities:`/`starter policy:` line precedent) — existing lines are preserved unchanged and in order; this is **not** byte-identical to `v0.2`'s predecessor human output for the same reason `v0.1` wasn't byte-identical to pre-v1.2.0 output (documented honestly, not claimed as unchanged).

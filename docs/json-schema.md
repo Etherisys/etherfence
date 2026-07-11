@@ -167,7 +167,7 @@ Example:
 existing one. Omitting `--format` is **not** byte-identical to pre-v1.2.0
 human-text output: every pre-v1.2.0 line is preserved unchanged and in the
 same order (nothing removed or reworded), and two new lines
-(`capabilities: ...`, `recommendation: ...`) are appended per server —
+(`capabilities: ...`, `starter policy: ...`) are appended per server —
 scripts matching on specific pre-existing lines are unaffected, but the
 total output is longer than before. `setup plan` and `setup doctor`
 remain byte-identical to their pre-v1.2.0 output; only `setup detect`'s
@@ -177,8 +177,8 @@ v1.3.0 additively bumps this schema to `ef-setup-detect/v0.2`: every
 `capabilities`/`recommendation` field above keeps its exact name, type,
 and meaning, and one new field, `trustAssessment`, is added per server
 (see "Trust and integrity assessment" below). Human output gains two more
-lines per server (`trust: ...`, `trust indicators: ...`), appended after
-the existing `recommendation:` line — again additive, not
+lines per server (`trust assessment: ...`, `trust indicators: ...`), appended after
+the existing `starter policy:` line — again additive, not
 byte-identical to pre-v1.3.0 output.
 
 | Field | Type | Description |

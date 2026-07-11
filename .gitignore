@@ -10,3 +10,4 @@ etherfence-report*.md
 # `.claude/skills/` (the speckit-* skill definitions referenced by
 # `.specify/integrations/claude.manifest.json`) IS tracked.
 .claude/scheduled_tasks.lock
+/demo/
