@@ -13,6 +13,7 @@ mod baseline;
 mod catalog;
 mod classification;
 mod trust;
+mod wizard;
 
 pub use baseline::{
     build_baseline, compare, drift_gate_triggered, fingerprint, new_gate_triggered,
@@ -33,6 +34,10 @@ pub use trust::{
     ConfigurationRiskStatus, EvidenceField, EvidenceKey, ExecutablePathClassification,
     IndicatorCategory, InvocationAssessment, ObscuredLaunchPattern, PackageRunner,
     ShellWrapperKind, TrustAssessment, TrustIndicator, VersionExpressionKind,
+};
+pub use wizard::{
+    extract_package_version, resolve_pinning, PackageVersionStatus, PinningChange, PolicyEntry,
+    PolicyType, SelectedServer, TrustOverride, WizardPackageRunner, WizardPlan, WizardSelections,
 };
 
 const BACKUP_MARKER: &str = "etherfence-setup-backup/v1";
@@ -600,7 +605,7 @@ fn detection_from_inventory(item: InventoryItem) -> SetupDetection {
     }
 }
 
-fn server_from_mcp(server: &McpServer) -> SetupServer {
+pub(crate) fn server_from_mcp(server: &McpServer) -> SetupServer {
     let capabilities = classification::classify_server(server);
     let recommendation = classification::recommend(&capabilities);
     let trust_assessment = trust::assess_trust(server);
