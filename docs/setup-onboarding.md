@@ -126,9 +126,13 @@ or for `mcp-proxy`'s runtime least-privilege policy.
   to a verified local artifact — `PATH` is never searched, and symlinks
   are never followed.
 - Local artifact hashing for an eligible absolute regular-file path only:
-  a bounded, streamed SHA-256 read with a pre/post-read metadata check
-  that discards the hash if the file changed during inspection. File
-  contents never appear in any output.
+  a bounded, streamed SHA-256 read that refuses to follow a symlink at
+  open time (enforced by the kernel on Unix; the opened handle's own
+  metadata is additionally checked on every platform) and cross-checks
+  filesystem file identity — not just length and modified time, which a
+  substituted file can coincidentally match — before, immediately after
+  opening, and after the read completes, discarding the hash on any
+  mismatch. File contents never appear in any output.
 - A narrow set of Unicode/identity-ambiguity indicators (bidirectional
   control characters, invisible/zero-width characters, a defined
   mixed-script condition, and a single curated confusable-identity alias)

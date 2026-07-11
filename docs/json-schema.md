@@ -218,7 +218,8 @@ value here; this feature never produces an `"allow"` recommendation.
 
 | Field | Type | Description |
 | --- | --- | --- |
-| `trustAssessment.artifactIdentity` | string | `verified-local` (a specific local regular file was hashed under bounded, TOCTOU-safe conditions), `known-source` (an exact curated identity match — not proof of authenticity/provenance/safety), or `unknown`. |
+| `trustAssessment.artifactIdentity` | string | `verified-local` (a specific local regular file was hashed under bounded, race-safe conditions), `known-source` (an exact curated identity match — not proof of authenticity/provenance/safety), or `unknown`. |
+| `trustAssessment.artifactIdentityRationale` | string | **Always present.** Deterministic explanation of why `artifactIdentity` holds its value. For a remote/URL-configured server this explicitly states "no local invocation to assess," distinct from a stdio server's `unknown`, which means a local inspection ran but was inconclusive. |
 | `trustAssessment.configurationRisk` | string | `no-known-indicators` (no implemented indicator triggered — not an absence-of-risk guarantee), `needs-review`, or `high-risk`. |
 | `trustAssessment.aggregate` | string | `verified-local`, `known-source`, `needs-review`, `high-risk`, or `unknown` — derived by the configuration-risk-first rule: `configurationRisk` of `high-risk`/`needs-review` always wins; `artifactIdentity` only surfaces to the aggregate when `configurationRisk` is `no-known-indicators`. Both underlying fields are always reported separately regardless of which one determined the aggregate. |
 | `trustAssessment.needsReview` | boolean | `true` iff `aggregate` is `needs-review`, `high-risk`, or `unknown`. |
@@ -263,6 +264,7 @@ Example:
           },
           "trustAssessment": {
             "artifactIdentity": "known-source",
+            "artifactIdentityRationale": "This server's parsed package identity is an exact match against a small curated known-source table. This does not prove package authenticity, provenance, installation integrity, or safety.",
             "configurationRisk": "no-known-indicators",
             "aggregate": "known-source",
             "needsReview": false,

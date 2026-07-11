@@ -19,6 +19,7 @@ Added alongside the existing `capabilities` and `recommendation` fields on each 
   "recommendation": { "...": "unchanged from v0.1" },
   "trustAssessment": {
     "artifactIdentity": "verified-local",
+    "artifactIdentityRationale": "The configured executable at this server's local path was inspected and its SHA-256 identity was recorded under bounded, race-safe conditions. This does not mean the underlying program is safe.",
     "configurationRisk": "no-known-indicators",
     "aggregate": "verified-local",
     "needsReview": false,
@@ -39,6 +40,7 @@ Added alongside the existing `capabilities` and `recommendation` fields on each 
 | Field | Type | Description |
 | --- | --- | --- |
 | `trustAssessment.artifactIdentity` | string | `verified-local`, `known-source`, or `unknown`. |
+| `trustAssessment.artifactIdentityRationale` | string | **Always present.** Deterministic, human-readable explanation of why `artifactIdentity` holds its value. For a remote/URL-configured server, explicitly states that `unknown` reflects "no local invocation to assess," distinct from a stdio server's `unknown`, which means a local inspection ran but was inconclusive (FR-057c). |
 | `trustAssessment.configurationRisk` | string | `no-known-indicators`, `needs-review`, or `high-risk`. |
 | `trustAssessment.aggregate` | string | `verified-local`, `known-source`, `needs-review`, `high-risk`, or `unknown` — derived per the configuration-risk-first rule (FR-061). |
 | `trustAssessment.needsReview` | boolean | `true` iff `aggregate` is `needs-review`, `high-risk`, or `unknown` (FR-062). |
@@ -92,6 +94,7 @@ Added alongside the existing `capabilities` and `recommendation` fields on each 
   "recommendation": { "tier": "deny", "needsReview": true, "rationale": "..." },
   "trustAssessment": {
     "artifactIdentity": "unknown",
+    "artifactIdentityRationale": "This server has no local invocation to assess: it is configured with a remote URL rather than a local command, so there is no executable path, local artifact, or package-runner invocation to evaluate. This is not a failed or inconclusive local inspection.",
     "configurationRisk": "no-known-indicators",
     "aggregate": "unknown",
     "needsReview": true,
@@ -102,7 +105,7 @@ Added alongside the existing `capabilities` and `recommendation` fields on each 
 }
 ```
 
-Note `sha256` is omitted (never `null`), `invocation` carries only `applicable: false` (every other `invocation` field omitted), and `executablePath` is the explicit `not-applicable` token — never `unknown`, which is reserved for "a local path was assessed and nothing could be established."
+Note `sha256` is omitted (never `null`), `invocation` carries only `applicable: false` (every other `invocation` field omitted), `executablePath` is the explicit `not-applicable` token — never `unknown`, which is reserved for "a local path was assessed and nothing could be established" — and `artifactIdentityRationale` explicitly names "no local invocation to assess" so this `unknown` is never confused with a stdio server's inconclusive-inspection `unknown` (FR-057c).
 
 ## Determinism (FR-075–FR-079)
 

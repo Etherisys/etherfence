@@ -163,14 +163,23 @@ folding it silently into the "no new trust boundary" framing above.
 
 - **What's read.** Only a statically configured executable path that
   resolves, via `fs::symlink_metadata` (never followed through a
-  symlink), to a regular file at an absolute path is eligible. The read
-  is streamed and capped at an explicit size limit; a file exceeding the
-  limit is never fully read. File metadata is snapshotted immediately
-  before and immediately after the read, and any mismatch discards the
-  computed hash rather than reporting it — an operator running `setup
-  detect` repeatedly against a workstation whose binaries change between
-  runs will see this degrade gracefully, not silently succeed with a
-  stale identity.
+  symlink), to a regular file at an absolute path is eligible. The open
+  itself refuses to follow a symlink at the final path component
+  (`O_NOFOLLOW` on Unix, the only mechanism that closes this race
+  atomically at the kernel level); on every platform, the opened file
+  handle's own metadata — and, separately, a fresh path-based check after
+  the read completes — must match the original check's filesystem file
+  identity (device+inode on Unix, volume+file-index on Windows), not
+  merely its length and modified time, before a hash is ever reported.
+  This matters because a file replaced between the initial check and the
+  read could otherwise coincidentally match length and modified time
+  while being a different object entirely; identity comparison catches
+  that case. The read is streamed and capped at an explicit size limit; a
+  file exceeding the limit is never fully read. Any mismatch at any of
+  these checks discards the computed hash rather than reporting it — an
+  operator running `setup detect` repeatedly against a workstation whose
+  binaries change between runs will see this degrade gracefully, not
+  silently succeed with a stale or substituted identity.
 - **What's never read.** File contents never appear in any output. A
   relative path, a bare/PATH-resolved command, or a symlink is never
   hashed — `PATH` is never searched and symlinks are never dereferenced.

@@ -136,6 +136,7 @@ fn full_trust_assessment_shape_matches_contract() {
     let trust = &server["trustAssessment"];
     for field in [
         "artifactIdentity",
+        "artifactIdentityRationale",
         "configurationRisk",
         "aggregate",
         "needsReview",
@@ -249,6 +250,10 @@ fn remote_server_gets_partial_assessment_per_fr057() {
     assert_eq!(trust["executablePath"], "not-applicable");
     assert!(trust.get("sha256").is_none());
     assert_eq!(trust["artifactIdentity"], "unknown");
+    assert!(trust["artifactIdentityRationale"]
+        .as_str()
+        .unwrap()
+        .contains("no local invocation to assess"));
 
     // Environment-variable assessment still ran (FR-057a).
     let indicators = trust["indicators"].as_array().unwrap();

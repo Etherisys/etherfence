@@ -8,6 +8,20 @@
 
 **Organization**: Tasks are grouped by user story (spec.md priorities P1/P1/P1/P2/P2) to enable independent implementation and testing of each story.
 
+## Post-implementation review remediation (PR #30)
+
+After all 62 tasks below were completed and PR #30 opened, an external review of the diff found Windows CI failing plus 6 implementation defects. All were fixed in the same PR before merge:
+
+1. **Windows CI failure**: `non_regular_file_is_classified_and_indicated` hardcoded `/tmp` (only a directory on Unix) — rewritten to create a real temporary directory at test time. `eligible_absolute_regular_file_is_hashed_and_verified_local`'s hardcoded SHA-256 assertion mismatched on Windows because the default `core.autocrlf=true` checkout rewrote the checked-in script's LF line endings to CRLF — fixed with a new `.gitattributes` marking that one file `-text`. The checked-in symlink fixture was also replaced with one created at test time (defensive hardening — CI evidence showed it already worked, but it removed a fragile dependency on `core.symlinks` checkout behavior).
+2. **Workspace version still 1.2.0**: bumped `Cargo.toml` to `1.3.0`, regenerated `Cargo.lock`, updated the two hardcoded `cli_scan.rs` version assertions, `docs/install.md`'s version references, and regenerated `docs/examples/ci/baseline.json`.
+3. **Hashing was not actually TOCTOU/symlink-race safe**: the original implementation checked `symlink_metadata` then called `File::open` — a symlink could be swapped in between and followed, or a replacement file could coincidentally match the original's length/mtime. Fixed with `open_no_follow` (Unix `O_NOFOLLOW`, closing the race atomically at the kernel level) plus `same_file_identity` (device+inode / volume+file-index comparison, not just length/mtime) checked against the *opened handle's own metadata*, both before and after the read.
+4. **Secret-variable escalation depended on assessment order**: `assess_environment` ran before `assess_unicode_identity`, so a high-severity Unicode finding arriving *after* the environment check was invisible to the `EF-TRUST-ENV-005`/`006` escalation decision. Fixed by splitting into `assess_environment_categories` (runs anywhere, returns pending secret-like names) and `finalize_secret_like_indicators` (runs only after every other assessment area has already contributed its indicators).
+5. **PEP 440 wildcard/compound expressions misclassified as exact**: `package==1.2.*` (version-matching wildcard) and `package===1.2` (arbitrary equality, a distinct operator whose `==`-prefix corrupted the original parse) both incorrectly classified as `ExactlyPinned`. Fixed with explicit `===` detection before the `==` check, and `is_exact_pep440_version` rejecting wildcards/whitespace/etc.
+6. **PowerShell download-and-execute false positive**: `has_download && has_exec` matched both tokens appearing anywhere in the command, including when separated by `;` or piped through an unrelated intermediate cmdlet. Fixed with bounded adjacent-pipe-segment matching (mirroring the existing `pipe_to_shell_pattern` design).
+7. **Remote artifact-identity rationale absent**: FR-057c requires explicit rationale text for a remote server's `unknown` artifact identity. Added a new, always-present `artifactIdentityRationale` string field to `TrustAssessment`, populated deterministically for every `ArtifactIdentityConfidence` value (not only the remote case, for shape consistency) — `ef-setup-detect/v0.2`'s only post-hoc field addition.
+
+All fixes are covered by new regression tests proving the exact scenario described in each finding. Full release gate (`fmt`/`clippy`/`test`/`build`/`git diff --check`) re-verified green after each fix and once more at the end.
+
 ## Format: `[ID] [P?] [Story] Description`
 
 - **[P]**: Can run in parallel (touches a different file than every other task marked `[P]` in the same subsection, with no dependency on an incomplete task in that subsection)

@@ -10,10 +10,6 @@ args = []
 command = "/nonexistent/etherfence-trust-fixture/does-not-exist"
 args = []
 
-[mcp_servers.non-regular-file]
-command = "/tmp"
-args = []
-
 [mcp_servers.ambiguous-empty-command]
 command = ""
 args = []

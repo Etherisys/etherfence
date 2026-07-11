@@ -444,6 +444,11 @@ fn render_setup_detect(root: &Path, detections: &[etherfence_setup::SetupDetecti
                 kebab_label(&trust.aggregate),
                 trust.needs_review
             );
+            let _ = writeln!(
+                out,
+                "    trust artifact-identity rationale: {}",
+                trust.artifact_identity_rationale
+            );
             if trust.indicators.is_empty() {
                 let _ = writeln!(out, "    trust indicators: none");
             } else {
