@@ -39,17 +39,21 @@ check_ttyd() {
 }
 
 # ── prerequisites ──────────────────────────────────────────────────────
-# Verify font (fontconfig-based; macOS ships a different toolchain)
-if command -v fc-list >/dev/null 2>&1; then
-  if ! fc-list 2>/dev/null > "$TMPDIR/fonts"; then
-    echo "error: fc-list command failed" >&2
-    exit 1
-  fi
-  if ! grep -qi "DejaVu.*Mono" "$TMPDIR/fonts"; then
-    echo "error: DejaVu Sans Mono font is required for GIF rendering" >&2
-    echo "  Install: sudo apt-get install fonts-dejavu-core" >&2
-    exit 1
-  fi
+# Verify font (fontconfig-based; Linux-specific).
+if ! command -v fc-list >/dev/null 2>&1; then
+  echo "error: fc-list (fontconfig) is required for reproducible font rendering" >&2
+  echo "  Install: sudo apt-get install fontconfig fonts-dejavu-core" >&2
+  echo "  macOS: fontconfig is available via Homebrew (brew install fontconfig)" >&2
+  exit 1
+fi
+if ! fc-list 2>/dev/null > "$TMPDIR/fonts"; then
+  echo "error: fc-list command failed" >&2
+  exit 1
+fi
+if ! grep -qi "DejaVu.*Mono" "$TMPDIR/fonts"; then
+  echo "error: DejaVu Sans Mono font is required for reproducible rendering" >&2
+  echo "  Install: sudo apt-get install fonts-dejavu-core" >&2
+  exit 1
 fi
 
 cargo build --release -p etherfence-cli --bin etherfence

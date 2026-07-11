@@ -908,15 +908,14 @@ fn render_setup_detect(root: &Path, detections: &[etherfence_setup::SetupDetecti
             let _ = writeln!(out, "    capabilities: {}", labels.join(", "));
             let _ = writeln!(
                 out,
-                "    recommendation: {} (needs-review={}) — {}",
+                "    starter policy: {} — {}",
                 recommendation_tier_label(server.recommendation.tier),
-                server.recommendation.needs_review,
                 server.recommendation.rationale
             );
             let trust = &server.trust_assessment;
             let _ = writeln!(
                 out,
-                "    trust: artifact-identity={} configuration-risk={} aggregate={} needs-review={}",
+                "    trust assessment: artifact-identity={} configuration-risk={} aggregate={} review-needed={}",
                 kebab_label(&trust.artifact_identity),
                 kebab_label(&trust.configuration_risk),
                 kebab_label(&trust.aggregate),

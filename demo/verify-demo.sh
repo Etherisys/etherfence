@@ -67,8 +67,8 @@ assert_contains "$setup_output" "Root: demo/workspace"
 assert_contains "$setup_output" "Claude Code [write-supported]"
 assert_contains "$setup_output" "filesystem-server transport=stdio wrapped=false"
 assert_contains "$setup_output" "capabilities: filesystem"
-assert_contains "$setup_output" "recommendation: deny (needs-review=false)"
-assert_contains "$setup_output" "trust: artifact-identity=known-source configuration-risk=needs-review aggregate=needs-review needs-review=true"
+assert_contains "$setup_output" "starter policy: deny"
+assert_contains "$setup_output" "trust assessment: artifact-identity=known-source configuration-risk=needs-review aggregate=needs-review review-needed=true"
 assert_contains "$setup_output" "EF-TRUST-PIN-001 [medium] package-pinning: Package version is omitted"
 assert_not_contains "$setup_output" "DEMO_TOKEN"
 # No synthetic secret-looking env var in fixture
@@ -111,7 +111,9 @@ if [[ -s "$ETHERFENCE_DEMO_EXEC_LOG" ]]; then
   exit 1
 fi
 
-# ── splash check: tagline is present in --help output ─────────────────
+# ── CLI contract: tagline appears in --help output ────────────────────
+# Note: the startup splash is verified by banner unit tests
+# (banner::tests::*) and by visual inspection of recorded frames.
 splash_output="$("$etherfence" --help 2>&1)"
 assert_contains "$splash_output" "AI Agent Security Posture"
 assert_contains "$splash_output" "Runtime Control"

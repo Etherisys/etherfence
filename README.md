@@ -61,11 +61,11 @@
 </p>
 
 The recording runs the real `etherfence` binary against checked-in fixtures
-in four scenes:
+in three scenes:
 
-- **Identity splash** — colored ETHERFENCE banner and tagline
-- **Posture scan** — `etherfence scan` discovers a Claude Code filesystem MCP
-  server with broad filesystem access
+- **Identity + posture scan** — `etherfence scan` prints the colored
+  ETHERFENCE splash, then discovers a Claude Code filesystem MCP server
+  with broad filesystem access
 - **Setup assessment** — `etherfence setup detect` reports capability,
   trust indicators, and a deny-by-default starter-policy recommendation
 - **Policy enforcement** — `etherfence mcp-policy check` denies an

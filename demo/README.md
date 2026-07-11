@@ -4,12 +4,18 @@ This directory contains the reproducible terminal demo used near the top of the 
 
 The demo shows the complete product story without faking CLI output:
 
-1. **EtherFence identity** — real colored splash with tagline
-2. **Broad posture scan** — `etherfence scan --root .` discovers local AI agent risks
-3. **MCP setup assessment** — `etherfence setup detect --root .` assesses MCP server capability, trust, and starter-policy recommendation
-4. **Runtime policy enforcement** — `etherfence mcp-policy check` denies an unauthorized `filesystem.write`
+1. **Identity + posture scan** — `etherfence scan --root .` prints the real
+   colored ETHERFENCE splash, then discovers local AI agent risks
+2. **MCP setup assessment** — `etherfence setup detect --root .` assesses
+   MCP server capability, trust, and starter-policy recommendation
+3. **Runtime policy enforcement** — `etherfence mcp-policy check` denies an
+   unauthorized `filesystem.write` with a multiline shell command
 
-All four scenes use real compiled EtherFence binary output. The demo workspace fixture describes a Claude Code filesystem MCP server with an unpinned `npx` package reference. The fixture contains no synthetic or staged findings — every displayed risk is naturally produced by the real detection and scan engines.
+All three scenes use real compiled EtherFence binary output. The demo
+workspace fixture describes a Claude Code filesystem MCP server with an
+unpinned `npx` package reference. The fixture contains no synthetic or
+staged findings — every displayed risk is naturally produced by the real
+detection and scan engines.
 
 ## Files
 
@@ -77,10 +83,9 @@ test (`cargo test --test cli_demo`) for cross-platform fixture validation.
 
 | Time | Scene | Command |
 |---|---|---|
-| 0–2s | Identity splash | `etherfence` (real banner + tagline) |
-| 2–8s | Posture scan | `etherfence scan --root .` |
-| 8–16s | Setup assessment | `etherfence setup detect --root .` |
-| 16–25s | Policy denial | `etherfence mcp-policy check` |
+| 0–7s | Identity + scan | `etherfence scan --root .` (splash auto-printed before scan output) |
+| 7–15s | Setup assessment | `etherfence setup detect --root .` |
+| 15–23s | Policy denial | `etherfence mcp-policy check` (multiline) |
 
 ## Accessibility
 

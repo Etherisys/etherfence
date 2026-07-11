@@ -93,9 +93,9 @@ fn demo_workspace_detects_claude_code_filesystem_server_without_executing_runner
     assert!(text.contains("Claude Code [write-supported]"));
     assert!(text.contains("filesystem-server transport=stdio wrapped=false"));
     assert!(text.contains("capabilities: filesystem"));
-    assert!(text.contains("recommendation: deny (needs-review=false)"));
+    assert!(text.contains("starter policy: deny"));
     assert!(text.contains(
-        "trust: artifact-identity=known-source configuration-risk=needs-review aggregate=needs-review needs-review=true"
+        "trust assessment: artifact-identity=known-source configuration-risk=needs-review aggregate=needs-review review-needed=true"
     ));
     assert!(text.contains("EF-TRUST-PIN-001 [medium] package-pinning: Package version is omitted"));
     // The fixture intentionally has no synthetic DEMO_TOKEN env var
