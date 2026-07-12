@@ -696,16 +696,44 @@ fn identical_pre_existing_policy_is_never_adopted() {
 
 // ── snapshot consistency and bounded read (v1.6.2 hardening) ──────────
 
-/// An oversized config (> 5 MiB) must never receive canonical-entry
-/// snapshots. The bounded read rejects it, so `attach_entry_snapshots`
-/// returns early and every server in the detection keeps `raw_entry_sha256: None`.
+/// Writes a `.vscode/settings.json` using the nested `mcp.servers` shape
+/// (SupportedShape::NestedMcpServers) with one unwrapped stdio server.
+fn write_vscode_nested_config(root: &Path) -> PathBuf {
+    let dir = root.join(".vscode");
+    fs::create_dir_all(&dir).expect("create .vscode dir");
+    let path = dir.join("settings.json");
+    fs::write(
+        &path,
+        r#"{
+  "mcp": {
+    "servers": {
+      "browser": {
+        "command": "npx",
+        "args": ["-y", "@anthropic/mcp-server-browser"]
+      }
+    }
+  }
+}
+"#,
+    )
+    .expect("write vscode nested config");
+    path
+}
+
+/// An oversized config (> 5 MiB) cannot be read by the inventory system
+/// (which uses the same bounded 5 MiB reader). The detection therefore
+/// contains zero servers, and `attach_entry_snapshots` is never reached
+/// — the bounded-read defense fires at the inventory layer.
+///
+/// The focused unit tests in `etherfence-setup/src/lib.rs`
+/// (`attach_entry_snapshots_rejects_oversized_config`) separately prove
+/// that `attach_entry_snapshots` itself rejects an oversized config when
+/// called independently.
 #[test]
-fn oversized_supported_config_yields_no_snapshot() {
+fn oversized_config_prevented_at_inventory_layer_no_snapshot_possible() {
     let root = temp_root("oversized");
     let config_path = root.join(".claude.json");
 
-    // Build a valid JSON config whose total size exceeds 5 MiB. Write
-    // a 5.01 MiB padding value so the file is just past the bound.
     let padding_len = 5 * 1024 * 1024 + 1024; // 5 MiB + 1 KiB
     let padding = "x".repeat(padding_len);
     let config_json = serde_json::json!({
@@ -720,57 +748,46 @@ fn oversized_supported_config_yields_no_snapshot() {
     fs::write(&config_path, config_json.to_string()).expect("write oversized config");
     assert!(
         config_path.metadata().expect("metadata").len() > 5 * 1024 * 1024,
-        "test precondition: config must exceed 5 MiB"
+        "precondition: config must exceed 5 MiB"
     );
 
     let detections = detect(&root);
-    assert!(
-        !detections.is_empty(),
-        "must detect the config even if oversized"
-    );
 
-    for detection in &detections {
-        for server in &detection.servers {
-            assert!(
-                server.raw_entry_sha256.is_none(),
-                "oversized config must never receive snapshot hashes; \
-                 server '{}' got one",
-                server.name
-            );
-        }
-    }
+    // Inventory discovers the file exists but the bounded read rejects it.
+    let claude = detections
+        .iter()
+        .find(|d| d.config_path == "~/.claude.json")
+        .expect("oversized .claude.json must still appear as a detection entry");
+    assert!(
+        claude.servers.is_empty(),
+        "oversized config must produce zero parsed servers — \
+         inventory's bounded read rejects the file before parsing"
+    );
 }
 
-/// A supported config that exists but cannot be read as UTF-8 JSON must
-/// never receive canonical-entry snapshots. The bounded read returns an
-/// error, so `attach_entry_snapshots` returns early.
+/// An invalid-UTF-8 supported config cannot be parsed by inventory.
+/// Detection produces a presence entry with zero servers and zero
+/// snapshot-eligible candidates. The bounded read in inventory and the
+/// bounded read in `attach_entry_snapshots` both fail on the same bad
+/// file; snapshot attachment is never called with a non-empty server list.
 #[test]
-fn unreadable_supported_config_yields_no_snapshot() {
-    let root = temp_root("unreadable-config");
-
-    // Create a `.claude.json` with invalid UTF-8 bytes so
-    // `read_bounded_text_file` fails.
+fn invalid_utf8_config_produces_no_snapshot_eligible_servers() {
+    let root = temp_root("bad-utf8");
     let config_path = root.join(".claude.json");
     let mut bad_bytes = vec![b'{', b'"', b'm', b'c', b'p', b'S'];
     bad_bytes.push(0xFF); // invalid UTF-8 byte
-    fs::write(&config_path, &bad_bytes).expect("write unreadable config");
+    fs::write(&config_path, &bad_bytes).expect("write bad config");
 
     let detections = detect(&root);
 
-    // The config file exists, so inventory detects it (presence-entry)
-    // but parsing fails. It should appear with no servers and no snapshots.
-    for detection in &detections {
-        if detection.config_path.contains(".claude.json") {
-            for server in &detection.servers {
-                assert!(
-                    server.raw_entry_sha256.is_none(),
-                    "unreadable config must never receive snapshot hashes; \
-                     server '{}' got one",
-                    server.name
-                );
-            }
-        }
-    }
+    let claude = detections
+        .iter()
+        .find(|d| d.config_path == "~/.claude.json")
+        .expect("invalid-UTF-8 .claude.json must still appear as a detection entry");
+    assert!(
+        claude.servers.is_empty(),
+        "invalid-UTF-8 config must produce zero parsed servers"
+    );
 }
 
 /// The snapshot hash computed at detection time must match the hash the
@@ -810,50 +827,60 @@ fn detect_snapshot_consistency_across_detect_and_plan() {
     );
 }
 
-/// Verify that every stdio server in every writable supported config
-/// receives a canonical-entry snapshot during detection, and that the
-/// hash is 64 hex chars (SHA-256).
+/// Verify that stdio servers in writable supported configs — covering
+/// both top-level (`mcpServers`) and nested (`mcp.servers`) shapes —
+/// receive canonical-entry snapshots during detection. Includes
+/// `.claude.json` (top-level), `.cursor/mcp.json` (top-level), and
+/// `.vscode/settings.json` (nested), representing the three distinct
+/// path families and both `SupportedShape` variants.
 #[test]
-fn all_supported_stdio_servers_get_snapshots() {
+fn representative_top_level_and_nested_configs_get_snapshots() {
     let root = temp_root("all-snapshot");
     write_claude_config(&root);
     write_cursor_config(&root);
+    write_vscode_nested_config(&root);
 
     let detections = detect(&root);
 
-    for detection in &detections {
-        // Only writable supported configs get snapshots.
-        let is_supported = detection.agent == "Claude Code" || detection.agent == "Cursor";
+    // Named expectations: each config's servers with their expected shape.
+    let expected: &[(&str, &[&str])] = &[
+        ("~/.claude.json", &["filesystem", "fetcher"]),
+        ("~/.cursor/mcp.json", &["helper"]),
+        ("~/.vscode/settings.json", &["browser"]),
+    ];
+
+    for (config_path, server_names) in expected {
+        let detection = detections
+            .iter()
+            .find(|d| d.config_path == *config_path)
+            .unwrap_or_else(|| panic!("expected detection for {config_path}"));
+
+        assert_eq!(
+            detection.servers.len(),
+            server_names.len(),
+            "server count mismatch for {config_path}"
+        );
+
         for server in &detection.servers {
-            if is_supported {
-                let hash = server.raw_entry_sha256.as_ref().unwrap_or_else(|| {
-                    panic!(
-                        "supported server '{}/{}' must have a snapshot hash",
-                        detection.config_path, server.name
-                    )
-                });
-                assert_eq!(
-                    hash.len(),
-                    64,
-                    "snapshot hash for '{}/{}' must be 64 hex chars, got {}",
-                    detection.config_path,
-                    server.name,
-                    hash.len()
-                );
-                assert!(
-                    hash.chars().all(|c| c.is_ascii_hexdigit()),
-                    "snapshot hash for '{}/{}' must be hex: {hash}",
-                    detection.config_path,
-                    server.name
-                );
-            } else {
-                assert!(
-                    server.raw_entry_sha256.is_none(),
-                    "unsupported/absent config '{}/{}' must not have snapshot",
-                    detection.config_path,
-                    server.name
-                );
-            }
+            let hash = server.raw_entry_sha256.as_ref().unwrap_or_else(|| {
+                panic!(
+                    "server '{}/{}' must have a snapshot hash (nested-shape configs are supported)",
+                    detection.config_path, server.name
+                )
+            });
+            assert_eq!(
+                hash.len(),
+                64,
+                "snapshot hash for '{}/{}' must be 64 hex chars",
+                detection.config_path,
+                server.name
+            );
+            assert!(
+                hash.chars().all(|c| c.is_ascii_hexdigit()),
+                "snapshot hash for '{}/{}' must be hex: {hash}",
+                detection.config_path,
+                server.name
+            );
         }
     }
 }
