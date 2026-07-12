@@ -693,3 +693,167 @@ fn identical_pre_existing_policy_is_never_adopted() {
     assert_eq!(survivor, identical);
     assert!(!root.join(".etherfence/backups").exists());
 }
+
+// ── snapshot consistency and bounded read (v1.6.2 hardening) ──────────
+
+/// An oversized config (> 5 MiB) must never receive canonical-entry
+/// snapshots. The bounded read rejects it, so `attach_entry_snapshots`
+/// returns early and every server in the detection keeps `raw_entry_sha256: None`.
+#[test]
+fn oversized_supported_config_yields_no_snapshot() {
+    let root = temp_root("oversized");
+    let config_path = root.join(".claude.json");
+
+    // Build a valid JSON config whose total size exceeds 5 MiB. Write
+    // a 5.01 MiB padding value so the file is just past the bound.
+    let padding_len = 5 * 1024 * 1024 + 1024; // 5 MiB + 1 KiB
+    let padding = "x".repeat(padding_len);
+    let config_json = serde_json::json!({
+        "mcpServers": {
+            "test-server": {
+                "command": "npx",
+                "args": ["-y", "some-package"],
+                "_padding": padding
+            }
+        }
+    });
+    fs::write(&config_path, config_json.to_string()).expect("write oversized config");
+    assert!(
+        config_path.metadata().expect("metadata").len() > 5 * 1024 * 1024,
+        "test precondition: config must exceed 5 MiB"
+    );
+
+    let detections = detect(&root);
+    assert!(
+        !detections.is_empty(),
+        "must detect the config even if oversized"
+    );
+
+    for detection in &detections {
+        for server in &detection.servers {
+            assert!(
+                server.raw_entry_sha256.is_none(),
+                "oversized config must never receive snapshot hashes; \
+                 server '{}' got one",
+                server.name
+            );
+        }
+    }
+}
+
+/// A supported config that exists but cannot be read as UTF-8 JSON must
+/// never receive canonical-entry snapshots. The bounded read returns an
+/// error, so `attach_entry_snapshots` returns early.
+#[test]
+fn unreadable_supported_config_yields_no_snapshot() {
+    let root = temp_root("unreadable-config");
+
+    // Create a `.claude.json` with invalid UTF-8 bytes so
+    // `read_bounded_text_file` fails.
+    let config_path = root.join(".claude.json");
+    let mut bad_bytes = vec![b'{', b'"', b'm', b'c', b'p', b'S'];
+    bad_bytes.push(0xFF); // invalid UTF-8 byte
+    fs::write(&config_path, &bad_bytes).expect("write unreadable config");
+
+    let detections = detect(&root);
+
+    // The config file exists, so inventory detects it (presence-entry)
+    // but parsing fails. It should appear with no servers and no snapshots.
+    for detection in &detections {
+        if detection.config_path.contains(".claude.json") {
+            for server in &detection.servers {
+                assert!(
+                    server.raw_entry_sha256.is_none(),
+                    "unreadable config must never receive snapshot hashes; \
+                     server '{}' got one",
+                    server.name
+                );
+            }
+        }
+    }
+}
+
+/// The snapshot hash computed at detection time must match the hash the
+/// apply drift gate computes from the same config content. Build a plan,
+/// then verify the plan's `expected_entry_sha256` equals what `detect()`
+/// assigned to the same server.
+#[test]
+fn detect_snapshot_consistency_across_detect_and_plan() {
+    let root = temp_root("snapshot-consistent");
+    write_claude_config(&root);
+
+    let detections = detect(&root);
+
+    // Extract the entry hash detect assigned to "filesystem".
+    let claude_detection = detections
+        .iter()
+        .find(|d| d.config_path == "~/.claude.json")
+        .expect("claude config detected");
+    let filesystem = claude_detection
+        .servers
+        .iter()
+        .find(|s| s.name == "filesystem")
+        .expect("filesystem server found");
+    let detect_hash = filesystem
+        .raw_entry_sha256
+        .as_ref()
+        .expect("filesystem must have a snapshot hash");
+
+    // Build a wizard plan; the plan embeds the same hash.
+    let selections = selections_for(&[claude_id(&root, "filesystem")]);
+    let plan = build_wizard_plan(&detections, &selections, &root.display().to_string())
+        .expect("build plan");
+
+    assert_eq!(
+        plan.selected_servers[0].expected_entry_sha256, *detect_hash,
+        "plan's expected_entry_sha256 must match the snapshot hash from detect()"
+    );
+}
+
+/// Verify that every stdio server in every writable supported config
+/// receives a canonical-entry snapshot during detection, and that the
+/// hash is 64 hex chars (SHA-256).
+#[test]
+fn all_supported_stdio_servers_get_snapshots() {
+    let root = temp_root("all-snapshot");
+    write_claude_config(&root);
+    write_cursor_config(&root);
+
+    let detections = detect(&root);
+
+    for detection in &detections {
+        // Only writable supported configs get snapshots.
+        let is_supported = detection.agent == "Claude Code" || detection.agent == "Cursor";
+        for server in &detection.servers {
+            if is_supported {
+                let hash = server.raw_entry_sha256.as_ref().unwrap_or_else(|| {
+                    panic!(
+                        "supported server '{}/{}' must have a snapshot hash",
+                        detection.config_path, server.name
+                    )
+                });
+                assert_eq!(
+                    hash.len(),
+                    64,
+                    "snapshot hash for '{}/{}' must be 64 hex chars, got {}",
+                    detection.config_path,
+                    server.name,
+                    hash.len()
+                );
+                assert!(
+                    hash.chars().all(|c| c.is_ascii_hexdigit()),
+                    "snapshot hash for '{}/{}' must be hex: {hash}",
+                    detection.config_path,
+                    server.name
+                );
+            } else {
+                assert!(
+                    server.raw_entry_sha256.is_none(),
+                    "unsupported/absent config '{}/{}' must not have snapshot",
+                    detection.config_path,
+                    server.name
+                );
+            }
+        }
+    }
+}

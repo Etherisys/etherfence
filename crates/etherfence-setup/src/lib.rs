@@ -244,7 +244,7 @@ fn attach_entry_snapshots(root: &Path, detection: &mut SetupDetection) {
         return;
     };
     let path = root.join(config.relative_path);
-    let Ok(content) = fs::read_to_string(&path) else {
+    let Ok(content) = read_bounded_text_file(&path, MAX_CONFIG_FILE_BYTES) else {
         return;
     };
     let Ok(value) = serde_json::from_str::<JsonValue>(&content) else {

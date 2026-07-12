@@ -1,6 +1,6 @@
 # Install
 
-Status: **v1.6.1 — production-ready for controlled local-first deployments
+Status: **v1.6.2 — production-ready for controlled local-first deployments
 of its defined scope** (`scan`, `mcp-policy`, and the stdio `mcp-proxy`
 boundary) with a stable CLI and policy schema — not a universal
 certification for every MCP server, MCP client, or deployment environment,
@@ -32,7 +32,7 @@ Download both files for the release you want, then:
 sha256sum -c etherfence-linux-x86_64.tar.gz.sha256
 
 # Extract. The archive contains a versioned directory, e.g.
-# etherfence-v1.6.1-linux-x86_64/{etherfence,README.md,LICENSE}.
+# etherfence-v1.6.2-linux-x86_64/{etherfence,README.md,LICENSE}.
 tar -xzf etherfence-linux-x86_64.tar.gz
 
 # Run it in place...
@@ -62,7 +62,7 @@ $actual = (Get-FileHash etherfence-windows-x86_64.zip -Algorithm SHA256).Hash
 if ($actual -ne $expected.ToUpper()) { throw "checksum mismatch" }
 
 # Extract. The archive contains a versioned directory, e.g.
-# etherfence-v1.6.1-windows-x86_64\{etherfence.exe,README.md,LICENSE}.
+# etherfence-v1.6.2-windows-x86_64\{etherfence.exe,README.md,LICENSE}.
 Expand-Archive etherfence-windows-x86_64.zip -DestinationPath .
 
 # Run it in place...
@@ -105,7 +105,7 @@ etherfence --version
 ```
 
 should print `etherfence <version>` matching the release or checkout you
-installed (`1.6.1` for this release).
+installed (`1.6.2` for this release).
 
 ## Run your first scan
 
