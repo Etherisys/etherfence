@@ -1314,9 +1314,10 @@ fn run_setup_wizard() -> Result<()> {
     // -----------------------------------------------------------------
     eprintln!("{}", theme.step(3, 7, "Choose MCP servers"));
 
-    let mut version_pins: HashMap<String, String> = HashMap::new();
-    let mut policy_types: HashMap<String, etherfence_setup::PolicyType> = HashMap::new();
-    let mut selected_server_keys: Vec<String> = Vec::new();
+    let mut version_pins: HashMap<etherfence_setup::WizardServerId, String> = HashMap::new();
+    let mut policy_types: HashMap<etherfence_setup::WizardServerId, etherfence_setup::PolicyType> =
+        HashMap::new();
+    let mut selected_ids: Vec<etherfence_setup::WizardServerId> = Vec::new();
 
     for &client_idx in &client_indices {
         let group = &clients[client_idx];
@@ -1350,24 +1351,37 @@ fn run_setup_wizard() -> Result<()> {
                 continue;
             }
 
-            let server_items: Vec<String> = client
-                .servers
+            // Already-protected and remote servers are shown for context
+            // but are not selectable: the wizard cannot change them, so
+            // offering them would only produce false-success plans.
+            let mut selectable: Vec<usize> = Vec::new();
+            for (index, server) in client.servers.iter().enumerate() {
+                if server.wrapped {
+                    eprintln!(
+                        "  {} {}",
+                        ui::pad(&server.name, 24),
+                        theme.muted.apply_to("already protected — no action needed")
+                    );
+                } else if server.transport != etherfence_setup::ServerTransport::Stdio {
+                    eprintln!(
+                        "  {} {}",
+                        ui::pad(&server.name, 24),
+                        theme.muted.apply_to("remote server — cannot be wrapped")
+                    );
+                } else {
+                    selectable.push(index);
+                }
+            }
+            if selectable.is_empty() {
+                continue;
+            }
+
+            let server_items: Vec<String> = selectable
                 .iter()
-                .map(|server| {
-                    let mut notes: Vec<&str> = Vec::new();
-                    if server.wrapped {
-                        notes.push("already protected");
-                    }
-                    if server.transport != etherfence_setup::ServerTransport::Stdio {
-                        notes.push("remote server");
-                    }
-                    let notes = if notes.is_empty() {
-                        String::new()
-                    } else {
-                        format!("  ({})", notes.join(", "))
-                    };
+                .map(|&index| {
+                    let server = &client.servers[index];
                     format!(
-                        "{} {}{notes}",
+                        "{} {}",
                         ui::pad(&server.name, 24),
                         plain_risk_badge(server.trust_assessment.aggregate)
                     )
@@ -1388,8 +1402,12 @@ fn run_setup_wizard() -> Result<()> {
             };
 
             for &pick in &picks {
-                let server = &client.servers[pick];
-                let key = format!("{}:{}", client.agent, server.name);
+                let server = &client.servers[selectable[pick]];
+                let id = etherfence_setup::WizardServerId {
+                    agent: client.agent.clone(),
+                    config_path: client.config_path.clone(),
+                    server_name: server.name.clone(),
+                };
 
                 // ---------------------------------------------------------
                 // Step 4 (per server) - Resolve trust and pinning issues
@@ -1570,23 +1588,23 @@ fn run_setup_wizard() -> Result<()> {
                 };
 
                 // All decisions made — commit this server's selection.
-                selected_server_keys.push(key.clone());
+                selected_ids.push(id.clone());
                 if let Some(version) = pending_pin {
-                    version_pins.insert(key.clone(), version);
+                    version_pins.insert(id.clone(), version);
                 }
-                policy_types.insert(key, policy_type);
+                policy_types.insert(id, policy_type);
             }
         }
     }
 
-    if selected_server_keys.is_empty() {
+    if selected_ids.is_empty() {
         eprintln!("\nNo servers selected for configuration. Exiting wizard; no changes were made.");
         return Ok(());
     }
 
     // Build WizardSelections and construct the plan via wizard.rs engine
     let selections = etherfence_setup::WizardSelections {
-        selected_keys: selected_server_keys,
+        selected: selected_ids,
         version_pins,
         policy_types,
         trust_overrides: HashMap::new(),
@@ -1670,8 +1688,12 @@ fn run_setup_wizard() -> Result<()> {
     let mut unchanged: Vec<String> = Vec::new();
     for detection in &detections {
         for server in &detection.servers {
-            let key = format!("{}:{}", detection.agent, server.name);
-            if !plan.selected_servers.iter().any(|s| s.key == key) {
+            let selected = plan.selected_servers.iter().any(|s| {
+                s.agent == detection.agent
+                    && s.config_path == detection.config_path
+                    && s.server_name == server.name
+            });
+            if !selected {
                 unchanged.push(format!("{} / {}", detection.agent, server.name));
             }
         }
@@ -2399,13 +2421,22 @@ fn render_scan_summary(report: &ScanReport) -> String {
             "None displayed. Missing files are skipped gracefully; this does not prove the host is secure."
         );
     } else {
+        // Keep the default report scannable on hosts with many findings:
+        // show the first few priority findings and count the rest.
+        const MAX_PRIORITY_FINDINGS: usize = 10;
         let mut printed = false;
+        let mut shown = 0usize;
+        let mut suppressed = 0usize;
         for severity in [Severity::High, Severity::Medium] {
             for finding in report
                 .findings
                 .iter()
                 .filter(|finding| finding.severity == severity)
             {
+                if shown >= MAX_PRIORITY_FINDINGS {
+                    suppressed += 1;
+                    continue;
+                }
                 let badge = match severity {
                     Severity::High => theme.danger.apply_to(ui::pad("HIGH", 7)).to_string(),
                     _ => theme.warning.apply_to(ui::pad("MEDIUM", 7)).to_string(),
@@ -2418,7 +2449,15 @@ fn render_scan_summary(report: &ScanReport) -> String {
                 );
                 let _ = writeln!(out, "        {} / {}", finding.agent, finding.target);
                 printed = true;
+                shown += 1;
             }
+        }
+        if suppressed > 0 {
+            let _ = writeln!(
+                out,
+                "{} {suppressed} more high/medium finding(s) — run `etherfence scan --verbose` for the full list",
+                theme.muted.apply_to(ui::pad("\u{2026}", 7))
+            );
         }
         let quiet = report
             .findings

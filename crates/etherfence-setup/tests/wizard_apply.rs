@@ -1,12 +1,11 @@
 //! Integration tests for `apply_wizard_plan`: the plan the user confirmed
 //! must be exactly what lands on disk. These tests verify resulting files,
-//! not just the plan structure.
+//! not just the plan structure, and every fail-closed preflight path.
 
 use etherfence_setup::{
-    apply_wizard_plan, build_wizard_plan, detect, PolicyType, WizardSelections,
+    apply_wizard_plan, build_wizard_plan, detect, PolicyType, WizardSelections, WizardServerId,
 };
 use serde_json::Value;
-use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -47,6 +46,28 @@ fn write_claude_config(root: &Path) -> PathBuf {
     path
 }
 
+/// Writes a `.claude/settings.json` defining a server named like one in
+/// `.claude.json` — the duplicate-name-across-configs scenario.
+fn write_claude_settings_config(root: &Path) -> PathBuf {
+    let dir = root.join(".claude");
+    fs::create_dir_all(&dir).expect("create .claude dir");
+    let path = dir.join("settings.json");
+    fs::write(
+        &path,
+        r#"{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["other-package"]
+    }
+  }
+}
+"#,
+    )
+    .expect("write claude settings config");
+    path
+}
+
 /// Writes a `.cursor/mcp.json` with one unwrapped stdio server.
 fn write_cursor_config(root: &Path) -> PathBuf {
     let dir = root.join(".cursor");
@@ -68,12 +89,19 @@ fn write_cursor_config(root: &Path) -> PathBuf {
     path
 }
 
-fn selections_for(keys: &[&str]) -> WizardSelections {
+fn claude_id(root: &Path, server_name: &str) -> WizardServerId {
+    let _ = root;
+    WizardServerId {
+        agent: "Claude Code".to_string(),
+        config_path: "~/.claude.json".to_string(),
+        server_name: server_name.to_string(),
+    }
+}
+
+fn selections_for(ids: &[WizardServerId]) -> WizardSelections {
     WizardSelections {
-        selected_keys: keys.iter().map(ToString::to_string).collect(),
-        version_pins: HashMap::new(),
-        policy_types: HashMap::new(),
-        trust_overrides: HashMap::new(),
+        selected: ids.to_vec(),
+        ..WizardSelections::default()
     }
 }
 
@@ -90,10 +118,9 @@ fn selecting_one_of_two_servers_modifies_only_that_server() {
     let fetcher_before = server_value(&config_path, "fetcher");
 
     let detections = detect(&root);
-    let mut selections = selections_for(&["Claude Code:filesystem"]);
-    selections
-        .version_pins
-        .insert("Claude Code:filesystem".to_string(), "1.2.3".to_string());
+    let id = claude_id(&root, "filesystem");
+    let mut selections = selections_for(std::slice::from_ref(&id));
+    selections.version_pins.insert(id, "1.2.3".to_string());
 
     let plan = build_wizard_plan(&detections, &selections, &root.display().to_string())
         .expect("build plan");
@@ -135,6 +162,36 @@ fn selecting_one_of_two_servers_modifies_only_that_server() {
 }
 
 #[test]
+fn duplicate_server_name_in_second_config_stays_untouched() {
+    // Same agent + same server name in two config files: selecting the
+    // server in `.claude.json` must never touch `.claude/settings.json`.
+    let root = temp_root("dup-name");
+    write_claude_config(&root);
+    let settings_path = write_claude_settings_config(&root);
+    let settings_before = fs::read(&settings_path).expect("read settings");
+
+    let detections = detect(&root);
+    let selections = selections_for(&[claude_id(&root, "filesystem")]);
+    let plan = build_wizard_plan(&detections, &selections, &root.display().to_string())
+        .expect("build plan");
+
+    // The plan itself must be scoped to one config.
+    assert_eq!(plan.selected_servers.len(), 1);
+    assert_eq!(plan.selected_servers[0].config_path, "~/.claude.json");
+    assert_eq!(plan.policies.len(), 1);
+
+    apply_wizard_plan(&root, &plan).expect("apply plan");
+
+    let settings_after = fs::read(&settings_path).expect("re-read settings");
+    assert_eq!(
+        settings_before, settings_after,
+        "the same-named server in the other config must stay byte-identical"
+    );
+    let dup = server_value(&settings_path, "filesystem");
+    assert_eq!(dup["command"], "npx");
+}
+
+#[test]
 fn config_without_any_selected_server_stays_byte_identical() {
     let root = temp_root("untouched-config");
     write_claude_config(&root);
@@ -142,7 +199,7 @@ fn config_without_any_selected_server_stays_byte_identical() {
     let cursor_before = fs::read(&cursor_path).expect("read cursor config");
 
     let detections = detect(&root);
-    let selections = selections_for(&["Claude Code:filesystem"]);
+    let selections = selections_for(&[claude_id(&root, "filesystem")]);
     let plan = build_wizard_plan(&detections, &selections, &root.display().to_string())
         .expect("build plan");
     apply_wizard_plan(&root, &plan).expect("apply plan");
@@ -183,9 +240,10 @@ fn custom_allowlist_policy_content_is_written() {
     write_claude_config(&root);
 
     let detections = detect(&root);
-    let mut selections = selections_for(&["Claude Code:filesystem"]);
+    let id = claude_id(&root, "filesystem");
+    let mut selections = selections_for(std::slice::from_ref(&id));
     selections.policy_types.insert(
-        "Claude Code:filesystem".to_string(),
+        id,
         PolicyType::CustomToolAllowlist(vec!["read_file".to_string(), "list_dir".to_string()]),
     );
 
@@ -219,7 +277,7 @@ fn unselected_server_gets_no_policy_file() {
     write_claude_config(&root);
 
     let detections = detect(&root);
-    let selections = selections_for(&["Claude Code:filesystem"]);
+    let selections = selections_for(&[claude_id(&root, "filesystem")]);
     let plan = build_wizard_plan(&detections, &selections, &root.display().to_string())
         .expect("build plan");
     apply_wizard_plan(&root, &plan).expect("apply plan");
@@ -237,10 +295,9 @@ fn previewed_plan_and_applied_changes_correspond() {
     let config_path = write_claude_config(&root);
 
     let detections = detect(&root);
-    let mut selections = selections_for(&["Claude Code:fetcher"]);
-    selections
-        .version_pins
-        .insert("Claude Code:fetcher".to_string(), "0.2.1".to_string());
+    let id = claude_id(&root, "fetcher");
+    let mut selections = selections_for(std::slice::from_ref(&id));
+    selections.version_pins.insert(id, "0.2.1".to_string());
 
     let plan = build_wizard_plan(&detections, &selections, &root.display().to_string())
         .expect("build plan");
@@ -278,12 +335,274 @@ fn invalid_version_pin_is_rejected_at_plan_time() {
     write_claude_config(&root);
 
     let detections = detect(&root);
-    for bad in ["latest", "^1.2", ">=2", "foo"] {
-        let mut selections = selections_for(&["Claude Code:filesystem"]);
-        selections
-            .version_pins
-            .insert("Claude Code:filesystem".to_string(), bad.to_string());
+    // `latest`/ranges/garbage plus npm partial versions, which are ranges,
+    // not exact pins.
+    for bad in ["latest", "^1.2", ">=2", "foo", "1", "1.2", "1..2", "1foo"] {
+        let id = claude_id(&root, "filesystem");
+        let mut selections = selections_for(std::slice::from_ref(&id));
+        selections.version_pins.insert(id, bad.to_string());
         let result = build_wizard_plan(&detections, &selections, &root.display().to_string());
         assert!(result.is_err(), "version {bad:?} must be rejected as a pin");
     }
+}
+
+#[test]
+fn deleted_config_aborts_apply_without_false_success() {
+    let root = temp_root("deleted-config");
+    let config_path = write_claude_config(&root);
+
+    let detections = detect(&root);
+    let selections = selections_for(&[claude_id(&root, "filesystem")]);
+    let plan = build_wizard_plan(&detections, &selections, &root.display().to_string())
+        .expect("build plan");
+
+    // The reviewed config disappears between preview and confirm.
+    fs::remove_file(&config_path).expect("delete config");
+
+    let error = apply_wizard_plan(&root, &plan).expect_err("apply must fail");
+    assert!(
+        format!("{error:#}").contains("no longer exists"),
+        "unexpected error: {error:#}"
+    );
+    assert!(
+        !root.join(".etherfence").exists(),
+        "no backup or policy may be written when the apply aborts"
+    );
+}
+
+#[test]
+fn post_preview_invocation_drift_aborts_apply() {
+    let root = temp_root("drift");
+    let config_path = write_claude_config(&root);
+
+    let detections = detect(&root);
+    let selections = selections_for(&[claude_id(&root, "filesystem")]);
+    let plan = build_wizard_plan(&detections, &selections, &root.display().to_string())
+        .expect("build plan");
+
+    // The invocation is swapped for a different package after preview.
+    let content = fs::read_to_string(&config_path).expect("read config");
+    let swapped = content.replace(
+        "@modelcontextprotocol/server-filesystem",
+        "evil-lookalike-package",
+    );
+    assert_ne!(content, swapped);
+    fs::write(&config_path, &swapped).expect("modify config");
+    let before = fs::read(&config_path).expect("read modified config");
+
+    let error = apply_wizard_plan(&root, &plan).expect_err("apply must fail");
+    assert!(
+        format!("{error:#}").contains("changed after the plan was reviewed"),
+        "unexpected error: {error:#}"
+    );
+    // Nothing was written: the modified config is untouched and no
+    // EtherFence artifacts exist.
+    let after = fs::read(&config_path).expect("re-read config");
+    assert_eq!(before, after);
+    assert!(!root.join(".etherfence").exists());
+}
+
+#[test]
+fn root_mismatch_aborts_apply() {
+    let root = temp_root("root-mismatch");
+    write_claude_config(&root);
+    let other_root = temp_root("root-mismatch-other");
+    write_claude_config(&other_root);
+
+    let detections = detect(&root);
+    let selections = selections_for(&[claude_id(&root, "filesystem")]);
+    let plan = build_wizard_plan(&detections, &selections, &root.display().to_string())
+        .expect("build plan");
+
+    let error = apply_wizard_plan(&other_root, &plan).expect_err("apply must fail");
+    assert!(
+        format!("{error:#}").contains("does not match the plan's root"),
+        "unexpected error: {error:#}"
+    );
+    assert!(!other_root.join(".etherfence").exists());
+}
+
+#[test]
+fn shared_parent_configs_get_distinct_policies_and_backups() {
+    // `.vscode/mcp.json` and `.vscode/settings.json` share one parent
+    // directory and here define the same server name — policies and
+    // backups must not collide.
+    let root = temp_root("shared-parent");
+    let dir = root.join(".vscode");
+    fs::create_dir_all(&dir).expect("create .vscode");
+    fs::write(
+        dir.join("mcp.json"),
+        r#"{"mcpServers": {"shared": {"command": "npx", "args": ["pkg-a"]}}}"#,
+    )
+    .expect("write mcp.json");
+    fs::write(
+        dir.join("settings.json"),
+        r#"{"mcp": {"servers": {"shared": {"command": "npx", "args": ["pkg-b"]}}}}"#,
+    )
+    .expect("write settings.json");
+
+    let detections = detect(&root);
+    let ids: Vec<WizardServerId> = detections
+        .iter()
+        .flat_map(|d| {
+            d.servers.iter().map(|s| WizardServerId {
+                agent: d.agent.clone(),
+                config_path: d.config_path.clone(),
+                server_name: s.name.clone(),
+            })
+        })
+        .collect();
+    assert_eq!(ids.len(), 2, "both shared servers detected: {ids:?}");
+
+    let selections = selections_for(&ids);
+    let plan = build_wizard_plan(&detections, &selections, &root.display().to_string())
+        .expect("build plan");
+    apply_wizard_plan(&root, &plan).expect("apply plan");
+
+    // Two distinct policy files exist.
+    let policy_dir = dir.join(".etherfence/policies");
+    let policies: Vec<PathBuf> = fs::read_dir(&policy_dir)
+        .expect("policy dir")
+        .map(|e| e.expect("entry").path())
+        .collect();
+    assert_eq!(
+        policies.len(),
+        2,
+        "each config's server needs its own policy file: {policies:?}"
+    );
+
+    // Two distinct backup directories exist, each with its own manifest.
+    let backup_dir = dir.join(".etherfence/backups");
+    let backups: Vec<PathBuf> = fs::read_dir(&backup_dir)
+        .expect("backup dir")
+        .map(|e| e.expect("entry").path())
+        .collect();
+    assert_eq!(backups.len(), 2, "one backup dir per config: {backups:?}");
+    for backup in &backups {
+        assert!(backup.join("manifest.json").is_file());
+        assert!(backup.join("original.json").is_file());
+    }
+
+    // Both servers are wrapped against different policy paths.
+    let mcp = server_value(&dir.join("mcp.json"), "shared");
+    let settings_content: Value = serde_json::from_str(
+        &fs::read_to_string(dir.join("settings.json")).expect("read settings"),
+    )
+    .expect("parse settings");
+    let settings = settings_content["mcp"]["servers"]["shared"].clone();
+    let policy_of = |server: &Value| -> String {
+        let args = server["args"].as_array().expect("args");
+        let idx = args
+            .iter()
+            .position(|a| a == "--policy")
+            .expect("--policy flag");
+        args[idx + 1].as_str().expect("policy path").to_string()
+    };
+    assert_ne!(
+        policy_of(&mcp),
+        policy_of(&settings),
+        "the two wrapped servers must reference different policy files"
+    );
+}
+
+#[test]
+fn sanitized_policy_name_collision_is_disambiguated() {
+    // `foo/bar` and `foo?bar` both sanitize to `foo-bar`.
+    let root = temp_root("sanitize-collision");
+    fs::write(
+        root.join(".claude.json"),
+        r#"{
+  "mcpServers": {
+    "foo/bar": {"command": "npx", "args": ["pkg-a"]},
+    "foo?bar": {"command": "npx", "args": ["pkg-b"]}
+  }
+}
+"#,
+    )
+    .expect("write config");
+
+    let detections = detect(&root);
+    let selections = selections_for(&[claude_id(&root, "foo/bar"), claude_id(&root, "foo?bar")]);
+    let plan = build_wizard_plan(&detections, &selections, &root.display().to_string())
+        .expect("build plan");
+    apply_wizard_plan(&root, &plan).expect("apply plan");
+
+    let policy_dir = root.join(".etherfence/policies");
+    let policies: Vec<String> = fs::read_dir(&policy_dir)
+        .expect("policy dir")
+        .map(|e| e.expect("entry").file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(
+        policies.len(),
+        2,
+        "colliding sanitized names must produce two distinct policy files: {policies:?}"
+    );
+
+    let config: Value =
+        serde_json::from_str(&fs::read_to_string(root.join(".claude.json")).expect("read"))
+            .expect("parse");
+    let policy_of = |name: &str| -> String {
+        let args = config["mcpServers"][name]["args"].as_array().expect("args");
+        let idx = args
+            .iter()
+            .position(|a| a == "--policy")
+            .expect("--policy flag");
+        args[idx + 1].as_str().expect("policy path").to_string()
+    };
+    assert_ne!(policy_of("foo/bar"), policy_of("foo?bar"));
+}
+
+#[test]
+fn pre_existing_policy_with_different_content_aborts_apply() {
+    let root = temp_root("existing-policy");
+    let config_path = write_claude_config(&root);
+    let before = fs::read(&config_path).expect("read config");
+
+    // An operator-authored policy already sits at the planned path.
+    let policy_dir = root.join(".etherfence/policies");
+    fs::create_dir_all(&policy_dir).expect("create policy dir");
+    fs::write(
+        policy_dir.join("filesystem.toml"),
+        "# operator-authored policy — not EtherFence generated\n",
+    )
+    .expect("write pre-existing policy");
+
+    let detections = detect(&root);
+    let selections = selections_for(&[claude_id(&root, "filesystem")]);
+    let plan = build_wizard_plan(&detections, &selections, &root.display().to_string())
+        .expect("build plan");
+
+    let error = apply_wizard_plan(&root, &plan).expect_err("apply must fail");
+    assert!(
+        format!("{error:#}").contains("refusing to overwrite"),
+        "unexpected error: {error:#}"
+    );
+    // The config was not modified and the operator's policy is intact.
+    let after = fs::read(&config_path).expect("re-read config");
+    assert_eq!(before, after);
+    let policy = fs::read_to_string(policy_dir.join("filesystem.toml")).expect("read policy");
+    assert!(policy.contains("operator-authored"));
+}
+
+#[test]
+fn plan_with_foreign_policy_entry_is_rejected() {
+    // A policy entry that belongs to no selected server means the plan is
+    // inconsistent; apply must refuse rather than write extra files.
+    let root = temp_root("foreign-policy");
+    write_claude_config(&root);
+
+    let detections = detect(&root);
+    let selections = selections_for(&[claude_id(&root, "filesystem")]);
+    let mut plan = build_wizard_plan(&detections, &selections, &root.display().to_string())
+        .expect("build plan");
+    let mut foreign = plan.policies[0].clone();
+    foreign.server_name = "fetcher".to_string();
+    plan.policies.push(foreign);
+
+    let error = apply_wizard_plan(&root, &plan).expect_err("apply must fail");
+    assert!(
+        format!("{error:#}").contains("unselected server"),
+        "unexpected error: {error:#}"
+    );
+    assert!(!root.join(".etherfence").exists());
 }

@@ -80,6 +80,41 @@ scanning, or network interception.
   `etherfence setup` and human-format commands show the splash on an
   interactive color TTY; JSON/Markdown/SARIF, raw policy TOML, and MCP
   proxy protocol traffic never do).
+- Wizard selections are now scoped by full server identity
+  (`WizardServerId`: agent + config path + server name), never by
+  `agent:server_name` alone — selecting a server in `~/.claude.json` no
+  longer also selects a same-named server in `~/.claude/settings.json`.
+- Apply now runs a complete preflight before creating any backup or
+  policy and aborts the whole operation — instead of reporting a false
+  "Setup complete" — when the apply root differs from the plan's root, a
+  planned configuration no longer exists, a selected server disappeared,
+  the plan is internally inconsistent (duplicate selections, missing or
+  duplicate policies/pins, entries for unselected servers), or the
+  prepared change counts differ from the reviewed plan.
+- Post-preview configuration drift is detected: the plan records the
+  exact command, argument list, and URL the user reviewed for every
+  selected server, and apply aborts if any of them changed — a package
+  swapped in after preview is never silently wrapped.
+- Already-wrapped and remote servers are no longer selectable in the
+  wizard (they are shown as explicit no-action rows), and
+  `build_wizard_plan` rejects them — plans can no longer promise policy/
+  proxy/backup changes that apply would silently skip.
+- npm version pins are validated with a real semver parser: partial
+  versions (`1`, `1.2`) and malformed input (`1..2`, `1foo`) are rejected
+  along with tags and ranges; only a complete `major.minor.patch` (with
+  optional prerelease/build metadata) is accepted.
+- Unknown `npx` options before the package token now fail closed instead
+  of being treated as the package name and rewritten; version pinning
+  refuses to rewrite any invocation whose package position is ambiguous.
+- Policy and backup output paths are collision-safe: sanitized policy
+  filename collisions (e.g. `foo/bar` vs `foo?bar`) are disambiguated
+  with a stable identity hash, backup directories include the config
+  file's stem plus a nanosecond timestamp (two configs sharing
+  `.vscode/` no longer race), and apply refuses to overwrite an existing
+  policy file whose content differs from the planned content.
+- The default `scan` view caps priority findings at 10 and points to
+  `--verbose` for the rest, keeping the summary scannable on hosts with
+  many findings.
 
 ## [1.6.0] - 2026-07-11
 

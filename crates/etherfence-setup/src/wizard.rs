@@ -189,45 +189,84 @@ pub struct PolicyEntry {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TrustOverride {
+    pub agent: String,
+    pub config_path: String,
     pub server_name: String,
     pub accepted_indicator_ids: Vec<String>,
     pub rationale: String,
 }
 
 // -----------------------------------------------------------------------
-// User selections (marshalled from wizard prompts)
+// Server identity and user selections (marshalled from wizard prompts)
 // -----------------------------------------------------------------------
 
+/// The full identity of one MCP server within one configuration file.
+///
+/// Two configuration files of the same client can define a server with
+/// the same name (e.g. `~/.claude.json` and `~/.claude/settings.json`);
+/// every selection, pin, policy, trust override, preview lookup, and
+/// apply directive must therefore be scoped by all three fields, never by
+/// `agent:server_name` alone.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WizardServerId {
+    pub agent: String,
+    pub config_path: String,
+    pub server_name: String,
+}
+
 /// User choices gathered during the interactive wizard session.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct WizardSelections {
-    /// Server keys (`"agent:server_name"`) selected for processing.
-    pub selected_keys: Vec<String>,
-    /// Proposed version pins per server key (`"agent:server_name"` -> version).
-    pub version_pins: HashMap<String, String>,
-    /// Policy type per server key.
-    pub policy_types: HashMap<String, PolicyType>,
-    /// Trust overrides per server key (indicator IDs to accept).
-    pub trust_overrides: HashMap<String, Vec<String>>,
+    /// Servers selected for processing.
+    pub selected: Vec<WizardServerId>,
+    /// Proposed version pins per selected server.
+    pub version_pins: HashMap<WizardServerId, String>,
+    /// Policy type per selected server.
+    pub policy_types: HashMap<WizardServerId, PolicyType>,
+    /// Trust overrides per selected server (indicator IDs to accept).
+    pub trust_overrides: HashMap<WizardServerId, Vec<String>>,
 }
 
 // -----------------------------------------------------------------------
 // Selected server (intermediate representation)
 // -----------------------------------------------------------------------
 
-/// A flattened, user-selected server with its resolved pinning metadata.
+/// A flattened, user-selected server with its resolved pinning metadata
+/// and the invocation state the user reviewed. Apply must verify the
+/// expected state still holds before writing anything.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SelectedServer {
     pub agent: String,
     pub config_path: String,
     pub server_name: String,
-    /// Composite key for cross-referencing selections.
-    pub key: String,
     pub trust_assessment: TrustAssessment,
     pub existing_status: PackageVersionStatus,
     pub runner: Option<WizardPackageRunner>,
     pub package_identity: Option<String>,
+    /// The command the user reviewed. Kept out of serialized output (raw
+    /// invocation text is deliberately never persisted); enforced at
+    /// apply time so post-preview drift aborts the whole operation.
+    #[serde(skip)]
+    pub expected_command: Option<String>,
+    /// The argument list the user reviewed (see `expected_command`).
+    #[serde(skip)]
+    pub expected_args: Vec<String>,
+    /// The remote URL the user reviewed (see `expected_command`).
+    #[serde(skip)]
+    pub expected_url: Option<String>,
+}
+
+impl SelectedServer {
+    /// This server's full identity.
+    pub fn id(&self) -> WizardServerId {
+        WizardServerId {
+            agent: self.agent.clone(),
+            config_path: self.config_path.clone(),
+            server_name: self.server_name.clone(),
+        }
+    }
 }
 
 // -----------------------------------------------------------------------
@@ -258,6 +297,10 @@ const NPX_BOOLEAN_FLAGS: &[&str] = &["-y", "--yes"];
 const NPX_VALUE_FLAGS: &[&str] = &["--package"];
 
 /// Resolves the npx package argument similarly to `classification::resolve_package_arg`.
+///
+/// Fails closed (`None`) when an unrecognised option appears before the
+/// package token: treating an unknown flag as the package identity would
+/// let the pin rewriter corrupt the invocation.
 fn resolve_npx_token(args: &[String]) -> Option<&str> {
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
@@ -269,6 +312,11 @@ fn resolve_npx_token(args: &[String]) -> Option<&str> {
         }
         if NPX_VALUE_FLAGS.contains(&arg.as_str()) {
             return iter.next().map(String::as_str);
+        }
+        if arg.starts_with('-') {
+            // Unknown pre-package option: the package position is
+            // ambiguous, so refuse to guess.
+            return None;
         }
         return Some(arg.as_str());
     }
@@ -489,9 +537,11 @@ pub fn resolve_pinning(server: &McpServer, proposed_version: &str) -> Option<Pin
     }
 
     let runner = runner?;
-    let package = package_identity.as_deref().unwrap_or("");
+    // Without a confidently resolved package identity there is nothing
+    // safe to rewrite — fail closed rather than guess.
+    let package = package_identity.as_deref()?;
 
-    let pinned_args = build_pinned_args(&runner, &server.args, package, proposed_version);
+    let pinned_args = build_pinned_args(&runner, &server.args, package, proposed_version)?;
 
     let rationale = if current_status == PackageVersionStatus::ExactPin {
         format!(
@@ -578,12 +628,16 @@ fn split_pep440_op(token: &str) -> (&str, Option<&str>) {
 
 /// Builds the pinned argument list for a runner, preserving non-version
 /// arguments (tool name, launcher flags, etc).
+///
+/// Returns `None` when the package position cannot be identified with
+/// certainty (unknown pre-package options, no package token at all) —
+/// rewriting anything else would corrupt the invocation.
 fn build_pinned_args(
     runner: &WizardPackageRunner,
     original_args: &[String],
     package_identity: &str,
     proposed_version: &str,
-) -> Vec<String> {
+) -> Option<Vec<String>> {
     match runner {
         WizardPackageRunner::Npx => {
             build_npx_pinned_args(original_args, package_identity, proposed_version)
@@ -600,13 +654,11 @@ fn build_pinned_args(
 /// Build pinned args for npx. Replaces the package spec's version portion.
 fn build_npx_pinned_args(
     original_args: &[String],
-    package_identity: &str,
+    _package_identity: &str,
     proposed_version: &str,
-) -> Vec<String> {
+) -> Option<Vec<String>> {
     let mut out: Vec<String> = Vec::new();
     let mut saw_package = false;
-
-    let packed = format!("{}@{}", package_identity, proposed_version);
 
     let mut iter = original_args.iter();
     while let Some(arg) = iter.next() {
@@ -616,7 +668,7 @@ fn build_npx_pinned_args(
             continue;
         }
 
-        // Skip launcher flags we know about.
+        // Pass through the launcher flags we know about.
         if NPX_BOOLEAN_FLAGS.contains(&arg.as_str()) {
             out.push(arg.clone());
             continue;
@@ -630,12 +682,16 @@ fn build_npx_pinned_args(
         }
         if NPX_VALUE_FLAGS.contains(&arg.as_str()) {
             out.push(arg.clone());
-            if let Some(next) = iter.next() {
-                let (pkg, _) = split_npx_package_identity(next);
-                out.push(format!("{}@{}", pkg, proposed_version));
-            }
+            let next = iter.next()?;
+            let (pkg, _) = split_npx_package_identity(next);
+            out.push(format!("{}@{}", pkg, proposed_version));
             saw_package = true;
             continue;
+        }
+        if arg.starts_with('-') {
+            // Unknown pre-package option — the package position is
+            // ambiguous; refuse to rewrite.
+            return None;
         }
 
         // This is the package arg — replace with pinned version.
@@ -644,24 +700,17 @@ fn build_npx_pinned_args(
         saw_package = true;
     }
 
-    if !saw_package {
-        // No package arg found at all; append one.
-        out.push(packed);
-    }
-
-    out
+    saw_package.then_some(out)
 }
 
 /// Build pinned args for uvx.
 fn build_uvx_pinned_args(
     original_args: &[String],
-    package_identity: &str,
+    _package_identity: &str,
     proposed_version: &str,
-) -> Vec<String> {
+) -> Option<Vec<String>> {
     let mut out: Vec<String> = Vec::new();
     let mut saw_package = false;
-
-    let packed = format!("{}=={}", package_identity, proposed_version);
 
     let mut iter = original_args.iter();
     while let Some(arg) = iter.next() {
@@ -672,17 +721,17 @@ fn build_uvx_pinned_args(
 
         if arg == "--from" {
             out.push(arg.clone());
-            if let Some(next) = iter.next() {
-                let (pkg, _) = split_pep440_op(next);
-                out.push(format!("{}=={}", pkg, proposed_version));
-            }
+            let next = iter.next()?;
+            let (pkg, _) = split_pep440_op(next);
+            out.push(format!("{}=={}", pkg, proposed_version));
             saw_package = true;
             continue;
         }
 
         if arg.starts_with('-') {
-            out.push(arg.clone());
-            continue;
+            // Unknown pre-package option — refuse to guess the package
+            // position (mirrors `resolve_uvx_token`).
+            return None;
         }
 
         // First positional — the package spec.
@@ -691,25 +740,19 @@ fn build_uvx_pinned_args(
         saw_package = true;
     }
 
-    if !saw_package {
-        out.push(packed);
-    }
-
-    out
+    saw_package.then_some(out)
 }
 
 /// Build pinned args for pipx run.
 fn build_pipx_pinned_args(
     original_args: &[String],
-    package_identity: &str,
+    _package_identity: &str,
     proposed_version: &str,
-) -> Vec<String> {
+) -> Option<Vec<String>> {
     let mut out = Vec::new();
     // Pre-args before "run" are kept as-is (though typically there are none).
     let mut after_run = false;
     let mut saw_package = false;
-
-    let packed = format!("{}=={}", package_identity, proposed_version);
 
     let mut iter = original_args.iter().peekable();
     while let Some(arg) = iter.next() {
@@ -728,17 +771,17 @@ fn build_pipx_pinned_args(
 
         if arg == "--spec" {
             out.push(arg.clone());
-            if let Some(next) = iter.next() {
-                let (pkg, _) = split_pep440_op(next);
-                out.push(format!("{}=={}", pkg, proposed_version));
-            }
+            let next = iter.next()?;
+            let (pkg, _) = split_pep440_op(next);
+            out.push(format!("{}=={}", pkg, proposed_version));
             saw_package = true;
             continue;
         }
 
         if arg.starts_with('-') {
-            out.push(arg.clone());
-            continue;
+            // Unknown pre-package option — refuse to guess the package
+            // position (mirrors `resolve_pipx_token`).
+            return None;
         }
 
         // First positional after `run` — the package spec.
@@ -747,16 +790,7 @@ fn build_pipx_pinned_args(
         saw_package = true;
     }
 
-    if after_run && !saw_package {
-        out.push(packed);
-    }
-
-    out
-}
-
-/// Builds the flat server key from agent name and server name.
-fn server_key(agent: &str, server_name: &str) -> String {
-    format!("{}:{}", agent, server_name)
+    (after_run && saw_package).then_some(out)
 }
 
 /// Extracts trust-assessment-backed version status for a `SetupServer`.
@@ -801,13 +835,55 @@ pub fn build_wizard_plan(
     let mut actions: Vec<SetupAction> = Vec::new();
     let mut trust_overrides: Vec<TrustOverride> = Vec::new();
 
+    // Reject duplicate selections up front.
+    {
+        let mut seen: std::collections::HashSet<&WizardServerId> = std::collections::HashSet::new();
+        for id in &selections.selected {
+            if !seen.insert(id) {
+                return Err(format!(
+                    "duplicate selection for '{}' in {} ({})",
+                    id.server_name, id.config_path, id.agent
+                ));
+            }
+        }
+    }
+
+    // Every selection must resolve to exactly one detected server.
+    let mut matched: std::collections::HashSet<&WizardServerId> = std::collections::HashSet::new();
+
     // Collect flat inventory of all servers with their trust assessments.
     for detection in detections {
         for server in &detection.servers {
-            let key = server_key(&detection.agent, &server.name);
-
-            if !selections.selected_keys.contains(&key) {
+            let id = WizardServerId {
+                agent: detection.agent.clone(),
+                config_path: detection.config_path.clone(),
+                server_name: server.name.clone(),
+            };
+            let Some(id) = selections.selected.iter().find(|s| **s == id) else {
                 continue;
+            };
+            matched.insert(id);
+
+            // Eligibility: the plan may only promise changes apply can
+            // actually make. Anything else must fail at plan time, never
+            // surface as a silent no-op at apply time.
+            if server.wrapped {
+                return Err(format!(
+                    "'{}' in {} is already protected by etherfence mcp-proxy and cannot be selected",
+                    server.name, detection.config_path
+                ));
+            }
+            if server.transport != crate::ServerTransport::Stdio {
+                return Err(format!(
+                    "'{}' in {} is not a local stdio server and cannot be wrapped",
+                    server.name, detection.config_path
+                ));
+            }
+            if detection.write_support != crate::WriteSupport::Supported {
+                return Err(format!(
+                    "'{}' is in advisory-only config {} which EtherFence cannot modify",
+                    server.name, detection.config_path
+                ));
             }
 
             // Resolve package version status from the server's real
@@ -821,11 +897,13 @@ pub fn build_wizard_plan(
                 agent: detection.agent.clone(),
                 config_path: detection.config_path.clone(),
                 server_name: server.name.clone(),
-                key: key.clone(),
                 trust_assessment: server.trust_assessment.clone(),
                 existing_status,
                 runner,
                 package_identity,
+                expected_command: server.command.clone(),
+                expected_args: server.args.clone(),
+                expected_url: server.url.clone(),
             };
             selected_servers.push(sel);
 
@@ -833,7 +911,7 @@ pub fn build_wizard_plan(
             // and argument list so the planned rewrite matches what apply
             // will actually mutate. Fail closed instead of silently
             // dropping a pin the user asked for.
-            if let Some(version) = selections.version_pins.get(&key) {
+            if let Some(version) = selections.version_pins.get(id) {
                 let runner = runner.ok_or_else(|| {
                     format!(
                         "cannot pin '{}': no recognised package runner (npx, uvx, pipx run) in its invocation",
@@ -861,7 +939,7 @@ pub fn build_wizard_plan(
             }
 
             // Policy generation.
-            match selections.policy_types.get(&key) {
+            match selections.policy_types.get(id) {
                 Some(PolicyType::DenyAllQuarantine) | None => {
                     let content = generated_policy_template(&server.name)
                         .map_err(|e| format!("failed to generate quarantine policy: {e}"))?;
@@ -927,34 +1005,37 @@ pub fn build_wizard_plan(
                 }
             }
 
-            // Build the standard wrap action.
-            let (action, reason) = if server.trust_assessment.invocation.applicable {
-                (
-                    SetupActionKind::Wrap,
-                    "server selected for wizard processing".to_string(),
-                )
-            } else {
-                (
-                    SetupActionKind::SkipNonStdio,
-                    "remote server; wrapping not applicable".to_string(),
-                )
-            };
+            // Eligibility was enforced above, so the only plannable
+            // action is a wrap.
             actions.push(SetupAction {
                 agent: detection.agent.clone(),
                 config_path: detection.config_path.clone(),
                 server_name: server.name.clone(),
-                action,
-                reason,
+                action: SetupActionKind::Wrap,
+                reason: "server selected for wizard processing".to_string(),
             });
 
             // Trust overrides.
-            if let Some(accepted_ids) = selections.trust_overrides.get(&key) {
+            if let Some(accepted_ids) = selections.trust_overrides.get(id) {
                 trust_overrides.push(TrustOverride {
+                    agent: detection.agent.clone(),
+                    config_path: detection.config_path.clone(),
                     server_name: server.name.clone(),
                     accepted_indicator_ids: accepted_ids.clone(),
                     rationale: "user accepted trust indicators during wizard review".to_string(),
                 });
             }
+        }
+    }
+
+    // Every selection must have matched a detected server; a selection
+    // pointing at nothing means the environment changed under the wizard.
+    for id in &selections.selected {
+        if !matched.contains(id) {
+            return Err(format!(
+                "selected server '{}' was not found in {} ({}); the configuration may have changed",
+                id.server_name, id.config_path, id.agent
+            ));
         }
     }
 
@@ -995,6 +1076,13 @@ pub fn validate_exact_version(runner: WizardPackageRunner, version: &str) -> Res
             } else if looks_like_npm_range(version) {
                 Err(format!(
                     "'{version}' is a version range, not an exact version"
+                ))
+            } else if semver::Version::parse(version).is_err() {
+                // npm treats partial versions like `1` or `1.2` as ranges;
+                // only a full, valid `major.minor.patch` (with optional
+                // prerelease/build metadata) is an immutable exact pin.
+                Err(format!(
+                    "'{version}' is not a complete exact npm version (expected major.minor.patch, e.g. 1.2.3)"
                 ))
             } else if !looks_like_exact_version(version) {
                 Err(format!(
@@ -1153,109 +1241,6 @@ pub struct PolicyGeneration {
     pub content: String,
     pub path: String,
     pub validated: bool,
-}
-
-/// Identifies servers that need user resolution during the wizard.
-///
-/// Returns a list of `(key, reason)` tuples describing why each server
-/// needs attention (e.g. missing package version, mutable tag, no
-/// recognised runner, trust indicators that need review).
-#[allow(dead_code)]
-pub fn servers_needing_resolution(detections: &[SetupDetection]) -> Vec<(String, String)> {
-    let mut results: Vec<(String, String)> = Vec::new();
-
-    for detection in detections {
-        for server in &detection.servers {
-            let key = server_key(&detection.agent, &server.name);
-            let inv = &server.trust_assessment.invocation;
-
-            if !inv.applicable {
-                results.push((
-                    key.clone(),
-                    "remote server; no local invocation to assess".to_string(),
-                ));
-                continue;
-            }
-
-            let needs_pin = match inv.version_expression {
-                Some(VersionExpressionKind::Omitted) => Some(format!(
-                    "{} package '{}' has no version pinned",
-                    runner_label(inv.runner),
-                    inv.package_identity.as_deref().unwrap_or("unknown")
-                )),
-                Some(VersionExpressionKind::MutableTag) => Some(format!(
-                    "{} package '{}' uses a mutable tag",
-                    runner_label(inv.runner),
-                    inv.package_identity.as_deref().unwrap_or("unknown")
-                )),
-                Some(VersionExpressionKind::VersionRange) => Some(format!(
-                    "{} package '{}' uses a version range",
-                    runner_label(inv.runner),
-                    inv.package_identity.as_deref().unwrap_or("unknown")
-                )),
-                Some(VersionExpressionKind::UnsupportedOrAmbiguous) => Some(format!(
-                    "{} package '{}' has an ambiguous version expression",
-                    runner_label(inv.runner),
-                    inv.package_identity.as_deref().unwrap_or("unknown")
-                )),
-                None | Some(VersionExpressionKind::ExactlyPinned) => None,
-            };
-
-            if let Some(reason) = needs_pin {
-                results.push((key.clone(), reason));
-            }
-
-            if server.trust_assessment.needs_review {
-                results.push((key.clone(), "trust indicators require review".to_string()));
-            }
-        }
-    }
-
-    results.sort_by(|a, b| a.0.cmp(&b.0));
-    results.dedup_by(|a, b| a.0 == b.0);
-    results
-}
-
-/// Identifies servers whose package versions are unsafe (omitted, mutable,
-/// or range-based).
-///
-/// Returns a list of `(key, status, package_identity)` for each server
-/// that needs a version pin.
-#[allow(dead_code)]
-pub fn servers_with_unsafe_packages(
-    detections: &[SetupDetection],
-) -> Vec<(String, PackageVersionStatus, Option<String>)> {
-    let mut results: Vec<(String, PackageVersionStatus, Option<String>)> = Vec::new();
-
-    for detection in detections {
-        for server in &detection.servers {
-            let key = server_key(&detection.agent, &server.name);
-            let inv = &server.trust_assessment.invocation;
-
-            if !inv.applicable {
-                continue;
-            }
-
-            if let Some(kind) = inv.version_expression {
-                let status = PackageVersionStatus::from(kind);
-                if status.needs_pinning() {
-                    results.push((key, status, inv.package_identity.clone()));
-                }
-            }
-        }
-    }
-
-    results
-}
-
-/// Helper: human-readable runner label for messages.
-fn runner_label(runner: Option<TrustPackageRunner>) -> &'static str {
-    match runner {
-        Some(TrustPackageRunner::Npx) => "npx",
-        Some(TrustPackageRunner::Uvx) => "uvx",
-        Some(TrustPackageRunner::PipxRun) => "pipx run",
-        None => "package",
-    }
 }
 
 #[cfg(test)]
@@ -1708,7 +1693,8 @@ mod tests {
             ],
             "@scope/pkg",
             "1.0.0",
-        );
+        )
+        .expect("package position must resolve");
         assert_eq!(
             args,
             vec![
@@ -1729,7 +1715,8 @@ mod tests {
             ],
             "@scope/pkg",
             "1.0.0",
-        );
+        )
+        .expect("package position must resolve");
         assert_eq!(
             args,
             vec![
@@ -1743,7 +1730,8 @@ mod tests {
     #[test]
     fn pin_npx_with_package_eq_flag() {
         let args =
-            build_npx_pinned_args(&["--package=@scope/pkg".to_string()], "@scope/pkg", "1.0.0");
+            build_npx_pinned_args(&["--package=@scope/pkg".to_string()], "@scope/pkg", "1.0.0")
+                .expect("package position must resolve");
         assert_eq!(args, vec!["--package=@scope/pkg@1.0.0".to_string()]);
     }
 
@@ -1753,7 +1741,8 @@ mod tests {
             &["mytool".to_string(), "arg1".to_string()],
             "mytool",
             "0.5.0",
-        );
+        )
+        .expect("package position must resolve");
         assert_eq!(args, vec!["mytool==0.5.0".to_string(), "arg1".to_string()]);
     }
 
@@ -1767,7 +1756,8 @@ mod tests {
             ],
             "mytool",
             "0.5.0",
-        );
+        )
+        .expect("package position must resolve");
         assert_eq!(
             args,
             vec![
@@ -1784,7 +1774,8 @@ mod tests {
             &["run".to_string(), "pkg".to_string(), "arg1".to_string()],
             "pkg",
             "1.0.0",
-        );
+        )
+        .expect("package position must resolve");
         assert_eq!(
             args,
             vec![
@@ -1807,7 +1798,8 @@ mod tests {
             ],
             "pkg",
             "1.0.0",
-        );
+        )
+        .expect("package position must resolve");
         assert_eq!(
             args,
             vec![
@@ -1875,19 +1867,23 @@ mod tests {
         }
     }
 
+    fn sample_id(agent: &str, server_name: &str) -> WizardServerId {
+        WizardServerId {
+            agent: agent.to_string(),
+            config_path: format!("~/.config/{agent}/mcp.json"),
+            server_name: server_name.to_string(),
+        }
+    }
+
     #[test]
     fn build_wizard_plan_selects_servers() {
         let detections = vec![sample_detection("test-agent", "test-server")];
-        let key = server_key("test-agent", "test-server");
+        let id = sample_id("test-agent", "test-server");
         let mut selections = WizardSelections {
-            selected_keys: vec![key.clone()],
-            version_pins: HashMap::new(),
-            policy_types: HashMap::new(),
-            trust_overrides: HashMap::new(),
+            selected: vec![id.clone()],
+            ..WizardSelections::default()
         };
-        selections
-            .version_pins
-            .insert(key.clone(), "1.2.3".to_string());
+        selections.version_pins.insert(id, "1.2.3".to_string());
 
         let plan = build_wizard_plan(&detections, &selections, "/home/user")
             .expect("plan building should succeed");
@@ -1907,15 +1903,13 @@ mod tests {
     #[test]
     fn build_wizard_plan_with_custom_allowlist() {
         let detections = vec![sample_detection("agent", "custom-server")];
-        let key = server_key("agent", "custom-server");
+        let id = sample_id("agent", "custom-server");
         let mut selections = WizardSelections {
-            selected_keys: vec![key.clone()],
-            version_pins: HashMap::new(),
-            policy_types: HashMap::new(),
-            trust_overrides: HashMap::new(),
+            selected: vec![id.clone()],
+            ..WizardSelections::default()
         };
         selections.policy_types.insert(
-            key,
+            id,
             PolicyType::CustomToolAllowlist(vec!["read".to_string()]),
         );
 
@@ -1932,12 +1926,7 @@ mod tests {
     #[test]
     fn build_wizard_plan_skips_unselected_servers() {
         let detections = vec![sample_detection("agent", "server-a")];
-        let selections = WizardSelections {
-            selected_keys: Vec::new(), // nothing selected
-            version_pins: HashMap::new(),
-            policy_types: HashMap::new(),
-            trust_overrides: HashMap::new(),
-        };
+        let selections = WizardSelections::default();
         let plan = build_wizard_plan(&detections, &selections, "/").unwrap();
         assert_eq!(plan.selected_servers.len(), 0);
         assert!(plan.policies.is_empty());
@@ -1945,8 +1934,31 @@ mod tests {
     }
 
     #[test]
-    fn build_wizard_plan_handles_missing_command() {
-        // Server with no command (remote) — should be skippable.
+    fn build_wizard_plan_scopes_selection_to_one_config() {
+        // The same agent + server name in two config files: selecting one
+        // must never pull in the other.
+        let mut first = sample_detection("agent", "dup");
+        first.config_path = "~/.claude.json".to_string();
+        let mut second = sample_detection("agent", "dup");
+        second.config_path = "~/.claude/settings.json".to_string();
+
+        let selections = WizardSelections {
+            selected: vec![WizardServerId {
+                agent: "agent".to_string(),
+                config_path: "~/.claude.json".to_string(),
+                server_name: "dup".to_string(),
+            }],
+            ..WizardSelections::default()
+        };
+        let plan = build_wizard_plan(&[first, second], &selections, "/").unwrap();
+        assert_eq!(plan.selected_servers.len(), 1);
+        assert_eq!(plan.selected_servers[0].config_path, "~/.claude.json");
+        assert_eq!(plan.policies.len(), 1);
+        assert_eq!(plan.policies[0].config_path, "~/.claude.json");
+    }
+
+    #[test]
+    fn build_wizard_plan_rejects_remote_server_selection() {
         let mcp = McpServer {
             name: "remote-server".to_string(),
             command: None,
@@ -1958,39 +1970,77 @@ mod tests {
         let detection = SetupDetection {
             agent: "agent".to_string(),
             config_path: "~/.config/agent/mcp.json".to_string(),
-            write_support: crate::WriteSupport::AdvisoryOnly,
+            write_support: crate::WriteSupport::Supported,
             servers: vec![setup_server],
             notes: Vec::new(),
         };
-        let key = server_key("agent", "remote-server");
         let selections = WizardSelections {
-            selected_keys: vec![key],
-            version_pins: HashMap::new(),
-            policy_types: HashMap::new(),
-            trust_overrides: HashMap::new(),
+            selected: vec![sample_id("agent", "remote-server")],
+            ..WizardSelections::default()
         };
-        let plan = build_wizard_plan(&[detection], &selections, "/").unwrap();
-        // Remote server: pinning not applicable, but still included in selected.
-        assert_eq!(plan.selected_servers.len(), 1);
-        assert_eq!(
-            plan.selected_servers[0].existing_status,
-            PackageVersionStatus::NotApplicable
-        );
+        let error = build_wizard_plan(&[detection], &selections, "/").unwrap_err();
+        assert!(error.contains("not a local stdio server"), "{error}");
+    }
+
+    #[test]
+    fn build_wizard_plan_rejects_wrapped_server_selection() {
+        let mcp = McpServer {
+            name: "already".to_string(),
+            command: Some("etherfence".to_string()),
+            args: vec!["mcp-proxy".to_string(), "--policy".to_string()],
+            env: Vec::new(),
+            url: None,
+        };
+        let setup_server = server_from_mcp(&mcp);
+        let detection = SetupDetection {
+            agent: "agent".to_string(),
+            config_path: "~/.config/agent/mcp.json".to_string(),
+            write_support: crate::WriteSupport::Supported,
+            servers: vec![setup_server],
+            notes: Vec::new(),
+        };
+        let selections = WizardSelections {
+            selected: vec![sample_id("agent", "already")],
+            ..WizardSelections::default()
+        };
+        let error = build_wizard_plan(&[detection], &selections, "/").unwrap_err();
+        assert!(error.contains("already protected"), "{error}");
+    }
+
+    #[test]
+    fn build_wizard_plan_rejects_advisory_only_selection() {
+        let mut detection = sample_detection("agent", "server");
+        detection.write_support = crate::WriteSupport::AdvisoryOnly;
+        let selections = WizardSelections {
+            selected: vec![sample_id("agent", "server")],
+            ..WizardSelections::default()
+        };
+        let error = build_wizard_plan(&[detection], &selections, "/").unwrap_err();
+        assert!(error.contains("advisory-only"), "{error}");
+    }
+
+    #[test]
+    fn build_wizard_plan_rejects_selection_of_unknown_server() {
+        let detections = vec![sample_detection("agent", "server")];
+        let selections = WizardSelections {
+            selected: vec![sample_id("agent", "no-such-server")],
+            ..WizardSelections::default()
+        };
+        let error = build_wizard_plan(&detections, &selections, "/").unwrap_err();
+        assert!(error.contains("was not found"), "{error}");
     }
 
     #[test]
     fn build_wizard_plan_trust_overrides() {
         let detections = vec![sample_detection("agent", "server")];
-        let key = server_key("agent", "server");
+        let id = sample_id("agent", "server");
         let mut selections = WizardSelections {
-            selected_keys: vec![key.clone()],
-            version_pins: HashMap::new(),
-            policy_types: HashMap::new(),
-            trust_overrides: HashMap::new(),
+            selected: vec![id.clone()],
+            ..WizardSelections::default()
         };
         selections
             .trust_overrides
-            .insert(key, vec!["EF-TRUST-PIN-001".to_string()]);
+            .insert(id, vec!["EF-TRUST-PIN-001".to_string()]);
 
         let plan = build_wizard_plan(&detections, &selections, "/").unwrap();
         assert_eq!(plan.trust_overrides.len(), 1);
@@ -1998,5 +2048,85 @@ mod tests {
             plan.trust_overrides[0].accepted_indicator_ids,
             vec!["EF-TRUST-PIN-001"]
         );
+        assert_eq!(
+            plan.trust_overrides[0].config_path,
+            "~/.config/agent/mcp.json"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // validate_exact_version tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn npm_partial_and_malformed_versions_are_rejected() {
+        for bad in ["1", "1.2", "1..2", "1foo", "latest", "^1.2", ">=2", "foo"] {
+            assert!(
+                validate_exact_version(WizardPackageRunner::Npx, bad).is_err(),
+                "npm version {bad:?} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn npm_full_semver_versions_are_accepted() {
+        for good in ["1.2.3", "0.1.0", "2.0.0-rc.1", "1.2.3+build.5"] {
+            assert!(
+                validate_exact_version(WizardPackageRunner::Npx, good).is_ok(),
+                "npm version {good:?} must be accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn pep440_exact_versions_validate() {
+        assert!(validate_exact_version(WizardPackageRunner::Uvx, "0.2.1").is_ok());
+        assert!(validate_exact_version(WizardPackageRunner::Pipx, "0.3.14").is_ok());
+        assert!(validate_exact_version(WizardPackageRunner::Uvx, ">=1.0").is_err());
+        assert!(validate_exact_version(WizardPackageRunner::Uvx, "1.0.*").is_err());
+    }
+
+    // -----------------------------------------------------------------------
+    // Unknown npx option fail-closed tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn npx_unknown_flag_before_package_is_ambiguous() {
+        let (runner, pkg, status) = extract_package_version(
+            "npx",
+            &["--loglevel=silent".to_string(), "some-package".to_string()],
+        );
+        assert_eq!(runner, Some(WizardPackageRunner::Npx));
+        assert!(pkg.is_none());
+        assert_eq!(status, PackageVersionStatus::Ambiguous);
+    }
+
+    #[test]
+    fn npx_unknown_flag_prevents_pin_rewrite() {
+        let server = mcp_server(
+            "srv",
+            Some("npx"),
+            &["--node-options=--max-old-space-size=4096", "some-package"],
+        );
+        assert!(
+            resolve_pinning(&server, "1.2.3").is_none(),
+            "unknown pre-package npx options must fail closed, not be rewritten"
+        );
+    }
+
+    #[test]
+    fn pin_builders_refuse_unknown_pre_package_flags() {
+        assert!(
+            build_npx_pinned_args(&["-q".to_string(), "pkg".to_string()], "pkg", "1.0.0").is_none()
+        );
+        assert!(
+            build_uvx_pinned_args(&["-q".to_string(), "pkg".to_string()], "pkg", "1.0.0").is_none()
+        );
+        assert!(build_pipx_pinned_args(
+            &["run".to_string(), "-q".to_string(), "pkg".to_string()],
+            "pkg",
+            "1.0.0"
+        )
+        .is_none());
     }
 }
