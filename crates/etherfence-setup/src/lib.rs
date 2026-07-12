@@ -36,8 +36,9 @@ pub use trust::{
     ShellWrapperKind, TrustAssessment, TrustIndicator, VersionExpressionKind,
 };
 pub use wizard::{
-    extract_package_version, resolve_pinning, PackageVersionStatus, PinningChange, PolicyEntry,
-    PolicyType, SelectedServer, TrustOverride, WizardPackageRunner, WizardPlan, WizardSelections,
+    apply_wizard_plan, build_wizard_plan, extract_package_version, resolve_pinning,
+    PackageVersionStatus, PinningChange, PolicyEntry, PolicyType, SelectedServer,
+    WizardPackageRunner, WizardPlan, WizardSelections,
 };
 
 const BACKUP_MARKER: &str = "etherfence-setup-backup/v1";
