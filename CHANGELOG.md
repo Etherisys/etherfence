@@ -17,7 +17,29 @@ field guards; `ef-mcp-policy/v0.1` policies are unaffected. EtherFence still
 has no daemon mode, shell hooks, command interception, terminal-command
 scanning, or network interception.
 
-## [Unreleased]
+## [1.7.2] - 2026-07-12
+
+### Added
+
+- **Protection coverage in scan output**: when `etherfence scan` is run with
+  `--policy` or `--policy-profile`, all output formats now include a
+  Protection Coverage section showing which detected MCP servers are
+  covered by the active policy and which are not. The coverage data
+  maps every MCP server to its coverage status under the policy:
+  `covered` (in allowlist), `not_covered` (not in allowlist),
+  `no_policy_for_agent` (no agent section in policy), `empty_allowlist`
+  (implicit allow-all), or `not_applicable` (Tirith, excluded from MCP
+  server coverage). Coverage appears in:
+  - Human summary: a "Protection coverage" section between Clients and
+    Priority Findings with per-server ✓/✗ markers
+  - Human verbose: `[covered]`/`[not covered]` badges on each MCP server
+  - Markdown: a "## Protection Coverage" table
+  - JSON: a `protection_coverage` field in the report root
+  - SARIF: `protectionCoverage` in run.properties
+- Additive schema bump: `ef-scan-report/v0.1.1` → `ef-scan-report/v0.1.2`
+  (optional `protection_coverage` field; existing consumers unaffected).
+
+## [1.7.1] - 2026-07-12
 
 ### Fixed
 

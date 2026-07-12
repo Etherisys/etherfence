@@ -4,9 +4,9 @@ Status: pre-alpha. This document describes the current scan report and baseline 
 
 ## Scan report schema version
 
-Current report schema: `ef-scan-report/v0.1.1`
+Current report schema: `ef-scan-report/v0.1.2`
 
-EtherFence v0.1.8 keeps the v0.1.1 report shape unchanged. New finding IDs (such as `EF-CFG-001` for unparseable config files) and SARIF output are additive and do not alter the JSON report schema. Policy schema/source metadata appears in scan output when `--policy` or `--policy-profile` is used. These additions are backward-compatible for consumers that ignore unknown fields.
+EtherFence v1.7.2 adds an optional `protection_coverage` field to the scan report. This is a backward-compatible additive change: consumers that do not know about `protection_coverage` will ignore the field. Existing field names, types, and semantics are unchanged. Policy schema/source metadata appears in scan output when `--policy` or `--policy-profile` is used.
 
 CLI filtering with `--severity-threshold` changes which findings are included in the emitted report and recomputes `summary` for the displayed findings, but it does not change field names or object layout. Policy findings are ordinary findings for filtering, `--fail-on`, baseline comparison, and `--fail-on-new`.
 
@@ -25,6 +25,30 @@ CLI filtering with `--severity-threshold` changes which findings are included in
 | `posture` | object/null | optional, additive | Deterministic advisory score, grade, assessment, active counts, up to three priority risks, and linked next actions derived from displayed active findings. |
 | `policy` | object/null | optional | Policy evaluation metadata when `--policy` or `--policy-profile` is used. |
 | `baseline` | object/null | optional | Baseline comparison metadata when `--baseline` is used. |
+| `protection_coverage` | object/null | optional (v0.1.2+) | Protection coverage summary when `--policy` or `--policy-profile` is used. Shows per-server protection status. |
+
+## Protection Coverage (v0.1.2+)
+
+When a scan policy is active, the report includes an optional `protection_coverage` object:
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `total_servers` | number | Total MCP servers detected (excluding Tirith). |
+| `protected` | number | Servers in the agent's `allowed_mcp_servers` list. |
+| `unprotected` | number | Servers NOT in the agent's allowlist. |
+| `no_policy_for_agent` | number | Servers whose agent has no policy section. |
+| `empty_allowlist` | number | Servers whose agent section has an empty allowlist (implicit allow-all). |
+| `not_applicable` | number | Servers excluded from coverage (e.g., Tirith). |
+| `servers` | array | Per-server details (see below). |
+
+### Server Coverage
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `agent` | string | Agent key (e.g., `claude-code`, `cursor`). |
+| `server_name` | string | MCP server name as configured. |
+| `status` | string | One of: `protected`, `unprotected`, `no_policy_for_agent`, `empty_allowlist`, `not_applicable`. |
+| `config_path` | string | Tilde-display config path. |
 
 ## Additive posture summary (v1.7.0; human layout stabilized in v1.7.1)
 

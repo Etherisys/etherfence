@@ -1,7 +1,8 @@
 use anyhow::{Context, Result};
 use etherfence_core::{
-    read_bounded_text_file, AgentKind, BaselineStatus, Finding, FindingKind, InventoryItem,
-    McpServer, PolicyStatus, Severity, MAX_CONFIG_FILE_BYTES,
+    read_bounded_text_file, AgentKind, BaselineStatus, CoverageStatus, Finding, FindingKind,
+    InventoryItem, McpServer, PolicyStatus, ProtectionCoverage, ServerCoverage, Severity,
+    MAX_CONFIG_FILE_BYTES,
 };
 use regex::Regex;
 use serde::Deserialize;
@@ -59,6 +60,7 @@ pub struct PolicyEvaluation {
     pub pass: usize,
     pub violation: usize,
     pub not_applicable: usize,
+    pub coverage: ProtectionCoverage,
 }
 
 struct CompiledPolicy {
@@ -178,6 +180,9 @@ pub fn evaluate_policy(
         }
     }
 
+    // ── protection coverage ──────────────────────────────────────────
+    let coverage = build_coverage(inventory, &compiled);
+
     findings.sort_by(|a, b| {
         a.id.cmp(&b.id)
             .then_with(|| a.agent.key().cmp(b.agent.key()))
@@ -196,6 +201,7 @@ pub fn evaluate_policy(
         pass,
         violation,
         not_applicable,
+        coverage,
     })
 }
 
@@ -585,6 +591,104 @@ fn secret_looking_name(name: &str) -> bool {
     .iter()
     .any(|needle| upper.contains(needle))
 }
+
+// ── protection coverage helpers ──────────────────────────────────────
+
+fn build_coverage(inventory: &[InventoryItem], compiled: &CompiledPolicy) -> ProtectionCoverage {
+    let mut servers: Vec<ServerCoverage> = Vec::new();
+
+    for item in inventory {
+        if item.agent == AgentKind::Tirith {
+            // Tirith items have empty mcp_servers; create a synthetic coverage entry.
+            let name = if item.mcp_servers.is_empty() {
+                "tirith".to_string()
+            } else {
+                item.mcp_servers.first().unwrap().name.clone()
+            };
+            servers.push(ServerCoverage {
+                agent: item.agent,
+                server_name: name,
+                status: CoverageStatus::NotApplicable,
+                config_path: item.config_path.clone(),
+            });
+            continue;
+        }
+        for server in &item.mcp_servers {
+            let status = coverage_status(item, server, compiled);
+            servers.push(ServerCoverage {
+                agent: item.agent,
+                server_name: server.name.clone(),
+                status,
+                config_path: item.config_path.clone(),
+            });
+        }
+    }
+
+    // deterministic order: agent key, config path, server name
+    servers.sort_by(|a, b| {
+        a.agent
+            .key()
+            .cmp(b.agent.key())
+            .then_with(|| a.config_path.cmp(&b.config_path))
+            .then_with(|| a.server_name.cmp(&b.server_name))
+    });
+
+    let covered = servers
+        .iter()
+        .filter(|s| s.status == CoverageStatus::Covered)
+        .count();
+    let not_covered = servers
+        .iter()
+        .filter(|s| s.status == CoverageStatus::NotCovered)
+        .count();
+    let no_policy_for_agent = servers
+        .iter()
+        .filter(|s| s.status == CoverageStatus::NoPolicyForAgent)
+        .count();
+    let empty_allowlist = servers
+        .iter()
+        .filter(|s| s.status == CoverageStatus::EmptyAllowlist)
+        .count();
+    let not_applicable = servers
+        .iter()
+        .filter(|s| s.status == CoverageStatus::NotApplicable)
+        .count();
+
+    ProtectionCoverage {
+        total_servers: servers.len(),
+        covered,
+        not_covered,
+        no_policy_for_agent,
+        empty_allowlist,
+        not_applicable,
+        servers,
+    }
+}
+
+fn coverage_status(
+    item: &InventoryItem,
+    server: &McpServer,
+    compiled: &CompiledPolicy,
+) -> CoverageStatus {
+    let agent_policy = match compiled.agent_policy(item.agent) {
+        Some(ap) => ap,
+        None => return CoverageStatus::NoPolicyForAgent,
+    };
+    if agent_policy.allowed_mcp_servers.is_empty() {
+        return CoverageStatus::EmptyAllowlist;
+    }
+    if agent_policy
+        .allowed_mcp_servers
+        .iter()
+        .any(|allowed| same_name(allowed, &server.name))
+    {
+        CoverageStatus::Covered
+    } else {
+        CoverageStatus::NotCovered
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {

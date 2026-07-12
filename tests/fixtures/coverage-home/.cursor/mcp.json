@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/home"]
+    },
+    "browser-tools": {
+      "command": "npx",
+      "args": ["-y", "@anthropic/server-browser-tools"]
+    }
+  }
+}

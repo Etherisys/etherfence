@@ -55,9 +55,9 @@ fn scan_fixture_json_has_stable_top_level_schema() {
     );
     let json: Value = serde_json::from_slice(&output.stdout).expect("valid JSON output");
 
-    assert_eq!(json["schema_version"], "ef-scan-report/v0.1.1");
+    assert_eq!(json["schema_version"], "ef-scan-report/v0.1.2");
     assert_eq!(json["tool"], "etherfence");
-    assert_eq!(json["version"], "1.7.0");
+    assert_eq!(json["version"], "1.7.2");
     assert_eq!(json["status"], "stable-local-scan");
     assert!(json.get("scanned_root").is_some());
     assert!(json["inventory"].is_array());
@@ -1092,7 +1092,7 @@ fn sarif_output_is_valid_and_maps_severity_levels() {
     );
     let driver = &json["runs"][0]["tool"]["driver"];
     assert_eq!(driver["name"], "etherfence");
-    assert_eq!(driver["version"], "1.7.0");
+    assert_eq!(driver["version"], "1.7.2");
 
     let rules = sarif_rules(&json);
     let rule_ids: Vec<&str> = rules

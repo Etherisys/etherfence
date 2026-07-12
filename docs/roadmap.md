@@ -637,6 +637,21 @@
   (`ef-baseline/v0.1.3`), `mcp-proxy`, `ef-mcp-policy/v0.1`, and every
   other existing `setup` subcommand are unchanged
 
+## v1.7.2 - protection coverage
+
+- `etherfence scan --policy` (and `--policy-profile`) now includes a
+  "Protection Coverage" section in every output format (human summary,
+  human verbose, JSON, Markdown, SARIF) showing which detected MCP
+  servers are protected by the active policy and which are not
+- New `CoverageStatus` per server: `protected`, `unprotected`,
+  `no_policy_for_agent`, `empty_allowlist`, or `not_applicable`
+- Report schema bump: `ef-scan-report/v0.1.1` → `ef-scan-report/v0.1.2`
+  (additive optional `protection_coverage` field)
+- Scan output without `--policy` is byte-identical to v1.6.x
+- No posture scoring or weighted risk metric — that is v1.7.3
+- No `mcp-proxy`, `mcp-policy`, or `setup` behavior changes
+- No new crate, daemon, or network access
+
 ## v1.5.0 - argument-aware MCP runtime policy
 
 - New versioned schema extension `ef-mcp-policy/v0.2`, additive over

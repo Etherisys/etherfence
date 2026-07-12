@@ -687,6 +687,44 @@ pub struct PolicyMetadata {
     pub not_applicable: usize,
 }
 
+// ── Protection Coverage (v1.7.2) ───────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CoverageStatus {
+    /// Server is in the agent's allowed_mcp_servers list.
+    Covered,
+    /// Server is NOT in the agent's allowed_mcp_servers list.
+    NotCovered,
+    /// No [agents.<name>] section exists for this agent in the policy.
+    NoPolicyForAgent,
+    /// Agent section exists but allowed_mcp_servers is empty (implicit allow-all).
+    EmptyAllowlist,
+    /// Coverage not applicable (e.g., Tirith inventory items).
+    NotApplicable,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ServerCoverage {
+    pub agent: AgentKind,
+    pub server_name: String,
+    pub status: CoverageStatus,
+    pub config_path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProtectionCoverage {
+    pub total_servers: usize,
+    pub covered: usize,
+    pub not_covered: usize,
+    pub no_policy_for_agent: usize,
+    pub empty_allowlist: usize,
+    pub not_applicable: usize,
+    pub servers: Vec<ServerCoverage>,
+}
+
+// ───────────────────────────────────────────────────────────────────────
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ScanReport {
     pub schema_version: String,
@@ -703,6 +741,8 @@ pub struct ScanReport {
     pub policy: Option<PolicyMetadata>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub baseline: Option<BaselineComparison>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub protection_coverage: Option<ProtectionCoverage>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
