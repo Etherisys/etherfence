@@ -5,8 +5,8 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use etherfence_core::{
     read_bounded_text_file, read_bounded_text_file_no_follow, BaselineComparison, BaselineFile,
-    BaselineStatus, Finding, PolicyMetadata, PostureSummary, ScanReport, Severity, Summary,
-    MAX_BASELINE_FILE_BYTES, MAX_CONFIG_FILE_BYTES,
+    BaselineStatus, CoverageStatus, Finding, PolicyMetadata, PostureSummary, ScanReport, Severity,
+    Summary, MAX_BASELINE_FILE_BYTES, MAX_CONFIG_FILE_BYTES,
 };
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -2224,11 +2224,13 @@ fn run_scan(options: ScanOptions) -> Result<()> {
     };
     let mut current_findings = etherfence_detectors::analyze(&inventory);
     let mut policy_meta = None;
+    let mut protection_coverage = None;
 
     if let Some(policy_source) = load_scan_policy(&options)? {
         let policy = policy_source.policy;
         let evaluation = etherfence_policy::evaluate_policy(&policy, &inventory)?;
         current_findings.extend(evaluation.findings);
+        protection_coverage = Some(evaluation.coverage);
         policy_meta = Some(PolicyMetadata {
             policy_path: policy_source.display_path,
             policy_source: policy_source.source,
@@ -2274,7 +2276,7 @@ fn run_scan(options: ScanOptions) -> Result<()> {
     let summary = Summary::from_counts(inventory.len(), &display_findings);
     let posture = PostureSummary::from_findings(&display_findings, options.severity_threshold);
     let report = ScanReport {
-        schema_version: "ef-scan-report/v0.1.1".to_string(),
+        schema_version: "ef-scan-report/v0.1.2".to_string(),
         tool: "etherfence".to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
         status: "stable-local-scan".to_string(),
@@ -2285,6 +2287,7 @@ fn run_scan(options: ScanOptions) -> Result<()> {
         posture: Some(posture),
         policy: policy_meta,
         baseline: baseline_meta,
+        protection_coverage,
     };
     let output = match options.format {
         OutputFormat::Human if options.verbose => {
@@ -2444,6 +2447,66 @@ fn render_scan_summary(report: &ScanReport) -> String {
             theme.muted.apply_to(ui::count_servers(0)).to_string()
         };
         let _ = writeln!(out, "{marker} {}{servers_label}", ui::pad(client, 20));
+    }
+
+    // ── Protection coverage ────────────────────────────────────────
+    if let Some(coverage) = &report.protection_coverage {
+        let _ = writeln!(out, "\n{}", theme.section("Protection coverage"));
+        let _ = writeln!(
+            out,
+            "{}",
+            theme.key_value("Total servers", &coverage.total_servers.to_string())
+        );
+        let status_line = format!(
+            "covered={}, not covered={}, no policy={}, empty allowlist={}",
+            coverage.covered,
+            coverage.not_covered,
+            coverage.no_policy_for_agent,
+            coverage.empty_allowlist
+        );
+        let _ = writeln!(out, "{}", theme.key_value("Status", &status_line));
+        if coverage.not_applicable > 0 {
+            let _ = writeln!(
+                out,
+                "{}",
+                theme.key_value("Not applicable", &coverage.not_applicable.to_string())
+            );
+        }
+
+        let mut current_agent = String::new();
+        for server in &coverage.servers {
+            if server.agent.display_name() != current_agent {
+                current_agent = server.agent.display_name().to_string();
+                let _ = writeln!(out, "\n{}:", theme.info.apply_to(&current_agent));
+            }
+            let (marker, _label): (String, &str) = match server.status {
+                CoverageStatus::Covered => {
+                    (theme.success.apply_to("✓ covered").to_string(), "covered")
+                }
+                CoverageStatus::NotCovered => (
+                    theme.danger.apply_to("✗ not covered").to_string(),
+                    "not covered",
+                ),
+                CoverageStatus::NoPolicyForAgent => (
+                    theme.warning.apply_to("~ no policy").to_string(),
+                    "no policy",
+                ),
+                CoverageStatus::EmptyAllowlist => (
+                    theme.muted.apply_to("— empty allowlist").to_string(),
+                    "empty allowlist",
+                ),
+                CoverageStatus::NotApplicable => (
+                    theme.muted.apply_to("  not applicable").to_string(),
+                    "not applicable",
+                ),
+            };
+            let _ = writeln!(
+                out,
+                "  {marker}  {}  {}",
+                ui::pad(&server.server_name, 24),
+                theme.muted.apply_to(&server.config_path)
+            );
+        }
     }
 
     let _ = writeln!(out, "\n{}", theme.section("Priority findings"));

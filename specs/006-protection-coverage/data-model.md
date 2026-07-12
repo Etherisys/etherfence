@@ -9,9 +9,9 @@
 #[serde(rename_all = "snake_case")]
 pub enum CoverageStatus {
     /// Server is in the agent's allowed_mcp_servers list.
-    Protected,
+    Covered,
     /// Server is NOT in the agent's allowed_mcp_servers list.
-    Unprotected,
+    NotCovered,
     /// No [agents.<name>] section exists for this agent in the policy.
     NoPolicyForAgent,
     /// Agent section exists but allowed_mcp_servers is empty (implicit allow-all).
@@ -39,8 +39,8 @@ pub struct ServerCoverage {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProtectionCoverage {
     pub total_servers: usize,
-    pub protected: usize,
-    pub unprotected: usize,
+    pub covered: usize,
+    pub uncovered: usize,
     pub no_policy_for_agent: usize,
     pub empty_allowlist: usize,
     pub not_applicable: usize,
@@ -99,8 +99,8 @@ identical to `ef-scan-report/v0.1.1`.
   "schema_version": "ef-scan-report/v0.1.2",
   "protection_coverage": {
     "total_servers": 8,
-    "protected": 5,
-    "unprotected": 2,
+    "covered": 5,
+    "uncovered": 2,
     "no_policy_for_agent": 0,
     "empty_allowlist": 0,
     "not_applicable": 1,
@@ -108,7 +108,7 @@ identical to `ef-scan-report/v0.1.1`.
       {
         "agent": "claude-code",
         "server_name": "filesystem",
-        "status": "protected",
+        "status": "covered",
         "config_path": "~/.claude.json"
       }
     ]
@@ -130,15 +130,15 @@ identical to `ef-scan-report/v0.1.1`.
 | Agent is Tirith | `NotApplicable` |
 | No `[agents.<agent_display_name>]` or `[agents.<agent_key>]` section | `NoPolicyForAgent` |
 | Section exists, `allowed_mcp_servers` is empty | `EmptyAllowlist` |
-| Section exists, server name matches allowed list | `Protected` |
-| Section exists, server name does NOT match allowed list | `Unprotected` |
+| Section exists, server name matches allowed list | `Covered` |
+| Section exists, server name does NOT match allowed list | `NotCovered` |
 
 ## Name Matching
 
 Uses the existing `check_mcp_server` logic:
 1. If `allowed_mcp_servers` is empty → `EmptyAllowlist` (implicit allow-all)
-2. If any entry in `allowed_mcp_servers` matches via `same_name()` → `Protected`
-3. Otherwise → `Unprotected`
+2. If any entry in `allowed_mcp_servers` matches via `same_name()` → `Covered`
+3. Otherwise → `NotCovered`
 
 Agent lookup uses the existing dual-key strategy:
 1. `agent.display_name()` (e.g., "Claude Code")

@@ -36,11 +36,11 @@ Clients
 
 Protection coverage
 ───────────────────
-✓ protected    claude-code / filesystem         (~/.claude.json)
-✓ protected    claude-code / memory             (~/.claude.json)
-✗ unprotected  claude-code / github             (~/.claude.json)
-✓ protected    cursor / filesystem              (~/.cursor/mcp.json)
-✗ unprotected  cursor / browser-tools           (~/.cursor/mcp.json)
+✓ covered    claude-code / filesystem         (~/.claude.json)
+✓ covered    claude-code / memory             (~/.claude.json)
+✗ uncovered  claude-code / github             (~/.claude.json)
+✓ covered    cursor / filesystem              (~/.cursor/mcp.json)
+✗ uncovered  cursor / browser-tools           (~/.cursor/mcp.json)
 ~ no policy    vscode / lint                    (~/.vscode/mcp.json)
 
 Priority findings
@@ -54,8 +54,8 @@ The JSON output includes:
 {
   "protection_coverage": {
     "total_servers": 6,
-    "protected": 4,
-    "unprotected": 2,
+    "covered": 4,
+    "uncovered": 2,
     "no_policy_for_agent": 0,
     "empty_allowlist": 0,
     "not_applicable": 0,
@@ -74,8 +74,8 @@ v1.6.x.
 
 | Status | Meaning | What to do |
 |---|---|---|
-| `protected` | Server is in the policy allowlist | No action needed |
-| `unprotected` | Server is NOT in the policy allowlist | Review and either add to allowlist or remove the server |
+| `covered` | Server is in the policy allowlist | No action needed |
+| `uncovered` | Server is NOT in the policy allowlist | Review and either add to allowlist or remove the server |
 | `no_policy_for_agent` | No policy section for this AI client | Add a `[agents.<name>]` section to your policy |
 | `empty_allowlist` | Agent section exists but allowlist is empty | Add specific server names to `allowed_mcp_servers` |
 | `not_applicable` | Coverage not applicable (e.g., Tirith) | N/A |
@@ -83,14 +83,14 @@ v1.6.x.
 ## CI integration
 
 ```yaml
-# Example: fail CI if any server is unprotected
+# Example: fail CI if any server is uncovered
 - name: Scan with coverage
   run: |
     etherfence scan --policy ci-policy.toml --format json > scan.json
-    unprotected=$(jq '.protection_coverage.unprotected' scan.json)
-    if [ "$unprotected" -gt 0 ]; then
-      echo "ERROR: $unprotected unprotected MCP servers found"
-      jq '.protection_coverage.servers[] | select(.status == "unprotected")' scan.json
+    uncovered=$(jq '.protection_coverage.uncovered' scan.json)
+    if [ "$uncovered" -gt 0 ]; then
+      echo "ERROR: $uncovered uncovered MCP servers found"
+      jq '.protection_coverage.servers[] | select(.status == "uncovered")' scan.json
       exit 1
     fi
 ```

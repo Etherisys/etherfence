@@ -693,9 +693,9 @@ pub struct PolicyMetadata {
 #[serde(rename_all = "snake_case")]
 pub enum CoverageStatus {
     /// Server is in the agent's allowed_mcp_servers list.
-    Protected,
+    Covered,
     /// Server is NOT in the agent's allowed_mcp_servers list.
-    Unprotected,
+    NotCovered,
     /// No [agents.<name>] section exists for this agent in the policy.
     NoPolicyForAgent,
     /// Agent section exists but allowed_mcp_servers is empty (implicit allow-all).
@@ -715,8 +715,8 @@ pub struct ServerCoverage {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProtectionCoverage {
     pub total_servers: usize,
-    pub protected: usize,
-    pub unprotected: usize,
+    pub covered: usize,
+    pub not_covered: usize,
     pub no_policy_for_agent: usize,
     pub empty_allowlist: usize,
     pub not_applicable: usize,

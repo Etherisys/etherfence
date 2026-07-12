@@ -596,11 +596,17 @@ fn secret_looking_name(name: &str) -> bool {
 
 fn build_coverage(inventory: &[InventoryItem], compiled: &CompiledPolicy) -> ProtectionCoverage {
     let mut servers: Vec<ServerCoverage> = Vec::new();
-    let mut tirith_count = 0usize;
 
     for item in inventory {
         if item.agent == AgentKind::Tirith {
-            tirith_count += item.mcp_servers.len();
+            for server in &item.mcp_servers {
+                servers.push(ServerCoverage {
+                    agent: item.agent,
+                    server_name: server.name.clone(),
+                    status: CoverageStatus::NotApplicable,
+                    config_path: item.config_path.clone(),
+                });
+            }
             continue;
         }
         for server in &item.mcp_servers {
@@ -623,13 +629,13 @@ fn build_coverage(inventory: &[InventoryItem], compiled: &CompiledPolicy) -> Pro
             .then_with(|| a.server_name.cmp(&b.server_name))
     });
 
-    let protected = servers
+    let covered = servers
         .iter()
-        .filter(|s| s.status == CoverageStatus::Protected)
+        .filter(|s| s.status == CoverageStatus::Covered)
         .count();
-    let unprotected = servers
+    let not_covered = servers
         .iter()
-        .filter(|s| s.status == CoverageStatus::Unprotected)
+        .filter(|s| s.status == CoverageStatus::NotCovered)
         .count();
     let no_policy_for_agent = servers
         .iter()
@@ -639,14 +645,18 @@ fn build_coverage(inventory: &[InventoryItem], compiled: &CompiledPolicy) -> Pro
         .iter()
         .filter(|s| s.status == CoverageStatus::EmptyAllowlist)
         .count();
+    let not_applicable = servers
+        .iter()
+        .filter(|s| s.status == CoverageStatus::NotApplicable)
+        .count();
 
     ProtectionCoverage {
         total_servers: servers.len(),
-        protected,
-        unprotected,
+        covered,
+        not_covered,
         no_policy_for_agent,
         empty_allowlist,
-        not_applicable: tirith_count,
+        not_applicable,
         servers,
     }
 }
@@ -668,9 +678,9 @@ fn coverage_status(
         .iter()
         .any(|allowed| same_name(allowed, &server.name))
     {
-        CoverageStatus::Protected
+        CoverageStatus::Covered
     } else {
-        CoverageStatus::Unprotected
+        CoverageStatus::NotCovered
     }
 }
 

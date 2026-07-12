@@ -1,0 +1,7 @@
+mcp_servers:
+  calculator:
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-calculator"]
+  filesystem:
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]

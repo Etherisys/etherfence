@@ -9,7 +9,7 @@ Draft — ready for plan phase
 ## Overview
 
 Extend `etherfence scan` so users can immediately see which detected MCP servers
-are actually protected by an active scan policy, not just which servers exist
+are actually covered by an active scan policy, not just which servers exist
 or what risks they have. This release answers: **"What is EtherFence protecting?"**
 
 The feature adds one new additive, optional section to the scan output across
@@ -25,7 +25,7 @@ Today when a user runs `etherfence scan --policy strict.toml`:
   `Policy: strict — checks=12, pass=8, violations=4`.
 - The `pass` count tells the user *how many* servers passed, but not *which* ones.
 - The `violations` generate `EF-POL-001` findings listing each unexpected server,
-  but there is no positive list of "these servers are protected."
+  but there is no positive list of "these servers are covered."
 - A user cannot answer "what is EtherFence protecting?" without manually
   cross-referencing inventory output with the policy file.
 
@@ -35,7 +35,7 @@ and scannable.
 
 Posture scoring (e.g., a "protection score" or weighted risk metric) is
 explicitly deferred to v1.7.3 (Effective Posture). This release is purely
-about visibility: showing what IS and IS NOT protected, without computing
+about visibility: showing what IS and IS NOT covered, without computing
 a score from it.
 
 ## User Stories
@@ -43,7 +43,7 @@ a score from it.
 ### US1 — Protection visibility in human summary (P1)
 As a security-conscious operator running `etherfence scan --policy strict.toml`,
 I want to see a "Protection coverage" section in the human summary that lists
-which MCP servers are protected and which are not, so I can immediately
+which MCP servers are covered and which are not, so I can immediately
 understand my coverage without reading the full verbose report or the policy file.
 
 **Acceptance**: When a policy is active, the human summary shows a "Protection
@@ -55,7 +55,7 @@ As an operator running `etherfence scan --policy strict.toml --verbose`,
 I want the full human report to include protection coverage per server in the
 inventory section, so I have complete information when doing detailed reviews.
 
-**Acceptance**: The verbose human output includes `[protected]` / `[unprotected]`
+**Acceptance**: The verbose human output includes `[covered]` / `[uncovered]`
 badges on each MCP server in the inventory listing.
 
 ### US3 — Protection coverage in JSON output (P1)
@@ -64,7 +64,7 @@ I want a `protection_coverage` object in the JSON report so my downstream
 dashboards and alerting can consume coverage data programmatically.
 
 **Acceptance**: JSON output includes an optional `protection_coverage` field
-with `total_servers`, `protected`, `unprotected`, and a `servers` array of
+with `total_servers`, `covered`, `uncovered`, and a `servers` array of
 `{agent, server_name, status, config_path}` objects. The field is absent when
 no policy is loaded.
 
@@ -102,8 +102,8 @@ Each server SHALL have exactly one of these coverage statuses:
 
 | Status | Meaning |
 |---|---|
-| `protected` | Server name appears in the agent's `allowed_mcp_servers` list; no EF-POL-001 violation generated |
-| `unprotected` | Server name does NOT appear in the agent's `allowed_mcp_servers` list; EF-POL-001 violation generated |
+| `covered` | Server name appears in the agent's `allowed_mcp_servers` list; no EF-POL-001 violation generated |
+| `uncovered` | Server name does NOT appear in the agent's `allowed_mcp_servers` list; EF-POL-001 violation generated |
 | `no_policy_for_agent` | The policy has no `[agents.<name>]` section for this agent type at all |
 | `empty_allowlist` | The agent's policy section exists but `allowed_mcp_servers` is empty (implicitly allows all) |
 | `not_applicable` | The agent type is Tirith (policy evaluation skips Tirith inventory items) |
@@ -113,8 +113,8 @@ Each server SHALL have exactly one of these coverage statuses:
 {
   "protection_coverage": {
     "total_servers": 8,
-    "protected": 5,
-    "unprotected": 2,
+    "covered": 5,
+    "uncovered": 2,
     "no_policy_for_agent": 0,
     "empty_allowlist": 0,
     "not_applicable": 1,
@@ -122,7 +122,7 @@ Each server SHALL have exactly one of these coverage statuses:
       {
         "agent": "claude-code",
         "server_name": "filesystem",
-        "status": "protected",
+        "status": "covered",
         "config_path": "~/.claude.json"
       }
     ]
@@ -133,7 +133,7 @@ Each server SHALL have exactly one of these coverage statuses:
 ### FR4 — Human summary coverage section
 When a policy is active, the default human scan output SHALL include a
 "Protection coverage" section between "Clients" and "Priority findings".
-The section SHALL list each server with a `✓ protected` or `✗ unprotected`
+The section SHALL list each server with a `✓ covered` or `✗ uncovered`
 marker, grouped by client.
 
 ### FR5 — Human verbose coverage
@@ -165,8 +165,8 @@ to `ef-scan-report/v0.1.2` to reflect the new optional field.
 
 ### ProtectionCoverage (new, on ScanReport)
 - `total_servers: usize` — total MCP servers across all inventory items (excluding Tirith)
-- `protected: usize` — count of servers with status `protected`
-- `unprotected: usize` — count of servers with status `unprotected`
+- `covered: usize` — count of servers with status `covered`
+- `uncovered: usize` — count of servers with status `uncovered`
 - `no_policy_for_agent: usize` — count where no agent policy section exists
 - `empty_allowlist: usize` — count where allowlist is empty
 - `not_applicable: usize` — count of Tirith servers (policy evaluation skips them)
@@ -179,8 +179,8 @@ to `ef-scan-report/v0.1.2` to reflect the new optional field.
 - `config_path: String` — tilde-display config path
 
 ### CoverageStatus (new enum)
-- `Protected`
-- `Unprotected`
+- `Covered`
+- `NotCovered`
 - `NoPolicyForAgent`
 - `EmptyAllowlist`
 - `NotApplicable`
@@ -216,7 +216,7 @@ to `ef-scan-report/v0.1.2` to reflect the new optional field.
    in run.properties.
 5. `etherfence scan` (no policy) produces byte-identical output to v1.6.2.
 6. All existing tests pass with updated version assertions.
-7. New fixture-backed tests cover: policy with protected+unprotected servers,
+7. New fixture-backed tests cover: policy with covered+uncovered servers,
    empty allowlist, no agent section, no MCP servers, Tirith exclusion.
 8. `cargo fmt --check`, `cargo clippy --all-targets --all-features -- -D warnings`,
    `cargo test --workspace`, `cargo build` all pass.
@@ -239,7 +239,7 @@ to `ef-scan-report/v0.1.2` to reflect the new optional field.
 |---|---|---|
 | I. Security-First, Deny-by-Default | ✅ Pass | Coverage is purely informational; no enforcement change |
 | II. Local-First Operation | ✅ Pass | No new network/daemon/service dependency |
-| III. Truth in Claims | ✅ Pass | Coverage labels are factual: "protected" = in allowlist, nothing more |
+| III. Truth in Claims | ✅ Pass | Coverage labels are factual: "covered" = in allowlist, nothing more |
 | IV. Deterministic Output | ✅ Pass | Server ordering is deterministic by agent key + config path + server name |
 | V. Fixture-Backed Findings | ✅ Pass | New fixtures will back every coverage status variant |
 | VI. Schema Compatibility | ✅ Pass | Additive optional field; schema bump to v0.1.2 |
@@ -255,7 +255,7 @@ to `ef-scan-report/v0.1.2` to reflect the new optional field.
    coverage data can be computed in the same pass.
 2. The `allow_empty_allowlist` behavior (empty = allows all) is intentional
    and should be reflected in coverage as `empty_allowlist` rather than
-   `unprotected`.
+   `uncovered`.
 3. Tirith inventory items are correctly excluded from MCP server coverage
    because the evaluator skips them (`if item.agent == AgentKind::Tirith`).
 4. The `ef-scan-report/v0.1.2` schema bump is additive-only: no field

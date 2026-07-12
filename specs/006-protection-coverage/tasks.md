@@ -36,8 +36,8 @@ can run in parallel (different files, no dependency conflict).
     - Skip Tirith items (add `NotApplicable` entry)
     - Look up agent policy via existing `agent_policy()` method
     - Determine `CoverageStatus`: `NoPolicyForAgent` if no section,
-      `EmptyAllowlist` if allowlist is empty, `Protected` if `same_name`
-      match, `Unprotected` otherwise
+      `EmptyAllowlist` if allowlist is empty, `Covered` if `same_name`
+      match, `NotCovered` otherwise
   - Sort the vec by `(agent.key(), config_path, server_name)`
   - Count statuses to populate `ProtectionCoverage` totals
   - Assign to `evaluation.coverage`
@@ -58,13 +58,13 @@ can run in parallel (different files, no dependency conflict).
 
 - [ ] **T8** [P] — Add protection coverage section to `render_scan_summary()`
   in `crates/etherfence-cli/src/main.rs` (between "Clients" and "Priority
-  findings"). Use themed `✓ protected` / `✗ unprotected` markers grouped
+  findings"). Use themed `✓ covered` / `✗ uncovered` markers grouped
   by client. Show `~ no policy` for `NoPolicyForAgent`, `— empty allowlist`
   for `EmptyAllowlist`.
 
 - [ ] **T9** [P] — Add coverage badges to `to_human()` inventory listing in
   `crates/etherfence-report/src/lib.rs`. For each MCP server in the inventory,
-  annotate with `[protected]` / `[unprotected]` / `[no policy]` /
+  annotate with `[covered]` / `[uncovered]` / `[no policy]` /
   `[empty allowlist]`.
 
 - [ ] **T10** [P] — Add `## Protection Coverage` table to `to_markdown()` in
@@ -94,8 +94,8 @@ can run in parallel (different files, no dependency conflict).
 ## Phase 6: Tests [P — coverage + report + existing tests]
 
 - [ ] **T13** [P] — Add policy unit tests in `crates/etherfence-policy/src/lib.rs`:
-  - `coverage_all_protected` — all servers in allowlist
-  - `coverage_mixed` — protected + unprotected
+  - `coverage_all_covered` — all servers in allowlist
+  - `coverage_mixed` — covered + uncovered
   - `coverage_no_agent_section` — `NoPolicyForAgent`
   - `coverage_empty_allowlist` — `EmptyAllowlist`
   - `coverage_tirith_excluded` — `NotApplicable`

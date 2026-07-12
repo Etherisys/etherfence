@@ -1,3 +1,7 @@
+schema_version = "ef-policy/v0.1"
+name = "coverage-test-policy"
+description = "Scan-only posture policy for protection coverage integration tests."
+
 [agents."Claude Code"]
 allowed_mcp_servers = ["filesystem", "memory"]
 

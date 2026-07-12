@@ -1,5 +1,5 @@
 use anyhow::Result;
-use etherfence_core::{Finding, ScanReport, Severity};
+use etherfence_core::{CoverageStatus, Finding, ScanReport, Severity};
 use serde_json::{json, Value as JsonValue};
 
 pub mod human_layout;
@@ -133,6 +133,9 @@ fn sarif_run_properties(report: &ScanReport) -> Result<JsonValue> {
     if let Some(baseline) = &report.baseline {
         properties["baseline"] = serde_json::to_value(baseline)?;
     }
+    if let Some(coverage) = &report.protection_coverage {
+        properties["protectionCoverage"] = serde_json::to_value(coverage)?;
+    }
     Ok(properties)
 }
 
@@ -230,6 +233,40 @@ pub fn to_markdown(report: &ScanReport) -> String {
         out.push_str(&format!("- Pass: {}\n", policy.pass));
         out.push_str(&format!("- Violations: {}\n", policy.violation));
         out.push_str(&format!("- Not applicable: {}\n\n", policy.not_applicable));
+    }
+
+    if let Some(coverage) = &report.protection_coverage {
+        out.push_str("## Protection Coverage\n\n");
+        out.push_str("| Metric | Count |\n");
+        out.push_str("| ---: | :--- |\n");
+        out.push_str(&format!("| Total servers | {} |\n", coverage.total_servers));
+        out.push_str(&format!("| Covered | {} |\n", coverage.covered));
+        out.push_str(&format!("| Not covered | {} |\n", coverage.not_covered));
+        out.push_str(&format!(
+            "| No policy for agent | {} |\n",
+            coverage.no_policy_for_agent
+        ));
+        out.push_str(&format!(
+            "| Empty allowlist | {} |\n",
+            coverage.empty_allowlist
+        ));
+        out.push_str(&format!(
+            "| Not applicable | {} |\n",
+            coverage.not_applicable
+        ));
+        out.push_str("\n### Per-Server Coverage\n\n");
+        out.push_str("| Agent | Server | Config Path | Status |\n");
+        out.push_str("| --- | --- | --- | --- |\n");
+        for server in &coverage.servers {
+            out.push_str(&format!(
+                "| {} | `{}` | `{}` | {} |\n",
+                server.agent,
+                server.server_name,
+                server.config_path,
+                coverage_md_label(&server.status),
+            ));
+        }
+        out.push('\n');
     }
 
     out.push_str("## Inventory\n\n");
@@ -450,6 +487,26 @@ fn append_human_inventory(out: &mut String, report: &ScanReport, width: usize) {
         for item in &report.inventory {
             let detail = if item.mcp_servers.is_empty() {
                 format!("{} ({})", item.agent, item.config_path)
+            } else if let Some(coverage) = &report.protection_coverage {
+                let badges: Vec<String> = item
+                    .mcp_servers
+                    .iter()
+                    .map(|server| {
+                        let status = coverage
+                            .servers
+                            .iter()
+                            .find(|sc| {
+                                sc.agent.key() == item.agent.key()
+                                    && sc.server_name == server.name
+                                    && sc.config_path == item.config_path
+                            })
+                            .map(|sc| &sc.status);
+                        let badge = status.map(coverage_badge).unwrap_or("[unknown]");
+                        format!("{} {}", server.name, badge)
+                    })
+                    .collect();
+                let servers_str = badges.join(", ");
+                format!("{} ({}): {}", item.agent, item.config_path, servers_str)
             } else {
                 format!(
                     "{} ({}): {} MCP server(s)",
@@ -529,6 +586,28 @@ fn append_wrapped(out: &mut String, prefix: &str, continuation: &str, text: &str
     }
 }
 
+/// Human-verbose badge for a coverage status.
+fn coverage_badge(status: &CoverageStatus) -> &'static str {
+    match status {
+        CoverageStatus::Covered => "[covered]",
+        CoverageStatus::NotCovered => "[not covered]",
+        CoverageStatus::NoPolicyForAgent => "[no policy]",
+        CoverageStatus::EmptyAllowlist => "[empty allowlist]",
+        CoverageStatus::NotApplicable => "[not applicable]",
+    }
+}
+
+/// Readable label for markdown / SARIF tables.
+fn coverage_md_label(status: &CoverageStatus) -> &'static str {
+    match status {
+        CoverageStatus::Covered => "covered",
+        CoverageStatus::NotCovered => "not covered",
+        CoverageStatus::NoPolicyForAgent => "no policy for agent",
+        CoverageStatus::EmptyAllowlist => "empty allowlist",
+        CoverageStatus::NotApplicable => "not applicable",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -537,7 +616,7 @@ mod tests {
     #[test]
     fn renders_empty_human_report() {
         let report = ScanReport {
-            schema_version: "ef-scan-report/v0.1.1".to_string(),
+            schema_version: "ef-scan-report/v0.1.2".to_string(),
             tool: "etherfence".to_string(),
             version: "0.1.3".to_string(),
             status: "stable-local-scan".to_string(),
@@ -548,6 +627,7 @@ mod tests {
             posture: None,
             policy: None,
             baseline: None,
+            protection_coverage: None,
         };
         let rendered = to_human(&report);
         assert!(rendered.contains("Status: stable-local-scan"));
@@ -556,13 +636,13 @@ mod tests {
         assert!(rendered.contains("This scan command is read-only posture discovery"));
         assert!(rendered.contains("Runtime MCP boundary enforcement is available"));
         assert!(rendered.contains("separately through `etherfence mcp-proxy`"));
-        assert!(rendered.contains("Schema: ef-scan-report/v0.1.1"));
+        assert!(rendered.contains("Schema: ef-scan-report/v0.1.2"));
     }
 
     #[test]
     fn renders_empty_markdown_report() {
         let report = ScanReport {
-            schema_version: "ef-scan-report/v0.1.1".to_string(),
+            schema_version: "ef-scan-report/v0.1.2".to_string(),
             tool: "etherfence".to_string(),
             version: "0.1.3".to_string(),
             status: "stable-local-scan".to_string(),
@@ -573,6 +653,7 @@ mod tests {
             posture: None,
             policy: None,
             baseline: None,
+            protection_coverage: None,
         };
         let rendered = to_markdown(&report);
         assert!(rendered.contains("# EtherFence Scan Report"));
@@ -587,7 +668,7 @@ mod tests {
     fn renders_posture_in_human_and_markdown_reports() {
         use etherfence_core::{PostureGrade, PostureScope, PostureSummary};
         let report = ScanReport {
-            schema_version: "ef-scan-report/v0.1.1".to_string(),
+            schema_version: "ef-scan-report/v0.1.2".to_string(),
             tool: "etherfence".to_string(),
             version: "1.7.0".to_string(),
             status: "stable-local-scan".to_string(),
@@ -610,6 +691,7 @@ mod tests {
             }),
             policy: None,
             baseline: None,
+            protection_coverage: None,
         };
         assert!(to_human(&report).contains("Security posture: 100/100 (grade A)"));
         assert!(to_human(&report)
@@ -623,7 +705,7 @@ mod tests {
     fn informational_only_posture_has_no_human_priority_action() {
         use etherfence_core::{PostureGrade, PostureScope, PostureSummary};
         let report = ScanReport {
-            schema_version: "ef-scan-report/v0.1.1".to_string(),
+            schema_version: "ef-scan-report/v0.1.2".to_string(),
             tool: "etherfence".to_string(),
             version: "1.7.1".to_string(),
             status: "stable-local-scan".to_string(),
@@ -646,6 +728,7 @@ mod tests {
             }),
             policy: None,
             baseline: None,
+            protection_coverage: None,
         };
         let rendered = to_human_with_width(&report, 42);
         assert!(rendered.contains("Security posture: 100/100"));
@@ -659,7 +742,7 @@ mod tests {
             AgentKind, PostureGrade, PostureRisk, PostureScope, PostureSummary, RecommendedAction,
         };
         let report = ScanReport {
-            schema_version: "ef-scan-report/v0.1.1".to_string(),
+            schema_version: "ef-scan-report/v0.1.2".to_string(),
             tool: "etherfence".to_string(),
             version: "1.7.1".to_string(),
             status: "stable-local-scan".to_string(),
@@ -693,6 +776,7 @@ mod tests {
             }),
             policy: None,
             baseline: None,
+            protection_coverage: None,
         };
         let rendered = to_human_with_width(&report, 42);
         assert!(rendered
@@ -744,7 +828,7 @@ mod tests {
         };
         finding.refresh_fingerprint();
         let report = ScanReport {
-            schema_version: "ef-scan-report/v0.1.1".to_string(),
+            schema_version: "ef-scan-report/v0.1.2".to_string(),
             tool: "etherfence".to_string(),
             version: "0.1.8".to_string(),
             status: "stable-local-scan".to_string(),
@@ -755,6 +839,7 @@ mod tests {
             posture: None,
             policy: None,
             baseline: None,
+            protection_coverage: None,
         };
         let rendered = to_sarif(&report).expect("sarif renders");
         let sarif: JsonValue = serde_json::from_str(&rendered).expect("valid JSON");

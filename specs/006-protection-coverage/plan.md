@@ -58,8 +58,8 @@ Add to `crates/etherfence-core/src/lib.rs`:
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CoverageStatus {
-    Protected,
-    Unprotected,
+    Covered,
+    NotCovered,
     NoPolicyForAgent,
     EmptyAllowlist,
     NotApplicable,
@@ -76,8 +76,8 @@ pub struct ServerCoverage {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProtectionCoverage {
     pub total_servers: usize,
-    pub protected: usize,
-    pub unprotected: usize,
+    pub covered: usize,
+    pub uncovered: usize,
     pub no_policy_for_agent: usize,
     pub empty_allowlist: usize,
     pub not_applicable: usize,
@@ -109,8 +109,8 @@ In `evaluate_policy()`, after the existing inventory walk:
     - Tirith → `NotApplicable`
     - No agent policy → `NoPolicyForAgent`
     - Empty allowlist → `EmptyAllowlist`
-    - Server in allowlist → `Protected`
-    - Server not in allowlist → `Unprotected`
+    - Server in allowlist → `Covered`
+    - Server not in allowlist → `NotCovered`
 - After the loop, construct `ProtectionCoverage` with counts and the sorted
   server list.
 
@@ -129,9 +129,9 @@ Add after the "Clients" section and before "Priority findings":
 ```
 Protection coverage
 ──────────────────
-✓ protected    claude-code / filesystem         (~/.claude.json)
-✗ unprotected  claude-code / github             (~/.claude.json)
-✓ protected    cursor / filesystem              (~/.cursor/mcp.json)
+✓ covered    claude-code / filesystem         (~/.claude.json)
+✗ uncovered  claude-code / github             (~/.claude.json)
+✓ covered    cursor / filesystem              (~/.cursor/mcp.json)
 ```
 
 #### Human verbose (`to_human`)
