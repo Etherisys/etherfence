@@ -17,7 +17,7 @@ field guards; `ef-mcp-policy/v0.1` policies are unaffected. EtherFence still
 has no daemon mode, shell hooks, command interception, terminal-command
 scanning, or network interception.
 
-## [1.6.0] - 2026-07-11
+## [1.6.1] - 2026-07-12
 
 ### Added
 
