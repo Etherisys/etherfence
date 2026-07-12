@@ -228,6 +228,8 @@ Scanned       /home/user
 AI clients    5 detected
 MCP servers   6 configured
 Findings      2 high · 5 medium · 9 low · 0 info
+Posture       0/100 — GRADE F
+Assessment    Multiple significant posture risks need prompt review.
 
 Overall status:  NEEDS ATTENTION
 
@@ -240,10 +242,12 @@ Priority findings
 ────────────────────────────────────────────────────────────
 HIGH    Broad filesystem access hint  EF-MCP-001
         Claude Code / filesystem
+        Why this matters: A broad filesystem server can expose more files than intended to an AI agent.
 
 Next steps
 ────────────────────────────────────────────────────────────
-Run `etherfence scan --verbose` for evidence, remediation, and fingerprints.
+1. [EF-MCP-001] Review the server's configured root and restrict it to the smallest required directory.
+Run `etherfence scan --verbose` for full evidence and fingerprints.
 Run `etherfence setup` to secure detected MCP servers.
 ```
 

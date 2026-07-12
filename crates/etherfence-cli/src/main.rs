@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use etherfence_core::{
     read_bounded_text_file, read_bounded_text_file_no_follow, BaselineComparison, BaselineFile,
-    BaselineStatus, Finding, PolicyMetadata, ScanReport, Severity, Summary,
+    BaselineStatus, Finding, PolicyMetadata, PostureSummary, ScanReport, Severity, Summary,
     MAX_BASELINE_FILE_BYTES, MAX_CONFIG_FILE_BYTES,
 };
 use std::collections::{HashMap, HashSet};
@@ -2272,6 +2272,7 @@ fn run_scan(options: ScanOptions) -> Result<()> {
     display_findings.retain(|finding| finding.severity >= options.severity_threshold);
 
     let summary = Summary::from_counts(inventory.len(), &display_findings);
+    let posture = PostureSummary::from_findings(&display_findings);
     let report = ScanReport {
         schema_version: "ef-scan-report/v0.1.1".to_string(),
         tool: "etherfence".to_string(),
@@ -2281,6 +2282,7 @@ fn run_scan(options: ScanOptions) -> Result<()> {
         inventory,
         findings: display_findings,
         summary,
+        posture: Some(posture),
         policy: policy_meta,
         baseline: baseline_meta,
     };
@@ -2355,6 +2357,30 @@ fn render_scan_summary(report: &ScanReport) -> String {
             )
         )
     );
+    if let Some(posture) = &report.posture {
+        let grade_style = match posture.grade {
+            etherfence_core::PostureGrade::A | etherfence_core::PostureGrade::B => &theme.success,
+            etherfence_core::PostureGrade::C => &theme.warning,
+            etherfence_core::PostureGrade::D | etherfence_core::PostureGrade::F => &theme.danger,
+        };
+        let _ = writeln!(
+            out,
+            "{}",
+            theme.key_value(
+                "Posture",
+                &format!(
+                    "{}/100 — {}",
+                    posture.score,
+                    grade_style.apply_to(format!("GRADE {}", posture.grade.label()))
+                )
+            )
+        );
+        let _ = writeln!(
+            out,
+            "{}",
+            theme.key_value("Assessment", &posture.assessment)
+        );
+    }
     if let Some(baseline) = &report.baseline {
         let _ = writeln!(
             out,
@@ -2415,71 +2441,62 @@ fn render_scan_summary(report: &ScanReport) -> String {
     }
 
     let _ = writeln!(out, "\n{}", theme.section("Priority findings"));
-    if report.findings.is_empty() {
-        let _ = writeln!(
-            out,
-            "None displayed. Missing files are skipped gracefully; this does not prove the host is secure."
-        );
-    } else {
-        // Keep the default report scannable on hosts with many findings:
-        // show the first few priority findings and count the rest.
-        const MAX_PRIORITY_FINDINGS: usize = 10;
-        let mut printed = false;
-        let mut shown = 0usize;
-        let mut suppressed = 0usize;
-        for severity in [Severity::High, Severity::Medium] {
-            for finding in report
-                .findings
-                .iter()
-                .filter(|finding| finding.severity == severity)
-            {
-                if shown >= MAX_PRIORITY_FINDINGS {
-                    suppressed += 1;
-                    continue;
-                }
-                let badge = match severity {
+    if let Some(posture) = &report.posture {
+        if posture.priority_risks.is_empty() {
+            let _ = writeln!(
+                out,
+                "No active scored findings are displayed. Missing files are skipped gracefully; this does not prove the host is secure."
+            );
+        } else {
+            for risk in &posture.priority_risks {
+                let badge = match risk.severity {
                     Severity::High => theme.danger.apply_to(ui::pad("HIGH", 7)).to_string(),
-                    _ => theme.warning.apply_to(ui::pad("MEDIUM", 7)).to_string(),
+                    Severity::Medium => theme.warning.apply_to(ui::pad("MEDIUM", 7)).to_string(),
+                    Severity::Low => theme.info.apply_to(ui::pad("LOW", 7)).to_string(),
+                    Severity::Info => theme.muted.apply_to(ui::pad("INFO", 7)).to_string(),
                 };
                 let _ = writeln!(
                     out,
                     "{badge} {}  {}",
-                    finding.title,
-                    theme.muted.apply_to(&finding.id)
+                    risk.title,
+                    theme.muted.apply_to(&risk.finding_id)
                 );
-                let _ = writeln!(out, "        {} / {}", finding.agent, finding.target);
-                printed = true;
-                shown += 1;
+                let _ = writeln!(out, "        {} / {}", risk.agent, risk.target);
+                let _ = writeln!(out, "        Why this matters: {}", risk.why_this_matters);
+            }
+            let remaining = posture
+                .active_findings
+                .saturating_sub(posture.priority_risks.len());
+            if remaining > 0 {
+                let _ = writeln!(
+                    out,
+                    "{} {remaining} additional active finding(s) — run `etherfence scan --verbose` for the full list",
+                    theme.muted.apply_to(ui::pad("…", 7))
+                );
             }
         }
-        if suppressed > 0 {
-            let _ = writeln!(
-                out,
-                "{} {suppressed} more high/medium finding(s) — run `etherfence scan --verbose` for the full list",
-                theme.muted.apply_to(ui::pad("\u{2026}", 7))
-            );
-        }
-        let quiet = report
-            .findings
-            .iter()
-            .filter(|finding| finding.severity < Severity::Medium)
-            .count();
-        if quiet > 0 {
-            if printed {
-                let _ = writeln!(out);
-            }
-            let _ = writeln!(
-                out,
-                "{} {quiet} additional lower-severity observation(s)",
-                theme.muted.apply_to(ui::pad("LOW", 7))
-            );
-        }
+    } else if report.findings.is_empty() {
+        let _ = writeln!(
+            out,
+            "None displayed. Missing files are skipped gracefully; this does not prove the host is secure."
+        );
     }
 
     let _ = writeln!(out, "\n{}", theme.section("Next steps"));
+    if let Some(posture) = &report.posture {
+        for (index, action) in posture.recommended_actions.iter().enumerate() {
+            let _ = writeln!(
+                out,
+                "{}. {} {}",
+                index + 1,
+                theme.muted.apply_to(format!("[{}]", action.finding_id)),
+                action.recommendation
+            );
+        }
+    }
     let _ = writeln!(
         out,
-        "Run {} for evidence, remediation, and fingerprints.",
+        "Run {} for full evidence and fingerprints.",
         theme.info.apply_to("`etherfence scan --verbose`")
     );
     let _ = writeln!(

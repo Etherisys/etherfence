@@ -17,6 +17,19 @@ field guards; `ef-mcp-policy/v0.1` policies are unaffected. EtherFence still
 has no daemon mode, shell hooks, command interception, terminal-command
 scanning, or network interception.
 
+## [1.7.0] - 2026-07-12
+
+### Added
+
+- **Scan posture experience**: `etherfence scan` now presents a deterministic 0–100 posture score, A–F grade, concise advisory assessment, and up to three priority risks with linked recommended next actions before detailed evidence. The default terminal view extends the existing EtherFence theme and retains the full-evidence path through `--verbose`.
+- **Consistent reports**: verbose human and Markdown reports now include the same posture, priority-risk, and action summary before their complete severity-grouped evidence.
+- **Additive JSON posture**: `ef-scan-report/v0.1.1` now optionally includes `posture` with deterministic counts, score, grade, priority risks, and recommended actions. Existing fields, schema identifier, SARIF output, baseline files, scan selection, and exit-code behavior remain unchanged.
+
+### Compatibility
+
+- Posture is local, read-only, and advisory. It does not add detectors, alter severities/finding IDs, remediate configurations, prove a host is secure, or change `mcp-proxy` enforcement.
+- The score derives from displayed active findings after existing severity filtering and baseline comparison; resolved historical findings remain evidence but do not lower the score or consume a priority slot.
+
 ## [1.6.2] - 2026-07-12
 
 ### Fixed

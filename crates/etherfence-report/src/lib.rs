@@ -141,6 +141,7 @@ pub fn to_human(report: &ScanReport) -> String {
     out.push_str(&format!("Scanned root: {}\n", report.scanned_root));
     out.push_str(&summary_line(report));
     out.push('\n');
+    append_human_posture(&mut out, report);
     append_human_baseline(&mut out, report);
     append_human_policy(&mut out, report);
     out.push('\n');
@@ -157,6 +158,7 @@ pub fn to_markdown(report: &ScanReport) -> String {
     out.push_str(&format!("- Status: `{}`\n", report.status));
     out.push_str(&format!("- Scanned root: `{}`\n\n", report.scanned_root));
 
+    append_markdown_posture(&mut out, report);
     out.push_str("## Summary\n\n");
     out.push_str("| Inventory items | Findings | High | Medium | Low | Info |\n");
     out.push_str("| ---: | ---: | ---: | ---: | ---: | ---: |\n");
@@ -254,6 +256,71 @@ pub fn to_markdown(report: &ScanReport) -> String {
     }
     out.push_str("_This scan command is read-only posture discovery. It does not block, proxy, hook, or intercept runtime activity. Runtime MCP boundary enforcement is available separately through `etherfence mcp-proxy`. Findings are posture risks/hints, not confirmed exploitability._\n");
     out
+}
+
+fn append_human_posture(out: &mut String, report: &ScanReport) {
+    let Some(posture) = &report.posture else {
+        return;
+    };
+    out.push_str(&format!(
+        "Security posture: {}/100 (grade {})\nAssessment: {}\n",
+        posture.score,
+        posture.grade.label(),
+        posture.assessment
+    ));
+    if !posture.priority_risks.is_empty() {
+        out.push_str("Priority risks:\n");
+        for risk in &posture.priority_risks {
+            out.push_str(&format!(
+                "- {} {} [{} / {}]\n  Why this matters: {}\n",
+                risk.finding_id, risk.title, risk.agent, risk.target, risk.why_this_matters
+            ));
+        }
+        out.push_str("Recommended actions:\n");
+        for action in &posture.recommended_actions {
+            out.push_str(&format!(
+                "- [{}] {}\n",
+                action.finding_id, action.recommendation
+            ));
+        }
+    }
+}
+
+fn append_markdown_posture(out: &mut String, report: &ScanReport) {
+    let Some(posture) = &report.posture else {
+        return;
+    };
+    out.push_str("## Security Posture\n\n");
+    out.push_str("| Score | Grade | Active findings | High | Medium | Low | Info |\n");
+    out.push_str("| ---: | --- | ---: | ---: | ---: | ---: | ---: |\n");
+    out.push_str(&format!(
+        "| {} | {} | {} | {} | {} | {} | {} |\n\n",
+        posture.score,
+        posture.grade.label(),
+        posture.active_findings,
+        posture.high,
+        posture.medium,
+        posture.low,
+        posture.info
+    ));
+    out.push_str(&format!("**Assessment:** {}\n\n", posture.assessment));
+    if !posture.priority_risks.is_empty() {
+        out.push_str("### Priority Risks\n\n");
+        for risk in &posture.priority_risks {
+            out.push_str(&format!(
+                "- **{}** `{}` — {} / {}\n  - Why this matters: {}\n",
+                risk.title, risk.finding_id, risk.agent, risk.target, risk.why_this_matters
+            ));
+        }
+        out.push_str("\n### Recommended Next Actions\n\n");
+        for action in &posture.recommended_actions {
+            out.push_str(&format!(
+                "- [`{}`] {}\n",
+                action.finding_id, action.recommendation
+            ));
+        }
+        out.push('\n');
+    }
 }
 
 fn summary_line(report: &ScanReport) -> String {
@@ -363,6 +430,7 @@ mod tests {
             inventory: Vec::new(),
             findings: Vec::new(),
             summary: Summary::from_counts(0, &[]),
+            posture: None,
             policy: None,
             baseline: None,
         };
@@ -388,6 +456,7 @@ mod tests {
             inventory: Vec::new(),
             findings: Vec::new(),
             summary: Summary::from_counts(0, &[]),
+            posture: None,
             policy: None,
             baseline: None,
         };
@@ -398,6 +467,37 @@ mod tests {
         assert!(rendered.contains("- Status: `stable-local-scan`"));
         assert!(!rendered.to_lowercase().contains("pre-alpha"));
         assert!(rendered.contains("This scan command is read-only posture discovery"));
+    }
+
+    #[test]
+    fn renders_posture_in_human_and_markdown_reports() {
+        use etherfence_core::{PostureGrade, PostureSummary};
+        let report = ScanReport {
+            schema_version: "ef-scan-report/v0.1.1".to_string(),
+            tool: "etherfence".to_string(),
+            version: "1.7.0".to_string(),
+            status: "stable-local-scan".to_string(),
+            scanned_root: "/home/user".to_string(),
+            inventory: Vec::new(),
+            findings: Vec::new(),
+            summary: Summary::from_counts(0, &[]),
+            posture: Some(PostureSummary {
+                score: 100,
+                grade: PostureGrade::A,
+                assessment: "No active scored findings are displayed. This is not proof that the host is secure.".to_string(),
+                active_findings: 0,
+                high: 0,
+                medium: 0,
+                low: 0,
+                info: 0,
+                priority_risks: Vec::new(),
+                recommended_actions: Vec::new(),
+            }),
+            policy: None,
+            baseline: None,
+        };
+        assert!(to_human(&report).contains("Security posture: 100/100 (grade A)"));
+        assert!(to_markdown(&report).contains("## Security Posture"));
     }
 
     #[test]
@@ -439,6 +539,7 @@ mod tests {
             inventory: Vec::new(),
             findings: vec![finding],
             summary: Summary::from_counts(0, &[]),
+            posture: None,
             policy: None,
             baseline: None,
         };

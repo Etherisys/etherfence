@@ -54,13 +54,26 @@ fn scan_fixture_json_has_stable_top_level_schema() {
 
     assert_eq!(json["schema_version"], "ef-scan-report/v0.1.1");
     assert_eq!(json["tool"], "etherfence");
-    assert_eq!(json["version"], "1.6.2");
+    assert_eq!(json["version"], "1.7.0");
     assert_eq!(json["status"], "stable-local-scan");
     assert!(json.get("scanned_root").is_some());
     assert!(json["inventory"].is_array());
     assert!(json["findings"].is_array());
     assert!(json["summary"].is_object());
     assert_eq!(json["summary"]["inventory_items"], 12);
+    let posture = &json["posture"];
+    assert_eq!(posture["score"], 0);
+    assert_eq!(posture["grade"], "f");
+    assert!(posture["assessment"]
+        .as_str()
+        .unwrap()
+        .contains("prompt review"));
+    assert!(posture["priority_risks"].is_array());
+    assert_eq!(posture["priority_risks"].as_array().unwrap().len(), 3);
+    assert_eq!(
+        posture["priority_risks"][0]["finding_id"],
+        posture["recommended_actions"][0]["finding_id"]
+    );
 
     let first = json["findings"]
         .as_array()
@@ -140,9 +153,13 @@ fn scan_fixture_human_default_is_executive_summary() {
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("Security posture"));
+    assert!(stdout.contains("Posture"));
+    assert!(stdout.contains("GRADE F"));
+    assert!(stdout.contains("Assessment"));
     assert!(stdout.contains("Overall status:"));
     assert!(stdout.contains("Clients"));
     assert!(stdout.contains("Priority findings"));
+    assert!(stdout.contains("Why this matters:"));
     assert!(stdout.contains("Next steps"));
     assert!(stdout.contains("`etherfence scan --verbose`"));
     assert!(stdout.contains("`etherfence setup`"));
@@ -253,6 +270,9 @@ fn markdown_output_has_review_headings_and_guidance() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("# EtherFence Scan Report"));
+    assert!(stdout.contains("## Security Posture"));
+    assert!(stdout.contains("### Priority Risks"));
+    assert!(stdout.contains("### Recommended Next Actions"));
     assert!(stdout.contains("## Summary"));
     assert!(stdout.contains("| Inventory items | Findings | High | Medium | Low | Info |"));
     assert!(stdout.contains("## Inventory"));
@@ -936,7 +956,7 @@ fn sarif_output_is_valid_and_maps_severity_levels() {
     );
     let driver = &json["runs"][0]["tool"]["driver"];
     assert_eq!(driver["name"], "etherfence");
-    assert_eq!(driver["version"], "1.6.2");
+    assert_eq!(driver["version"], "1.7.0");
 
     let rules = sarif_rules(&json);
     let rule_ids: Vec<&str> = rules
