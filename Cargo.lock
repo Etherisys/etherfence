@@ -213,7 +213,7 @@ dependencies = [
 
 [[package]]
 name = "etherfence-cli"
-version = "1.6.0"
+version = "1.6.1"
 dependencies = [
  "anstream",
  "anyhow",
@@ -235,7 +235,7 @@ dependencies = [
 
 [[package]]
 name = "etherfence-core"
-version = "1.6.0"
+version = "1.6.1"
 dependencies = [
  "same-file",
  "serde",
@@ -243,14 +243,14 @@ dependencies = [
 
 [[package]]
 name = "etherfence-detectors"
-version = "1.6.0"
+version = "1.6.1"
 dependencies = [
  "etherfence-core",
 ]
 
 [[package]]
 name = "etherfence-inventory"
-version = "1.6.0"
+version = "1.6.1"
 dependencies = [
  "anyhow",
  "etherfence-core",
@@ -261,7 +261,7 @@ dependencies = [
 
 [[package]]
 name = "etherfence-mcp"
-version = "1.6.0"
+version = "1.6.1"
 dependencies = [
  "anyhow",
  "etherfence-core",
@@ -272,7 +272,7 @@ dependencies = [
 
 [[package]]
 name = "etherfence-policy"
-version = "1.6.0"
+version = "1.6.1"
 dependencies = [
  "anyhow",
  "etherfence-core",
@@ -283,7 +283,7 @@ dependencies = [
 
 [[package]]
 name = "etherfence-report"
-version = "1.6.0"
+version = "1.6.1"
 dependencies = [
  "anyhow",
  "etherfence-core",
@@ -292,7 +292,7 @@ dependencies = [
 
 [[package]]
 name = "etherfence-setup"
-version = "1.6.0"
+version = "1.6.1"
 dependencies = [
  "anyhow",
  "etherfence-core",
