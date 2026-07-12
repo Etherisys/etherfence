@@ -2,6 +2,10 @@ use anyhow::Result;
 use etherfence_core::{Finding, ScanReport, Severity};
 use serde_json::{json, Value as JsonValue};
 
+pub mod human_layout;
+
+use human_layout::{wrap_prefixed, DEFAULT_HUMAN_WIDTH};
+
 pub fn to_json(report: &ScanReport) -> Result<String> {
     Ok(serde_json::to_string_pretty(report)?)
 }
@@ -133,21 +137,47 @@ fn sarif_run_properties(report: &ScanReport) -> Result<JsonValue> {
 }
 
 pub fn to_human(report: &ScanReport) -> String {
+    to_human_with_width(report, DEFAULT_HUMAN_WIDTH)
+}
+
+/// Render verbose human output within an explicit display-column width.
+/// Styling is intentionally absent here; the CLI applies its existing theme to
+/// the summary, while this complete-evidence path remains safely plain-text.
+pub fn to_human_with_width(report: &ScanReport, width: usize) -> String {
     let mut out = String::new();
     out.push_str("EtherFence scan report\n");
     out.push_str("======================\n");
-    out.push_str(&format!("Schema: {}\n", report.schema_version));
-    out.push_str(&format!("Status: {}\n", report.status));
-    out.push_str(&format!("Scanned root: {}\n", report.scanned_root));
-    out.push_str(&summary_line(report));
+    append_wrapped(
+        &mut out,
+        "Schema: ",
+        "        ",
+        &report.schema_version,
+        width,
+    );
+    append_wrapped(&mut out, "Status: ", "        ", &report.status, width);
+    append_wrapped(
+        &mut out,
+        "Scanned root: ",
+        "              ",
+        &report.scanned_root,
+        width,
+    );
+    append_wrapped(&mut out, "", "", &summary_line(report), width);
     out.push('\n');
-    append_human_posture(&mut out, report);
-    append_human_baseline(&mut out, report);
-    append_human_policy(&mut out, report);
+    append_human_posture(&mut out, report, width);
+    append_human_baseline(&mut out, report, width);
+    append_human_policy(&mut out, report, width);
     out.push('\n');
-    append_human_inventory(&mut out, report);
-    append_human_findings(&mut out, report);
-    out.push_str("\nNote: This scan command is read-only posture discovery. It does not block, proxy, hook, or intercept runtime activity. Runtime MCP boundary enforcement is available separately through `etherfence mcp-proxy`. Findings are posture risks/hints, not confirmed exploitability.\n");
+    append_human_inventory(&mut out, report, width);
+    append_human_findings(&mut out, report, width);
+    out.push('\n');
+    append_wrapped(
+        &mut out,
+        "Note: ",
+        "      ",
+        "This scan command is read-only posture discovery. It does not block, proxy, hook, or intercept runtime activity. Runtime MCP boundary enforcement is available separately through `etherfence mcp-proxy`. Findings are posture risks/hints, not confirmed exploitability.",
+        width,
+    );
     out
 }
 
@@ -258,31 +288,61 @@ pub fn to_markdown(report: &ScanReport) -> String {
     out
 }
 
-fn append_human_posture(out: &mut String, report: &ScanReport) {
+fn append_human_posture(out: &mut String, report: &ScanReport, width: usize) {
     let Some(posture) = &report.posture else {
         return;
     };
-    out.push_str(&format!(
-        "Security posture: {}/100 (grade {})\nScope: {}\nAssessment: {}\n",
-        posture.score,
-        posture.grade.label(),
-        posture.scope.human_label(),
-        posture.assessment
-    ));
+    append_wrapped(
+        out,
+        "Security posture: ",
+        "                  ",
+        &format!("{}/100 (grade {})", posture.score, posture.grade.label()),
+        width,
+    );
+    append_wrapped(
+        out,
+        "Scope: ",
+        "       ",
+        &posture.scope.human_label(),
+        width,
+    );
+    append_wrapped(
+        out,
+        "Assessment: ",
+        "            ",
+        &posture.assessment,
+        width,
+    );
     if !posture.priority_risks.is_empty() {
         out.push_str("Priority risks:\n");
         for risk in &posture.priority_risks {
-            out.push_str(&format!(
-                "- {} {} [{} / {}]\n  Why this matters: {}\n",
-                risk.finding_id, risk.title, risk.agent, risk.target, risk.why_this_matters
-            ));
+            append_wrapped(
+                out,
+                "- ",
+                "  ",
+                &format!(
+                    "{} {} [{} / {}]",
+                    risk.finding_id, risk.title, risk.agent, risk.target
+                ),
+                width,
+            );
+            append_wrapped(
+                out,
+                "  Why this matters: ",
+                "                    ",
+                &risk.why_this_matters,
+                width,
+            );
         }
         out.push_str("Recommended actions:\n");
         for action in &posture.recommended_actions {
-            out.push_str(&format!(
-                "- [{}] {}\n",
-                action.finding_id, action.recommendation
-            ));
+            append_wrapped(
+                out,
+                &format!("- [{}] ", action.finding_id),
+                "  ",
+                &action.recommendation,
+                width,
+            );
         }
     }
 }
@@ -337,54 +397,82 @@ fn summary_line(report: &ScanReport) -> String {
     )
 }
 
-fn append_human_baseline(out: &mut String, report: &ScanReport) {
+fn append_human_baseline(out: &mut String, report: &ScanReport, width: usize) {
     if let Some(baseline) = &report.baseline {
-        out.push_str(&format!(
-            "Baseline: {} (new={}, existing={}, resolved={})\n",
-            baseline.baseline_path, baseline.new, baseline.existing, baseline.resolved
-        ));
-    }
-}
-
-fn append_human_policy(out: &mut String, report: &ScanReport) {
-    if let Some(policy) = &report.policy {
-        out.push_str(&format!(
-            "Policy: {} ({}, source={}, schema={}) checks={}, pass={}, violations={}, not_applicable={}, require_tirith={}\n",
-            policy.policy_name,
-            policy.policy_path,
-            policy.policy_source,
-            policy.policy_schema_version,
-            policy.checks_total,
-            policy.pass,
-            policy.violation,
-            policy.not_applicable,
-            policy.require_tirith
-        ));
-    }
-}
-
-fn append_human_inventory(out: &mut String, report: &ScanReport) {
-    if report.inventory.is_empty() {
-        out.push_str(
-            "Inventory: no supported agent config files found in conservative scan paths.\n\n",
+        append_wrapped(
+            out,
+            "Baseline: ",
+            "          ",
+            &format!(
+                "{} (new={}, existing={}, resolved={})",
+                baseline.baseline_path, baseline.new, baseline.existing, baseline.resolved
+            ),
+            width,
         );
+    }
+}
+
+fn append_human_policy(out: &mut String, report: &ScanReport, width: usize) {
+    if let Some(policy) = &report.policy {
+        append_wrapped(
+            out,
+            "Policy: ",
+            "        ",
+            &format!(
+                "{} ({}, source={}, schema={}) checks={}, pass={}, violations={}, not_applicable={}, require_tirith={}",
+                policy.policy_name,
+                policy.policy_path,
+                policy.policy_source,
+                policy.policy_schema_version,
+                policy.checks_total,
+                policy.pass,
+                policy.violation,
+                policy.not_applicable,
+                policy.require_tirith
+            ),
+            width,
+        );
+    }
+}
+
+fn append_human_inventory(out: &mut String, report: &ScanReport, width: usize) {
+    if report.inventory.is_empty() {
+        append_wrapped(
+            out,
+            "Inventory: ",
+            "           ",
+            "no supported agent config files found in conservative scan paths.",
+            width,
+        );
+        out.push('\n');
     } else {
         out.push_str("Inventory:\n");
         for item in &report.inventory {
-            out.push_str(&format!("- {} ({})", item.agent, item.config_path));
-            if item.mcp_servers.is_empty() {
-                out.push('\n');
+            let detail = if item.mcp_servers.is_empty() {
+                format!("{} ({})", item.agent, item.config_path)
             } else {
-                out.push_str(&format!(": {} MCP server(s)\n", item.mcp_servers.len()));
-            }
+                format!(
+                    "{} ({}): {} MCP server(s)",
+                    item.agent,
+                    item.config_path,
+                    item.mcp_servers.len()
+                )
+            };
+            append_wrapped(out, "- ", "  ", &detail, width);
         }
         out.push('\n');
     }
 }
 
-fn append_human_findings(out: &mut String, report: &ScanReport) {
+fn append_human_findings(out: &mut String, report: &ScanReport, width: usize) {
     if report.findings.is_empty() {
-        out.push_str("Findings: none displayed. Missing files are skipped gracefully; this does not prove the host is secure.\n");
+        append_wrapped(
+            out,
+            "Findings: ",
+            "          ",
+            "none displayed. Missing files are skipped gracefully; this does not prove the host is secure.",
+            width,
+        );
     } else {
         out.push_str("Findings by severity:\n");
         for severity in Severity::ORDERED_DESC {
@@ -398,21 +486,46 @@ fn append_human_findings(out: &mut String, report: &ScanReport) {
             }
             out.push_str(&format!("\n{}\n", severity.label()));
             for finding in findings {
-                out.push_str(&format!(
-                    "- {} {}: {} [{} / {}] status={} policy_status={} fingerprint={}\n",
-                    finding.id,
-                    finding.title,
-                    finding.target,
-                    finding.agent,
-                    finding.config_path,
-                    finding.baseline_status.label(),
-                    finding.policy_status.label(),
-                    finding.fingerprint
-                ));
-                out.push_str(&format!("  Rationale: {}\n", finding.rationale));
-                out.push_str(&format!("  Recommendation: {}\n", finding.recommendation));
+                append_wrapped(
+                    out,
+                    "- ",
+                    "  ",
+                    &format!(
+                        "{} {}: {} [{} / {}] status={} policy_status={} fingerprint={}",
+                        finding.id,
+                        finding.title,
+                        finding.target,
+                        finding.agent,
+                        finding.config_path,
+                        finding.baseline_status.label(),
+                        finding.policy_status.label(),
+                        finding.fingerprint
+                    ),
+                    width,
+                );
+                append_wrapped(
+                    out,
+                    "  Rationale: ",
+                    "             ",
+                    &finding.rationale,
+                    width,
+                );
+                append_wrapped(
+                    out,
+                    "  Recommendation: ",
+                    "                  ",
+                    &finding.recommendation,
+                    width,
+                );
             }
         }
+    }
+}
+
+fn append_wrapped(out: &mut String, prefix: &str, continuation: &str, text: &str, width: usize) {
+    for line in wrap_prefixed(prefix, continuation, text, width) {
+        out.push_str(&line);
+        out.push('\n');
     }
 }
 
@@ -441,9 +554,8 @@ mod tests {
         assert!(!rendered.to_lowercase().contains("pre-alpha"));
         assert!(!rendered.contains("EtherFence is scan-only"));
         assert!(rendered.contains("This scan command is read-only posture discovery"));
-        assert!(
-            rendered.contains("Runtime MCP boundary enforcement is available separately through")
-        );
+        assert!(rendered.contains("Runtime MCP boundary enforcement is available"));
+        assert!(rendered.contains("separately through `etherfence mcp-proxy`"));
         assert!(rendered.contains("Schema: ef-scan-report/v0.1.1"));
     }
 
@@ -505,6 +617,100 @@ mod tests {
         assert!(to_markdown(&report).contains("## Security Posture"));
         assert!(to_markdown(&report)
             .contains("**Scope:** Displayed active findings at severity threshold: info"));
+    }
+
+    #[test]
+    fn informational_only_posture_has_no_human_priority_action() {
+        use etherfence_core::{PostureGrade, PostureScope, PostureSummary};
+        let report = ScanReport {
+            schema_version: "ef-scan-report/v0.1.1".to_string(),
+            tool: "etherfence".to_string(),
+            version: "1.7.1".to_string(),
+            status: "stable-local-scan".to_string(),
+            scanned_root: "/home/user".to_string(),
+            inventory: Vec::new(),
+            findings: Vec::new(),
+            summary: Summary::from_counts(0, &[]),
+            posture: Some(PostureSummary {
+                scope: PostureScope::displayed_active(Severity::Info),
+                score: 100,
+                grade: PostureGrade::A,
+                assessment: "No active scored findings are displayed. This is not proof that the host is secure.".to_string(),
+                active_findings: 1,
+                high: 0,
+                medium: 0,
+                low: 0,
+                info: 1,
+                priority_risks: Vec::new(),
+                recommended_actions: Vec::new(),
+            }),
+            policy: None,
+            baseline: None,
+        };
+        let rendered = to_human_with_width(&report, 42);
+        assert!(rendered.contains("Security posture: 100/100"));
+        assert!(!rendered.contains("Priority risks:"));
+        assert!(!rendered.contains("Recommended actions:"));
+    }
+
+    #[test]
+    fn verbose_human_wraps_long_unicode_risks_and_actions_at_narrow_width() {
+        use etherfence_core::{
+            AgentKind, PostureGrade, PostureRisk, PostureScope, PostureSummary, RecommendedAction,
+        };
+        let report = ScanReport {
+            schema_version: "ef-scan-report/v0.1.1".to_string(),
+            tool: "etherfence".to_string(),
+            version: "1.7.1".to_string(),
+            status: "stable-local-scan".to_string(),
+            scanned_root: "/home/example/a-very-long-root".to_string(),
+            inventory: Vec::new(),
+            findings: Vec::new(),
+            summary: Summary::from_counts(0, &[]),
+            posture: Some(PostureSummary {
+                scope: PostureScope::displayed_active(Severity::High),
+                score: 75,
+                grade: PostureGrade::B,
+                assessment: "Long assessment text remains readable on constrained terminals.".to_string(),
+                active_findings: 1,
+                high: 1,
+                medium: 0,
+                low: 0,
+                info: 0,
+                priority_risks: vec![PostureRisk {
+                    finding_id: "EF-LONG-001".to_string(),
+                    severity: Severity::High,
+                    title: "Extremely long ASCII title with Unicode 影響範囲".to_string(),
+                    agent: AgentKind::ClaudeCode,
+                    target: "very-long-target-name-for-regression".to_string(),
+                    fingerprint: "efp1-test".to_string(),
+                    why_this_matters: "Long impact text must not detach from the finding it explains.".to_string(),
+                }],
+                recommended_actions: vec![RecommendedAction {
+                    finding_id: "EF-LONG-001".to_string(),
+                    recommendation: "Review the long recommendation before making any local configuration change.".to_string(),
+                }],
+            }),
+            policy: None,
+            baseline: None,
+        };
+        let rendered = to_human_with_width(&report, 42);
+        assert!(rendered
+            .lines()
+            .all(|line| human_layout::display_width(line) <= 42));
+        assert!(rendered.contains("- EF-LONG-001"));
+        assert!(rendered.contains("- [EF-LONG-001]"));
+        let lines: Vec<&str> = rendered.lines().collect();
+        let risk_index = lines
+            .iter()
+            .position(|line| line.starts_with("- EF-LONG-001"))
+            .expect("priority risk line");
+        assert!(lines[risk_index + 1].starts_with("  "));
+        let action_index = lines
+            .iter()
+            .position(|line| line.starts_with("- [EF-LONG-001]"))
+            .expect("recommended action line");
+        assert!(lines[action_index + 1].starts_with("  "));
     }
 
     #[test]

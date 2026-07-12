@@ -241,8 +241,8 @@ Clients
 
 Priority findings
 ────────────────────────────────────────────────────────────
-HIGH    Broad filesystem access hint  EF-MCP-001
-        Claude Code / filesystem
+HIGH    EF-MCP-001  Broad filesystem access hint
+        Scope: Claude Code / filesystem
         Why this matters: A broad filesystem server can expose more files than intended to an AI agent.
 
 Next steps
@@ -252,7 +252,7 @@ Run `etherfence scan --verbose` for full evidence and fingerprints.
 Run `etherfence setup` to secure detected MCP servers.
 ```
 
-The posture score intentionally covers only displayed active findings after the effective `--severity-threshold` (the default is `info`); its explicit scope line and JSON metadata are not an unfiltered host-wide security score. Resolved baseline findings remain report evidence but are excluded from the score. The result remains advisory and does not prove the host is secure.
+The posture score intentionally covers only displayed active findings after the effective `--severity-threshold` (the default is `info`); its explicit scope line and JSON metadata are not an unfiltered host-wide security score. Resolved baseline findings remain report evidence but are excluded from the score. The result remains advisory and does not prove the host is secure. Human posture output wraps long risk, scope, impact, and recommendation text to the available terminal width; `NO_COLOR`, redirected output, and plain terminals retain the same deterministic plain text.
 
 `--verbose` adds the complete finding list with rationale, recommendation,
 and full fingerprints:

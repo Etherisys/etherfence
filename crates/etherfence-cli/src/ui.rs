@@ -7,7 +7,9 @@
 //! NO_COLOR, dumb terminals) via `console`'s own detection.
 
 use dialoguer::console::Style;
-use std::fmt::Write as _;
+use std::io;
+
+use terminal_size::{terminal_size_of, Width};
 
 /// Semantic styles for human-facing output.
 ///
@@ -64,7 +66,9 @@ impl UiTheme {
     }
 
     fn rule(&self) -> String {
-        self.muted.apply_to("\u{2500}".repeat(60)).to_string()
+        self.muted
+            .apply_to("─".repeat(human_width().min(60)))
+            .to_string()
     }
 
     /// A right-hand support badge for a client row.
@@ -79,6 +83,45 @@ impl UiTheme {
     /// An aligned key/value row (`Scanned       /home/user`).
     pub fn key_value(&self, label: &str, value: &str) -> String {
         format!("{:<14}{}", label, value)
+    }
+
+    /// A width-aware aligned key/value block. ANSI styling in `value` is
+    /// stripped during width measurement so colors never distort alignment.
+    pub fn key_value_wrapped(&self, label: &str, value: &str, width: usize) -> String {
+        let prefix = format!("{label:<14}");
+        etherfence_report::human_layout::wrap_prefixed(
+            &prefix,
+            " ".repeat(14).as_str(),
+            value,
+            width,
+        )
+        .join("\n")
+    }
+}
+
+/// Renders a finding-count line like `0 critical · 2 high · 5 medium · 9 low`.
+pub(crate) fn severity_counts(
+    theme: &UiTheme,
+    high: usize,
+    medium: usize,
+    low: usize,
+    info: usize,
+) -> String {
+    format!(
+        "{} · {} · {} · {}",
+        colored_count(&theme.danger, high, "high"),
+        colored_count(&theme.warning, medium, "medium"),
+        colored_count(&theme.info, low, "low"),
+        colored_count(&theme.muted, info, "info"),
+    )
+}
+
+fn colored_count(style: &Style, count: usize, label: &str) -> String {
+    let text = format!("{count} {label}");
+    if count == 0 {
+        text
+    } else {
+        style.apply_to(text).to_string()
     }
 }
 
@@ -95,40 +138,28 @@ pub(crate) fn pad(text: &str, width: usize) -> String {
     out
 }
 
+pub(crate) fn human_width() -> usize {
+    terminal_size_of(io::stdout())
+        .map(|(Width(width), _)| usize::from(width))
+        .or_else(|| {
+            std::env::var("COLUMNS")
+                .ok()
+                .and_then(|value| value.parse::<usize>().ok())
+        })
+        .filter(|width| *width > 0)
+        .unwrap_or(etherfence_report::human_layout::DEFAULT_HUMAN_WIDTH)
+        .max(etherfence_report::human_layout::MIN_SUPPORTED_WIDTH)
+}
+
+pub(crate) fn wrap_prefixed(prefix: &str, continuation: &str, text: &str, width: usize) -> String {
+    etherfence_report::human_layout::wrap_prefixed(prefix, continuation, text, width).join("\n")
+}
+
 /// `1 server` / `3 servers`, or `no MCP servers` when zero.
 pub(crate) fn count_servers(count: usize) -> String {
     match count {
         0 => "no MCP servers".to_string(),
         1 => "1 MCP server".to_string(),
         n => format!("{n} MCP servers"),
-    }
-}
-
-/// Renders a finding-count line like `0 critical · 2 high · 5 medium · 9 low`.
-pub(crate) fn severity_counts(
-    theme: &UiTheme,
-    high: usize,
-    medium: usize,
-    low: usize,
-    info: usize,
-) -> String {
-    let mut out = String::new();
-    let _ = write!(
-        out,
-        "{} · {} · {} · {}",
-        colored_count(&theme.danger, high, "high"),
-        colored_count(&theme.warning, medium, "medium"),
-        colored_count(&theme.info, low, "low"),
-        colored_count(&theme.muted, info, "info"),
-    );
-    out
-}
-
-fn colored_count(style: &Style, count: usize, label: &str) -> String {
-    let text = format!("{count} {label}");
-    if count == 0 {
-        text
-    } else {
-        style.apply_to(text).to_string()
     }
 }

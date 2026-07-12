@@ -2287,7 +2287,9 @@ fn run_scan(options: ScanOptions) -> Result<()> {
         baseline: baseline_meta,
     };
     let output = match options.format {
-        OutputFormat::Human if options.verbose => etherfence_report::to_human(&report),
+        OutputFormat::Human if options.verbose => {
+            etherfence_report::to_human_with_width(&report, ui::human_width())
+        }
         OutputFormat::Human => render_scan_summary(&report),
         OutputFormat::Json => etherfence_report::to_json(&report)?,
         OutputFormat::Markdown => etherfence_report::to_markdown(&report),
@@ -2306,6 +2308,7 @@ fn run_scan(options: ScanOptions) -> Result<()> {
 fn render_scan_summary(report: &ScanReport) -> String {
     use std::fmt::Write as _;
     let theme = ui::UiTheme::for_stdout();
+    let width = ui::human_width();
     let mut out = String::new();
 
     // Group configs by client so one client with several config files
@@ -2328,10 +2331,7 @@ fn render_scan_summary(report: &ScanReport) -> String {
     let _ = writeln!(
         out,
         "{}",
-        theme.key_value(
-            "Scanned",
-            &theme.path.apply_to(&report.scanned_root).to_string()
-        )
+        theme.key_value_wrapped("Scanned", &report.scanned_root, width)
     );
     let _ = writeln!(
         out,
@@ -2346,7 +2346,7 @@ fn render_scan_summary(report: &ScanReport) -> String {
     let _ = writeln!(
         out,
         "{}",
-        theme.key_value(
+        theme.key_value_wrapped(
             "Findings",
             &ui::severity_counts(
                 &theme,
@@ -2354,7 +2354,8 @@ fn render_scan_summary(report: &ScanReport) -> String {
                 report.summary.medium,
                 report.summary.low,
                 report.summary.info,
-            )
+            ),
+            width,
         )
     );
     if let Some(posture) = &report.posture {
@@ -2378,12 +2379,12 @@ fn render_scan_summary(report: &ScanReport) -> String {
         let _ = writeln!(
             out,
             "{}",
-            theme.key_value("Scope", &posture.scope.human_label())
+            theme.key_value_wrapped("Scope", &posture.scope.human_label(), width)
         );
         let _ = writeln!(
             out,
             "{}",
-            theme.key_value("Assessment", &posture.assessment)
+            theme.key_value_wrapped("Assessment", &posture.assessment, width)
         );
     }
     if let Some(baseline) = &report.baseline {
@@ -2460,14 +2461,33 @@ fn render_scan_summary(report: &ScanReport) -> String {
                     Severity::Low => theme.info.apply_to(ui::pad("LOW", 7)).to_string(),
                     Severity::Info => theme.muted.apply_to(ui::pad("INFO", 7)).to_string(),
                 };
+                let header = ui::wrap_prefixed(
+                    "",
+                    "        ",
+                    &format!("{}  {}", risk.finding_id, risk.title),
+                    width.saturating_sub(9),
+                );
+                let _ = writeln!(out, "{badge} {header}");
                 let _ = writeln!(
                     out,
-                    "{badge} {}  {}",
-                    risk.title,
-                    theme.muted.apply_to(&risk.finding_id)
+                    "{}",
+                    ui::wrap_prefixed(
+                        "        Scope: ",
+                        "               ",
+                        &format!("{} / {}", risk.agent, risk.target),
+                        width,
+                    )
                 );
-                let _ = writeln!(out, "        {} / {}", risk.agent, risk.target);
-                let _ = writeln!(out, "        Why this matters: {}", risk.why_this_matters);
+                let _ = writeln!(
+                    out,
+                    "{}",
+                    ui::wrap_prefixed(
+                        "        Why this matters: ",
+                        "                          ",
+                        &risk.why_this_matters,
+                        width,
+                    )
+                );
             }
             let remaining = posture
                 .active_findings
@@ -2475,8 +2495,15 @@ fn render_scan_summary(report: &ScanReport) -> String {
             if remaining > 0 {
                 let _ = writeln!(
                     out,
-                    "{} {remaining} additional active finding(s) — run `etherfence scan --verbose` for the full list",
-                    theme.muted.apply_to(ui::pad("…", 7))
+                    "{}",
+                    ui::wrap_prefixed(
+                        "…       ",
+                        "        ",
+                        &format!(
+                            "{remaining} additional active finding(s) — run `etherfence scan --verbose` for the full list"
+                        ),
+                        width,
+                    )
                 );
             }
         }
@@ -2492,30 +2519,46 @@ fn render_scan_summary(report: &ScanReport) -> String {
         for (index, action) in posture.recommended_actions.iter().enumerate() {
             let _ = writeln!(
                 out,
-                "{}. {} {}",
-                index + 1,
-                theme.muted.apply_to(format!("[{}]", action.finding_id)),
-                action.recommendation
+                "{}",
+                ui::wrap_prefixed(
+                    &format!("{}. [{}] ", index + 1, action.finding_id),
+                    "   ",
+                    &action.recommendation,
+                    width,
+                )
             );
         }
     }
     let _ = writeln!(
         out,
-        "Run {} for full evidence and fingerprints.",
-        theme.info.apply_to("`etherfence scan --verbose`")
+        "{}",
+        ui::wrap_prefixed(
+            "Run ",
+            "    ",
+            "`etherfence scan --verbose` for full evidence and fingerprints.",
+            width,
+        )
     );
     let _ = writeln!(
         out,
-        "Run {} to secure detected MCP servers.",
-        theme.info.apply_to("`etherfence setup`")
+        "{}",
+        ui::wrap_prefixed(
+            "Run ",
+            "    ",
+            "`etherfence setup` to secure detected MCP servers.",
+            width,
+        )
     );
 
     let _ = write!(
         out,
         "\n{}",
-        theme.muted.apply_to(
-            "Note: This scan command is read-only posture discovery. It does not block, proxy, hook, or intercept runtime activity. Runtime MCP boundary enforcement is available separately through `etherfence mcp-proxy`. Findings are posture risks/hints, not confirmed exploitability."
-        )
+        theme.muted.apply_to(ui::wrap_prefixed(
+            "Note: ",
+            "      ",
+            "This scan command is read-only posture discovery. It does not block, proxy, hook, or intercept runtime activity. Runtime MCP boundary enforcement is available separately through `etherfence mcp-proxy`. Findings are posture risks/hints, not confirmed exploitability.",
+            width,
+        ))
     );
     out
 }
