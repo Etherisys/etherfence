@@ -168,7 +168,7 @@ pub(crate) fn count_servers(count: usize) -> String {
 
 /// Whether the terminal is likely to support Unicode (box-drawing chars, symbols).
 pub(crate) fn unicode_supported() -> bool {
-    if std::env::var_os("NO_UNICODE").is_some() {
+    if std::env::var_os("NO_UNICODE").is_some_and(|v| !v.is_empty()) {
         return false;
     }
     let term = std::env::var("TERM").unwrap_or_default();
@@ -277,7 +277,12 @@ mod unicode_tests {
     #[test]
     fn unicode_supported_true_in_normal_env() {
         with_env(
-            &[("TERM", "xterm-256color"), ("LANG", "en_US.UTF-8")],
+            &[
+                ("TERM", "xterm-256color"),
+                ("LANG", "en_US.UTF-8"),
+                ("LC_ALL", ""),
+                ("NO_UNICODE", ""),
+            ],
             || assert!(unicode_supported()),
         );
     }
