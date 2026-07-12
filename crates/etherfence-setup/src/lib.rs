@@ -37,8 +37,8 @@ pub use trust::{
 };
 pub use wizard::{
     apply_wizard_plan, build_wizard_plan, extract_package_version, resolve_pinning,
-    PackageVersionStatus, PinningChange, PolicyEntry, PolicyType, SelectedServer,
-    WizardPackageRunner, WizardPlan, WizardSelections,
+    validate_exact_version, PackageVersionStatus, PinningChange, PolicyEntry, PolicyType,
+    SelectedServer, WizardPackageRunner, WizardPlan, WizardSelections, WizardServerId,
 };
 
 const BACKUP_MARKER: &str = "etherfence-setup-backup/v1";
@@ -74,6 +74,25 @@ pub struct SetupServer {
     pub capabilities: ClassifiedCapabilities,
     pub recommendation: StarterPolicyRecommendation,
     pub trust_assessment: TrustAssessment,
+    /// Raw invocation command from the parsed config. Kept out of JSON
+    /// output (the detect/baseline contracts stay unchanged); retained in
+    /// memory so the wizard can plan and apply pinning against the real
+    /// invocation instead of a reconstruction.
+    #[serde(skip)]
+    pub command: Option<String>,
+    /// Raw invocation arguments from the parsed config (see `command`).
+    #[serde(skip)]
+    pub args: Vec<String>,
+    /// Raw remote URL from the parsed config (see `command`).
+    #[serde(skip)]
+    pub url: Option<String>,
+    /// SHA-256 of the server's complete canonical JSON entry as read at
+    /// detection time (writable supported configs only). Binds a wizard
+    /// plan to *everything* the user reviewed — including `env` and any
+    /// other server-specific field — so post-preview changes to the
+    /// entry abort the apply. Kept out of serialized output.
+    #[serde(skip)]
+    pub raw_entry_sha256: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -207,10 +226,45 @@ const SUPPORTED_CONFIGS: &[SupportedConfig] = &[
 ];
 
 pub fn detect(root: &Path) -> Vec<SetupDetection> {
-    etherfence_inventory::discover(root)
+    let mut detections: Vec<SetupDetection> = etherfence_inventory::discover(root)
         .into_iter()
         .map(detection_from_inventory)
-        .collect()
+        .collect();
+    for detection in &mut detections {
+        attach_entry_snapshots(root, detection);
+    }
+    detections
+}
+
+/// Records a canonical-entry hash for every server in a writable
+/// supported config. Best-effort here: a server that ends up without a
+/// snapshot is rejected later, at plan time, if the user selects it.
+fn attach_entry_snapshots(root: &Path, detection: &mut SetupDetection) {
+    let Ok(config) = resolve_supported_config(&detection.config_path) else {
+        return;
+    };
+    let path = root.join(config.relative_path);
+    let Ok(content) = fs::read_to_string(&path) else {
+        return;
+    };
+    let Ok(value) = serde_json::from_str::<JsonValue>(&content) else {
+        return;
+    };
+    let Some(servers) = servers_object(&value, config.shape) else {
+        return;
+    };
+    for server in &mut detection.servers {
+        if let Some(entry) = servers.get(&server.name) {
+            server.raw_entry_sha256 = Some(canonical_entry_sha256(entry));
+        }
+    }
+}
+
+/// Canonical hash of one server's JSON entry. Both hashing sites (detect
+/// snapshot and apply drift gate) serialize the same `serde_json::Value`
+/// type, so identical entries always produce identical hashes.
+fn canonical_entry_sha256(entry: &JsonValue) -> String {
+    sha256_hex(entry.to_string().as_bytes())
 }
 
 pub fn plan(root: &Path) -> SetupPlan {
@@ -319,8 +373,12 @@ pub fn doctor(root: &Path) -> DoctorReport {
 
 pub fn apply(root: &Path) -> Result<()> {
     let prepared = prepare_apply(root)?;
+    write_prepared_changes(root, &prepared)
+}
+
+fn write_prepared_changes(root: &Path, prepared: &[PreparedApply]) -> Result<()> {
     let mut completed: Vec<&PreparedApply> = Vec::new();
-    for change in &prepared {
+    for change in prepared {
         if let Err(error) = write_prepared_apply(root, change) {
             let mut cleanup_errors = Vec::new();
             cleanup_prepared_apply(change, false, &mut cleanup_errors);
@@ -338,6 +396,408 @@ pub fn apply(root: &Path) -> Result<()> {
         completed.push(change);
     }
     Ok(())
+}
+
+/// One selected server's apply-time instructions, fully resolved from a
+/// `wizard::WizardPlan` during preflight.
+struct WizardDirective {
+    server_name: String,
+    expected_command: Option<String>,
+    expected_args: Vec<String>,
+    expected_url: Option<String>,
+    expected_entry_sha256: String,
+    pin_version: Option<String>,
+    policy_content: String,
+    policy_path: PathBuf,
+}
+
+/// Applies a wizard plan selectively: only the servers the user selected
+/// are pinned, given their planned policy, and wrapped. Every other server
+/// and every config without a selected server is left untouched.
+///
+/// Fails closed, before any file is written, when:
+/// - the apply root does not match the plan's root;
+/// - the plan itself is inconsistent (duplicate selections, a selected
+///   server without exactly one planned policy, or a pin/policy entry
+///   that belongs to no selected server);
+/// - a planned configuration no longer exists or is not a writable
+///   supported config;
+/// - a selected server disappeared, or its invocation drifted from the
+///   command/args/url the user reviewed;
+/// - a planned policy path would collide with another planned policy or
+///   overwrite an existing file with different content;
+/// - the prepared change counts do not equal the planned counts.
+pub(crate) fn apply_selected(root: &Path, plan: &wizard::WizardPlan) -> Result<()> {
+    if root.display().to_string() != plan.root {
+        anyhow::bail!(
+            "apply root {} does not match the plan's root {}; refusing to apply",
+            root.display(),
+            plan.root
+        );
+    }
+    let prepared = prepare_wizard_apply(root, plan)?;
+    write_prepared_changes(root, &prepared)
+}
+
+fn prepare_wizard_apply(root: &Path, plan: &wizard::WizardPlan) -> Result<Vec<PreparedApply>> {
+    validate_plan_integrity(plan)?;
+
+    // Resolve each selected server to exactly one supported config file
+    // and pre-assign a collision-free policy path.
+    let policy_paths = assign_policy_paths(root, plan)?;
+
+    let mut directives_by_config: std::collections::BTreeMap<&'static str, Vec<WizardDirective>> =
+        std::collections::BTreeMap::new();
+    for (index, server) in plan.selected_servers.iter().enumerate() {
+        let config = resolve_supported_config(&server.config_path)?;
+        let path = root.join(config.relative_path);
+        if !path.is_file() {
+            anyhow::bail!(
+                "planned configuration {} no longer exists at {}; aborting wizard apply",
+                server.config_path,
+                path.display()
+            );
+        }
+        let pin_version = plan
+            .pinning_changes
+            .iter()
+            .find(|change| {
+                change.config_path == server.config_path && change.server_name == server.server_name
+            })
+            .and_then(|change| change.proposed_version.clone());
+        let policy_content = plan
+            .policies
+            .iter()
+            .find(|policy| {
+                policy.config_path == server.config_path && policy.server_name == server.server_name
+            })
+            .map(|policy| policy.content.clone())
+            .expect("validate_plan_integrity guarantees exactly one policy per selected server");
+        directives_by_config
+            .entry(config.relative_path)
+            .or_default()
+            .push(WizardDirective {
+                server_name: server.server_name.clone(),
+                expected_command: server.expected_command.clone(),
+                expected_entry_sha256: server.expected_entry_sha256.clone(),
+                expected_args: server.expected_args.clone(),
+                expected_url: server.expected_url.clone(),
+                pin_version,
+                policy_content,
+                policy_path: policy_paths[index].clone(),
+            });
+    }
+
+    let mut prepared = Vec::new();
+    let mut prepared_servers = 0usize;
+    let mut prepared_policies = 0usize;
+    for config in SUPPORTED_CONFIGS {
+        let Some(directives) = directives_by_config.get(config.relative_path) else {
+            continue;
+        };
+        let path = root.join(config.relative_path);
+        let change = prepare_wizard_config(&path, config, directives)?;
+        prepared_servers += directives.len();
+        prepared_policies += change.policies.len();
+        prepared.push(change);
+    }
+
+    // Belt and braces: what will be written must equal what was reviewed.
+    if prepared_servers != plan.selected_servers.len() || prepared_policies != plan.policies.len() {
+        anyhow::bail!(
+            "prepared changes ({prepared_servers} servers, {prepared_policies} policies) do not match the reviewed plan ({} servers, {} policies); aborting wizard apply",
+            plan.selected_servers.len(),
+            plan.policies.len()
+        );
+    }
+    Ok(prepared)
+}
+
+/// Rejects internally inconsistent plans: duplicate selections, selected
+/// servers without exactly one planned policy, and pin/policy entries that
+/// belong to no selected server.
+fn validate_plan_integrity(plan: &wizard::WizardPlan) -> Result<()> {
+    let mut seen: std::collections::HashSet<(&str, &str, &str)> = std::collections::HashSet::new();
+    for server in &plan.selected_servers {
+        let identity = (
+            server.agent.as_str(),
+            server.config_path.as_str(),
+            server.server_name.as_str(),
+        );
+        if !seen.insert(identity) {
+            anyhow::bail!(
+                "plan contains duplicate selection for '{}' in {}; aborting wizard apply",
+                server.server_name,
+                server.config_path
+            );
+        }
+        let policy_count = plan
+            .policies
+            .iter()
+            .filter(|policy| {
+                policy.config_path == server.config_path && policy.server_name == server.server_name
+            })
+            .count();
+        if policy_count != 1 {
+            anyhow::bail!(
+                "plan has {policy_count} policies for '{}' in {} (expected exactly 1); aborting wizard apply",
+                server.server_name,
+                server.config_path
+            );
+        }
+        let pin_count = plan
+            .pinning_changes
+            .iter()
+            .filter(|change| {
+                change.config_path == server.config_path && change.server_name == server.server_name
+            })
+            .count();
+        if pin_count > 1 {
+            anyhow::bail!(
+                "plan has {pin_count} version pins for '{}' in {} (expected at most 1); aborting wizard apply",
+                server.server_name,
+                server.config_path
+            );
+        }
+    }
+    for policy in &plan.policies {
+        if !seen.contains(&(
+            policy.agent.as_str(),
+            policy.config_path.as_str(),
+            policy.server_name.as_str(),
+        )) {
+            anyhow::bail!(
+                "plan has a policy for unselected server '{}' in {}; aborting wizard apply",
+                policy.server_name,
+                policy.config_path
+            );
+        }
+    }
+    for change in &plan.pinning_changes {
+        if !seen.contains(&(
+            change.agent.as_str(),
+            change.config_path.as_str(),
+            change.server_name.as_str(),
+        )) {
+            anyhow::bail!(
+                "plan has a version pin for unselected server '{}' in {}; aborting wizard apply",
+                change.server_name,
+                change.config_path
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Maps a plan's display config path to exactly one supported config.
+fn resolve_supported_config(config_path: &str) -> Result<&'static SupportedConfig> {
+    let matches: Vec<&'static SupportedConfig> = SUPPORTED_CONFIGS
+        .iter()
+        .filter(|config| display_path_matches(config_path, config.relative_path))
+        .collect();
+    match matches.as_slice() {
+        [config] => Ok(config),
+        [] => anyhow::bail!(
+            "planned configuration {config_path} is not a writable supported config; aborting wizard apply"
+        ),
+        _ => anyhow::bail!(
+            "planned configuration {config_path} matches more than one supported config; aborting wizard apply"
+        ),
+    }
+}
+
+/// Pre-assigns one policy file path per selected server (in plan order),
+/// disambiguating sanitized-name collisions with a stable hash suffix and
+/// failing if any two planned policies would still share a path. Two
+/// different config files can share a parent directory (`.vscode/mcp.json`
+/// and `.vscode/settings.json`), so uniqueness is checked globally.
+fn assign_policy_paths(root: &Path, plan: &wizard::WizardPlan) -> Result<Vec<PathBuf>> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    for server in &plan.selected_servers {
+        let config = resolve_supported_config(&server.config_path)?;
+        let policy_dir = root
+            .join(config.relative_path)
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join(POLICY_DIR);
+        candidates.push(policy_dir.join(format!(
+            "{}.toml",
+            sanitize_policy_identifier(&server.server_name)
+        )));
+    }
+
+    // Disambiguate every member of a colliding group with a stable hash
+    // over the server's full identity.
+    let mut assigned = candidates.clone();
+    for (index, candidate) in candidates.iter().enumerate() {
+        let colliding = candidates.iter().filter(|c| *c == candidate).count() > 1;
+        if colliding {
+            let server = &plan.selected_servers[index];
+            let identity_hash =
+                sha256_hex(format!("{}\u{0}{}", server.config_path, server.server_name).as_bytes());
+            let parent = candidate.parent().unwrap_or_else(|| Path::new("."));
+            assigned[index] = parent.join(format!(
+                "{}-{}.toml",
+                sanitize_policy_identifier(&server.server_name),
+                &identity_hash[..8]
+            ));
+        }
+    }
+
+    let mut unique: std::collections::HashSet<&PathBuf> = std::collections::HashSet::new();
+    for path in &assigned {
+        if !unique.insert(path) {
+            anyhow::bail!(
+                "two planned policies resolve to the same file {}; aborting wizard apply",
+                path.display()
+            );
+        }
+    }
+    Ok(assigned)
+}
+
+fn prepare_wizard_config(
+    path: &Path,
+    config: &SupportedConfig,
+    directives: &[WizardDirective],
+) -> Result<PreparedApply> {
+    let original_content = fs::read(path)
+        .with_context(|| format!("reading supported MCP config {}", path.display()))?;
+    if original_content.len() as u64 > MAX_CONFIG_FILE_BYTES {
+        anyhow::bail!("config {} exceeds size limit", path.display());
+    }
+    let content = std::str::from_utf8(&original_content)
+        .with_context(|| format!("supported MCP config {} is not UTF-8", path.display()))?;
+    let mut value: JsonValue = serde_json::from_str(content)
+        .with_context(|| format!("parsing supported MCP config JSON {}", path.display()))?;
+
+    let mut policies = Vec::new();
+    {
+        let Some(servers) = servers_object_mut(&mut value, config.shape) else {
+            anyhow::bail!(
+                "config {} no longer contains an MCP servers object; aborting wizard apply",
+                path.display()
+            );
+        };
+        for directive in directives {
+            let Some(server_value) = servers.get(&directive.server_name) else {
+                anyhow::bail!(
+                    "selected server '{}' no longer exists in {}; aborting wizard apply",
+                    directive.server_name,
+                    path.display()
+                );
+            };
+            let server = json_server(&directive.server_name, server_value);
+
+            // Drift gate: the complete entry being rewritten must be
+            // exactly the one the user reviewed at preview time. The
+            // canonical-entry hash covers every server-specific field —
+            // including `env` and anything `json_server` does not model —
+            // and the invocation equality below states the same promise
+            // in terms of the fields the wizard displayed.
+            if canonical_entry_sha256(server_value) != directive.expected_entry_sha256
+                || server.command != directive.expected_command
+                || server.args != directive.expected_args
+                || server.url != directive.expected_url
+            {
+                anyhow::bail!(
+                    "server '{}' in {} changed after the plan was reviewed; aborting wizard apply — re-run the wizard to review the current configuration",
+                    directive.server_name,
+                    path.display()
+                );
+            }
+            // Defense in depth: eligibility was checked at plan time and
+            // the invocation equality above pins it, but never wrap a
+            // non-stdio or already-wrapped server.
+            if transport_for_server(&server) != ServerTransport::Stdio {
+                anyhow::bail!(
+                    "selected server '{}' in {} is not a local stdio server; aborting wizard apply",
+                    directive.server_name,
+                    path.display()
+                );
+            }
+            if is_wrapped_server(&server) {
+                anyhow::bail!(
+                    "selected server '{}' in {} is already wrapped; aborting wizard apply",
+                    directive.server_name,
+                    path.display()
+                );
+            }
+
+            let pinned_args = match &directive.pin_version {
+                Some(version) => {
+                    let change = wizard::resolve_pinning(&server, version).with_context(|| {
+                        format!(
+                            "planned version pin for '{}' cannot be applied to its current invocation in {}; aborting wizard apply",
+                            directive.server_name,
+                            path.display()
+                        )
+                    })?;
+                    Some(change.pinned_args)
+                }
+                None => None,
+            };
+
+            etherfence_mcp::parse_mcp_policy(&directive.policy_content).with_context(|| {
+                format!(
+                    "planned policy for '{}' failed validation",
+                    directive.server_name
+                )
+            })?;
+            // Never adopt a pre-existing policy file into this
+            // transaction — even byte-identical content. The transaction
+            // records every prepared policy path in its backup manifest,
+            // and rollback (and failed-apply cleanup) remove recorded
+            // paths; a file EtherFence did not create must never become
+            // deletable that way.
+            if directive.policy_path.exists() {
+                anyhow::bail!(
+                    "policy file {} already exists; refusing to overwrite it — move it aside and re-run the wizard",
+                    directive.policy_path.display()
+                );
+            }
+
+            let Some(server_value) = servers.get_mut(&directive.server_name) else {
+                unreachable!("server existence checked above");
+            };
+            if let Some(args) = pinned_args {
+                if let Some(object) = server_value.as_object_mut() {
+                    object.insert(
+                        "args".to_string(),
+                        JsonValue::Array(args.into_iter().map(JsonValue::String).collect()),
+                    );
+                }
+            }
+            wrap_server_value(server_value, &directive.server_name, &directive.policy_path)?;
+            policies.push(PreparedPolicy {
+                path: directive.policy_path.clone(),
+                content: directive.policy_content.clone().into_bytes(),
+            });
+        }
+    }
+
+    let next_content = serde_json::to_vec_pretty(&value)?;
+    let backup_dir = timestamped_backup_dir(path)?;
+    Ok(PreparedApply {
+        original_path: path.to_path_buf(),
+        backup_path: backup_dir.join("original.json"),
+        backup_dir,
+        original_content,
+        next_content,
+        policies,
+    })
+}
+
+/// Matches a detection's display config path (e.g. `~/.claude.json`, or an
+/// absolute path when it sat outside the scan root) against a supported
+/// config's root-relative path.
+fn display_path_matches(display: &str, relative: &str) -> bool {
+    let display = display.replace('\\', "/");
+    let relative = relative.replace('\\', "/");
+    display == relative
+        || display
+            .strip_suffix(&relative)
+            .is_some_and(|prefix| prefix.ends_with('/'))
 }
 
 pub fn rollback(root: &Path) -> Result<()> {
@@ -458,6 +918,16 @@ fn prepare_config(path: &Path, config: &SupportedConfig) -> Result<Option<Prepar
                 let policy = generated_policy_template(server_name)?;
                 let policy_path =
                     policy_dir.join(format!("{}.toml", sanitize_policy_identifier(server_name)));
+                // Same ownership rule as the wizard apply: never adopt a
+                // pre-existing policy file into this transaction — the
+                // manifest, rollback, and failed-apply cleanup treat every
+                // recorded policy path as EtherFence-created and removable.
+                if policy_path.exists() {
+                    anyhow::bail!(
+                        "policy file {} already exists; refusing to overwrite it — move it aside and re-run setup apply",
+                        policy_path.display()
+                    );
+                }
                 changes.push((server_name.clone(), policy.into_bytes(), policy_path));
             }
         }
@@ -540,6 +1010,19 @@ fn remove_empty_parent_dirs(start: Option<&Path>, max_depth: usize) {
     }
 }
 
+/// Read-only counterpart of `servers_object_mut`.
+fn servers_object(value: &JsonValue, shape: SupportedShape) -> Option<&JsonMap<String, JsonValue>> {
+    match shape {
+        SupportedShape::TopLevelMcpServers => value.get("mcpServers")?.as_object(),
+        SupportedShape::NestedMcpServers => {
+            if let Some(servers) = value.get("mcp").and_then(|mcp| mcp.get("servers")) {
+                return servers.as_object();
+            }
+            value.get("mcpServers")?.as_object()
+        }
+    }
+}
+
 fn servers_object_mut(
     value: &mut JsonValue,
     shape: SupportedShape,
@@ -617,6 +1100,10 @@ pub(crate) fn server_from_mcp(server: &McpServer) -> SetupServer {
         capabilities,
         recommendation,
         trust_assessment,
+        command: server.command.clone(),
+        args: server.args.clone(),
+        url: server.url.clone(),
+        raw_entry_sha256: None,
     }
 }
 
@@ -684,15 +1171,23 @@ fn json_server(name: &str, value: &JsonValue) -> McpServer {
 }
 
 fn timestamped_backup_dir(path: &Path) -> Result<PathBuf> {
-    let millis = SystemTime::now()
+    let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .context("system clock is before UNIX epoch")?
-        .as_millis();
+        .as_nanos();
+    // Two configs can share a parent directory (`.vscode/mcp.json` and
+    // `.vscode/settings.json`), so the timestamp alone is not a safe
+    // directory name — include the config file's stem as well.
+    let stem = path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .map(sanitize_policy_identifier)
+        .unwrap_or_else(|| "config".to_string());
     Ok(path
         .parent()
         .unwrap_or_else(|| Path::new("."))
         .join(BACKUP_DIR)
-        .join(format!("{millis}")))
+        .join(format!("{nanos}-{stem}")))
 }
 
 fn write_manifest(root: &Path, change: &PreparedApply) -> Result<()> {

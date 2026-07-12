@@ -21,6 +21,118 @@ scanning, or network interception.
 
 ### Added
 
+- **Interactive selection flow**: the guided setup wizard now walks
+  one-decision-per-screen steps — scan, choose AI clients (grouped by
+  product with CAN CONFIGURE / DETECT ONLY badges), choose MCP servers
+  (risk badges instead of raw trust tokens), resolve trust and pinning
+  issues, choose policy posture, review the exact change plan, apply and
+  verify. Advisory-only clients are selectable for review with an explicit
+  note that EtherFence cannot modify them.
+- **Package pinning engine**: unpinned, mutable-tag, or range-based
+  `npx`/`uvx`/`pipx run` invocations can be pinned to an exact version
+  during the wizard. Pins are computed against the server's real parsed
+  invocation (launcher flags and trailing arguments are preserved) and
+  validated per runner — only exact npm or PEP 440 versions are accepted;
+  `latest`, `^1.2`, `>=2`, and other mutable or range expressions are
+  rejected at input time and again at plan time. Resolves
+  EF-TRUST-PIN-001 in actual configuration output.
+- **Trust gates**: high-risk servers cannot receive a permissive setup —
+  the wizard offers skip (recommended) or quarantine-only mode, and
+  needs-review/unknown servers are flagged before any decision.
+- **Selective wizard apply**: confirming the wizard applies exactly the
+  reviewed plan via a new fail-closed engine. Only selected servers are
+  pinned, given their planned policy (deny-all quarantine, curated, or
+  custom tool allowlist written verbatim), and wrapped; skipped servers
+  and configs without selected servers stay byte-identical. If a selected
+  server disappeared or a promised pin no longer applies, the apply
+  aborts before writing anything.
+- **Terminal UI layer**: a semantic theme (restrained colors with meaning:
+  green success, yellow review, red high-risk, cyan paths, dim technical
+  IDs) shared by the wizard and scan output, degrading to plain text for
+  redirected output, `NO_COLOR`, `CLICOLOR=0`, CI, and `TERM=dumb`.
+- **Scan executive summary**: `etherfence scan` now defaults to a readable
+  posture summary (overall status, clients grouped by product, priority
+  findings, next steps). New `--verbose` flag shows the previous full
+  evidence view: rationale, recommendation, complete finding list, full
+  fingerprints, and schema/status metadata. JSON, Markdown, and SARIF
+  outputs are unchanged.
+- Integration tests that verify wizard-applied files (not just the plan):
+  selective wrapping, pin-in-invocation, custom allowlist content,
+  byte-identical skips, and plan/apply correspondence; plus PTY tests
+  proving the startup splash is wired into the binary.
+
+### Fixed
+
+- `apply_wizard_plan()` previously ignored the confirmed plan and ran the
+  generic apply path: every unwrapped stdio server was wrapped regardless
+  of selection, custom allowlists were replaced by deny-all templates,
+  and version pins were never written. The apply now executes the
+  reviewed plan exactly.
+- Choosing "Skip this server" in the wizard previously left the server
+  selected (it was committed before the trust/posture decisions); skip
+  now truly skips — nothing is committed until every decision for a
+  server is complete.
+- Pinning plans were previously constructed from a synthetic minimal
+  argument list; they are now derived from the server's real parsed
+  configuration arguments.
+- The terminal splash module existed but was never wired into the binary;
+  `command_banner_mode()` now classifies every command (bare
+  `etherfence setup` and human-format commands show the splash on an
+  interactive color TTY; JSON/Markdown/SARIF, raw policy TOML, and MCP
+  proxy protocol traffic never do).
+- Wizard selections are now scoped by full server identity
+  (`WizardServerId`: agent + config path + server name), never by
+  `agent:server_name` alone — selecting a server in `~/.claude.json` no
+  longer also selects a same-named server in `~/.claude/settings.json`.
+- Apply now runs a complete preflight before creating any backup or
+  policy and aborts the whole operation — instead of reporting a false
+  "Setup complete" — when the apply root differs from the plan's root, a
+  planned configuration no longer exists, a selected server disappeared,
+  the plan is internally inconsistent (duplicate selections, missing or
+  duplicate policies/pins, entries for unselected servers), or the
+  prepared change counts differ from the reviewed plan.
+- Post-preview configuration drift is detected: the plan records the
+  exact command, argument list, and URL the user reviewed for every
+  selected server, and apply aborts if any of them changed — a package
+  swapped in after preview is never silently wrapped.
+- Already-wrapped and remote servers are no longer selectable in the
+  wizard (they are shown as explicit no-action rows), and
+  `build_wizard_plan` rejects them — plans can no longer promise policy/
+  proxy/backup changes that apply would silently skip.
+- npm version pins are validated with a real semver parser: partial
+  versions (`1`, `1.2`) and malformed input (`1..2`, `1foo`) are rejected
+  along with tags and ranges; only a complete `major.minor.patch` (with
+  optional prerelease/build metadata) is accepted.
+- Unknown `npx` options before the package token now fail closed instead
+  of being treated as the package name and rewritten; version pinning
+  refuses to rewrite any invocation whose package position is ambiguous.
+- Policy and backup output paths are collision-safe: sanitized policy
+  filename collisions (e.g. `foo/bar` vs `foo?bar`) are disambiguated
+  with a stable identity hash, backup directories include the config
+  file's stem plus a nanosecond timestamp (two configs sharing
+  `.vscode/` no longer race), and apply refuses to overwrite an existing
+  policy file whose content differs from the planned content.
+- The default `scan` view caps priority findings at 10 and points to
+  `--verbose` for the rest, keeping the summary scannable on hosts with
+  many findings.
+- The post-preview drift gate now binds the plan to a canonical SHA-256
+  snapshot of each selected server's complete JSON entry, captured at
+  detection time — a change to `env` (or any other server-specific
+  field) between preview and confirm aborts the apply, not just changes
+  to command/args/url. Unrelated edits to unselected servers still do
+  not abort.
+- Apply refuses every pre-existing file at a planned policy path, even
+  when its content is byte-identical to the planned content. Adopting
+  such a file would record it in the backup manifest, making an
+  operator-owned policy deletable by rollback or failed-apply cleanup;
+  now only files the transaction itself creates are ever manifested,
+  cleaned up, or removed. The same rule applies to the non-wizard
+  `setup apply` path.
+
+## [1.6.0] - 2026-07-11
+
+### Added
+
 - **Guided setup wizard**: `etherfence setup` (no subcommand) now launches an
   interactive guided setup experience on TTYs. The wizard scans for AI clients,
   detects MCP servers, and provides step-by-step guidance toward applying

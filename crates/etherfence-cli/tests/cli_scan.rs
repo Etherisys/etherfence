@@ -129,9 +129,38 @@ fn scan_windows_fixture_json_discovers_windows_style_configs() {
 }
 
 #[test]
-fn scan_fixture_human_groups_by_severity_and_guidance() {
+fn scan_fixture_human_default_is_executive_summary() {
     let root = fixture_root("home");
     let output = run(&["scan", "--root", &root]);
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Security posture"));
+    assert!(stdout.contains("Overall status:"));
+    assert!(stdout.contains("Clients"));
+    assert!(stdout.contains("Priority findings"));
+    assert!(stdout.contains("Next steps"));
+    assert!(stdout.contains("`etherfence scan --verbose`"));
+    assert!(stdout.contains("`etherfence setup`"));
+    // High findings surface with their IDs even in the summary.
+    assert!(stdout.contains("HIGH"));
+    assert!(stdout.contains("EF-MCP-001"));
+    // Full evidence stays behind --verbose.
+    assert!(!stdout.contains("Rationale:"));
+    assert!(!stdout.contains("fingerprint=efp1-"));
+    // The read-only, no-overclaiming note stays on the default view.
+    assert!(stdout.contains("This scan command is read-only posture discovery"));
+    assert!(stdout.contains("posture risks/hints, not confirmed exploitability"));
+}
+
+#[test]
+fn scan_fixture_human_verbose_groups_by_severity_and_guidance() {
+    let root = fixture_root("home");
+    let output = run(&["scan", "--root", &root, "--verbose"]);
 
     assert!(
         output.status.success(),
@@ -151,7 +180,7 @@ fn scan_fixture_human_groups_by_severity_and_guidance() {
 #[test]
 fn scan_fixture_human_status_and_note_are_v1_compatible() {
     let root = fixture_root("home");
-    let output = run(&["scan", "--root", &root]);
+    let output = run(&["scan", "--root", &root, "--verbose"]);
 
     assert!(
         output.status.success(),
@@ -172,7 +201,14 @@ fn scan_fixture_human_status_and_note_are_v1_compatible() {
 #[test]
 fn severity_threshold_high_displays_only_high_findings() {
     let root = fixture_root("home");
-    let output = run(&["scan", "--root", &root, "--severity-threshold", "high"]);
+    let output = run(&[
+        "scan",
+        "--root",
+        &root,
+        "--severity-threshold",
+        "high",
+        "--verbose",
+    ]);
 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -198,7 +234,7 @@ fn fail_on_high_returns_non_zero_when_high_findings_exist() {
 #[test]
 fn fail_on_high_returns_zero_when_no_high_findings_exist() {
     let root = fixture_root("safe-home");
-    let output = run(&["scan", "--root", &root, "--fail-on", "high"]);
+    let output = run(&["scan", "--root", &root, "--fail-on", "high", "--verbose"]);
 
     assert!(
         output.status.success(),
@@ -338,7 +374,14 @@ fn baseline_reports_resolved_findings() {
     .status
     .success());
 
-    let output = run(&["scan", "--root", &safe_root, "--baseline", &baseline_s]);
+    let output = run(&[
+        "scan",
+        "--root",
+        &safe_root,
+        "--baseline",
+        &baseline_s,
+        "--verbose",
+    ]);
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("resolved="));
@@ -449,6 +492,7 @@ fn policy_fail_on_high_returns_non_zero_for_high_policy_violations() {
         &policy,
         "--fail-on",
         "high",
+        "--verbose",
     ]);
 
     assert_eq!(output.status.code(), Some(2));
@@ -485,6 +529,7 @@ fn policy_baseline_fail_on_new_high_returns_zero_when_policy_findings_are_existi
         &baseline_s,
         "--fail-on-new",
         "high",
+        "--verbose",
     ]);
     assert!(
         output.status.success(),
@@ -704,6 +749,7 @@ fn policy_profile_ci_runner_fail_on_high_behaves_like_policy_file() {
         "ci-runner",
         "--fail-on",
         "high",
+        "--verbose",
     ]);
 
     assert_eq!(file_output.status.code(), Some(2));
@@ -740,6 +786,7 @@ fn policy_profile_ci_runner_baseline_fail_on_new_high_works() {
         &baseline_s,
         "--fail-on-new",
         "high",
+        "--verbose",
     ]);
     assert!(
         output.status.success(),
