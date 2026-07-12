@@ -115,6 +115,19 @@ scanning, or network interception.
 - The default `scan` view caps priority findings at 10 and points to
   `--verbose` for the rest, keeping the summary scannable on hosts with
   many findings.
+- The post-preview drift gate now binds the plan to a canonical SHA-256
+  snapshot of each selected server's complete JSON entry, captured at
+  detection time — a change to `env` (or any other server-specific
+  field) between preview and confirm aborts the apply, not just changes
+  to command/args/url. Unrelated edits to unselected servers still do
+  not abort.
+- Apply refuses every pre-existing file at a planned policy path, even
+  when its content is byte-identical to the planned content. Adopting
+  such a file would record it in the backup manifest, making an
+  operator-owned policy deletable by rollback or failed-apply cleanup;
+  now only files the transaction itself creates are ever manifested,
+  cleaned up, or removed. The same rule applies to the non-wizard
+  `setup apply` path.
 
 ## [1.6.0] - 2026-07-11
 

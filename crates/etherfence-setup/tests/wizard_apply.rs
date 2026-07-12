@@ -606,3 +606,90 @@ fn plan_with_foreign_policy_entry_is_rejected() {
     );
     assert!(!root.join(".etherfence").exists());
 }
+
+#[test]
+fn post_preview_env_change_aborts_apply() {
+    // The drift gate must cover the complete server entry — including
+    // `env`, which influences trust findings and can carry credentials —
+    // not just command/args/url.
+    let root = temp_root("env-drift");
+    let config_path = root.join(".claude.json");
+    fs::write(
+        &config_path,
+        r#"{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem"],
+      "env": {"FS_ROOT": "/home/user/projects"}
+    }
+  }
+}
+"#,
+    )
+    .expect("write config");
+
+    let detections = detect(&root);
+    let selections = selections_for(&[claude_id(&root, "filesystem")]);
+    let plan = build_wizard_plan(&detections, &selections, &root.display().to_string())
+        .expect("build plan");
+
+    // The environment changes after preview; command/args/url stay put.
+    let content = fs::read_to_string(&config_path).expect("read config");
+    let swapped = content.replace("/home/user/projects", "/");
+    assert_ne!(content, swapped);
+    fs::write(&config_path, &swapped).expect("modify config");
+    let before = fs::read(&config_path).expect("read modified config");
+
+    let error = apply_wizard_plan(&root, &plan).expect_err("apply must fail");
+    assert!(
+        format!("{error:#}").contains("changed after the plan was reviewed"),
+        "unexpected error: {error:#}"
+    );
+    let after = fs::read(&config_path).expect("re-read config");
+    assert_eq!(before, after, "aborted apply must write nothing");
+    assert!(!root.join(".etherfence").exists());
+}
+
+#[test]
+fn identical_pre_existing_policy_is_never_adopted() {
+    // A pre-existing policy file whose content happens to equal the
+    // planned content must not be absorbed into the transaction: the
+    // backup manifest records every prepared policy path and rollback /
+    // failed-apply cleanup delete recorded paths, so adopting the file
+    // would make an operator-owned policy deletable. Apply must refuse
+    // outright and leave the file untouched.
+    let root = temp_root("identical-policy");
+    let config_path = write_claude_config(&root);
+    let config_before = fs::read(&config_path).expect("read config");
+
+    let policy_dir = root.join(".etherfence/policies");
+    fs::create_dir_all(&policy_dir).expect("create policy dir");
+    let identical = etherfence_setup::generated_policy_template("filesystem")
+        .expect("generate template content");
+    fs::write(policy_dir.join("filesystem.toml"), &identical).expect("write identical policy");
+
+    let detections = detect(&root);
+    let selections = selections_for(&[claude_id(&root, "filesystem")]);
+    let plan = build_wizard_plan(&detections, &selections, &root.display().to_string())
+        .expect("build plan");
+    assert_eq!(
+        plan.policies[0].content, identical,
+        "test precondition: pre-existing content equals planned content"
+    );
+
+    let error = apply_wizard_plan(&root, &plan).expect_err("apply must fail");
+    assert!(
+        format!("{error:#}").contains("already exists"),
+        "unexpected error: {error:#}"
+    );
+
+    // Nothing changed: config untouched, the operator's file survives,
+    // and no backup manifest exists that could later delete it.
+    let config_after = fs::read(&config_path).expect("re-read config");
+    assert_eq!(config_before, config_after);
+    let survivor =
+        fs::read_to_string(policy_dir.join("filesystem.toml")).expect("read surviving policy");
+    assert_eq!(survivor, identical);
+    assert!(!root.join(".etherfence/backups").exists());
+}

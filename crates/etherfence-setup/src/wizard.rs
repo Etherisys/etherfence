@@ -256,6 +256,11 @@ pub struct SelectedServer {
     /// The remote URL the user reviewed (see `expected_command`).
     #[serde(skip)]
     pub expected_url: Option<String>,
+    /// SHA-256 of the server's complete canonical JSON entry as read at
+    /// detection time. Binds the plan to every server-specific field the
+    /// user reviewed — including `env` — not just command/args/url.
+    #[serde(skip)]
+    pub expected_entry_sha256: String,
 }
 
 impl SelectedServer {
@@ -893,6 +898,16 @@ pub fn build_wizard_plan(
                 None => (None, None, PackageVersionStatus::NotApplicable),
             };
 
+            // The apply drift gate needs a snapshot of the complete
+            // reviewed entry; a selectable server without one means the
+            // configuration could not be read consistently at detection.
+            let expected_entry_sha256 = server.raw_entry_sha256.clone().ok_or_else(|| {
+                format!(
+                    "could not snapshot the configuration entry for '{}' in {}; re-run the wizard",
+                    server.name, detection.config_path
+                )
+            })?;
+
             let sel = SelectedServer {
                 agent: detection.agent.clone(),
                 config_path: detection.config_path.clone(),
@@ -904,6 +919,7 @@ pub fn build_wizard_plan(
                 expected_command: server.command.clone(),
                 expected_args: server.args.clone(),
                 expected_url: server.url.clone(),
+                expected_entry_sha256,
             };
             selected_servers.push(sel);
 
@@ -1857,7 +1873,10 @@ mod tests {
 
     fn sample_detection(agent: &str, server_name: &str) -> SetupDetection {
         let server = mcp_server(server_name, Some("npx"), &["some-package"]);
-        let setup_server = server_from_mcp(&server);
+        let mut setup_server = server_from_mcp(&server);
+        // Real detections snapshot the raw JSON entry; synthetic test
+        // detections fake one so plan building can proceed.
+        setup_server.raw_entry_sha256 = Some("test-entry-snapshot".to_string());
         SetupDetection {
             agent: agent.to_string(),
             config_path: format!("~/.config/{agent}/mcp.json"),

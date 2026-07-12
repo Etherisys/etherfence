@@ -86,6 +86,13 @@ pub struct SetupServer {
     /// Raw remote URL from the parsed config (see `command`).
     #[serde(skip)]
     pub url: Option<String>,
+    /// SHA-256 of the server's complete canonical JSON entry as read at
+    /// detection time (writable supported configs only). Binds a wizard
+    /// plan to *everything* the user reviewed — including `env` and any
+    /// other server-specific field — so post-preview changes to the
+    /// entry abort the apply. Kept out of serialized output.
+    #[serde(skip)]
+    pub raw_entry_sha256: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -219,10 +226,45 @@ const SUPPORTED_CONFIGS: &[SupportedConfig] = &[
 ];
 
 pub fn detect(root: &Path) -> Vec<SetupDetection> {
-    etherfence_inventory::discover(root)
+    let mut detections: Vec<SetupDetection> = etherfence_inventory::discover(root)
         .into_iter()
         .map(detection_from_inventory)
-        .collect()
+        .collect();
+    for detection in &mut detections {
+        attach_entry_snapshots(root, detection);
+    }
+    detections
+}
+
+/// Records a canonical-entry hash for every server in a writable
+/// supported config. Best-effort here: a server that ends up without a
+/// snapshot is rejected later, at plan time, if the user selects it.
+fn attach_entry_snapshots(root: &Path, detection: &mut SetupDetection) {
+    let Ok(config) = resolve_supported_config(&detection.config_path) else {
+        return;
+    };
+    let path = root.join(config.relative_path);
+    let Ok(content) = fs::read_to_string(&path) else {
+        return;
+    };
+    let Ok(value) = serde_json::from_str::<JsonValue>(&content) else {
+        return;
+    };
+    let Some(servers) = servers_object(&value, config.shape) else {
+        return;
+    };
+    for server in &mut detection.servers {
+        if let Some(entry) = servers.get(&server.name) {
+            server.raw_entry_sha256 = Some(canonical_entry_sha256(entry));
+        }
+    }
+}
+
+/// Canonical hash of one server's JSON entry. Both hashing sites (detect
+/// snapshot and apply drift gate) serialize the same `serde_json::Value`
+/// type, so identical entries always produce identical hashes.
+fn canonical_entry_sha256(entry: &JsonValue) -> String {
+    sha256_hex(entry.to_string().as_bytes())
 }
 
 pub fn plan(root: &Path) -> SetupPlan {
@@ -363,6 +405,7 @@ struct WizardDirective {
     expected_command: Option<String>,
     expected_args: Vec<String>,
     expected_url: Option<String>,
+    expected_entry_sha256: String,
     pin_version: Option<String>,
     policy_content: String,
     policy_path: PathBuf,
@@ -436,6 +479,7 @@ fn prepare_wizard_apply(root: &Path, plan: &wizard::WizardPlan) -> Result<Vec<Pr
             .push(WizardDirective {
                 server_name: server.server_name.clone(),
                 expected_command: server.expected_command.clone(),
+                expected_entry_sha256: server.expected_entry_sha256.clone(),
                 expected_args: server.expected_args.clone(),
                 expected_url: server.expected_url.clone(),
                 pin_version,
@@ -645,9 +689,14 @@ fn prepare_wizard_config(
             };
             let server = json_server(&directive.server_name, server_value);
 
-            // Drift gate: the invocation being rewritten must be exactly
-            // the one the user reviewed at preview time.
-            if server.command != directive.expected_command
+            // Drift gate: the complete entry being rewritten must be
+            // exactly the one the user reviewed at preview time. The
+            // canonical-entry hash covers every server-specific field —
+            // including `env` and anything `json_server` does not model —
+            // and the invocation equality below states the same promise
+            // in terms of the fields the wizard displayed.
+            if canonical_entry_sha256(server_value) != directive.expected_entry_sha256
+                || server.command != directive.expected_command
                 || server.args != directive.expected_args
                 || server.url != directive.expected_url
             {
@@ -695,21 +744,17 @@ fn prepare_wizard_config(
                     directive.server_name
                 )
             })?;
-            // Never clobber an existing policy file that differs from the
-            // planned content — it may be operator-authored.
+            // Never adopt a pre-existing policy file into this
+            // transaction — even byte-identical content. The transaction
+            // records every prepared policy path in its backup manifest,
+            // and rollback (and failed-apply cleanup) remove recorded
+            // paths; a file EtherFence did not create must never become
+            // deletable that way.
             if directive.policy_path.exists() {
-                let existing = fs::read(&directive.policy_path).with_context(|| {
-                    format!(
-                        "reading existing policy {}",
-                        directive.policy_path.display()
-                    )
-                })?;
-                if existing != directive.policy_content.as_bytes() {
-                    anyhow::bail!(
-                        "policy file {} already exists with different content; refusing to overwrite it — move it aside and re-run the wizard",
-                        directive.policy_path.display()
-                    );
-                }
+                anyhow::bail!(
+                    "policy file {} already exists; refusing to overwrite it — move it aside and re-run the wizard",
+                    directive.policy_path.display()
+                );
             }
 
             let Some(server_value) = servers.get_mut(&directive.server_name) else {
@@ -873,6 +918,16 @@ fn prepare_config(path: &Path, config: &SupportedConfig) -> Result<Option<Prepar
                 let policy = generated_policy_template(server_name)?;
                 let policy_path =
                     policy_dir.join(format!("{}.toml", sanitize_policy_identifier(server_name)));
+                // Same ownership rule as the wizard apply: never adopt a
+                // pre-existing policy file into this transaction — the
+                // manifest, rollback, and failed-apply cleanup treat every
+                // recorded policy path as EtherFence-created and removable.
+                if policy_path.exists() {
+                    anyhow::bail!(
+                        "policy file {} already exists; refusing to overwrite it — move it aside and re-run setup apply",
+                        policy_path.display()
+                    );
+                }
                 changes.push((server_name.clone(), policy.into_bytes(), policy_path));
             }
         }
@@ -952,6 +1007,19 @@ fn remove_empty_parent_dirs(start: Option<&Path>, max_depth: usize) {
         };
         current = path.parent().map(Path::to_path_buf);
         let _ = fs::remove_dir(&path);
+    }
+}
+
+/// Read-only counterpart of `servers_object_mut`.
+fn servers_object(value: &JsonValue, shape: SupportedShape) -> Option<&JsonMap<String, JsonValue>> {
+    match shape {
+        SupportedShape::TopLevelMcpServers => value.get("mcpServers")?.as_object(),
+        SupportedShape::NestedMcpServers => {
+            if let Some(servers) = value.get("mcp").and_then(|mcp| mcp.get("servers")) {
+                return servers.as_object();
+            }
+            value.get("mcpServers")?.as_object()
+        }
     }
 }
 
@@ -1035,6 +1103,7 @@ pub(crate) fn server_from_mcp(server: &McpServer) -> SetupServer {
         command: server.command.clone(),
         args: server.args.clone(),
         url: server.url.clone(),
+        raw_entry_sha256: None,
     }
 }
 
