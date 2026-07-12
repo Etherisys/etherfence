@@ -307,6 +307,7 @@ dependencies = [
  "anyhow",
  "etherfence-core",
  "serde_json",
+ "unicode-width",
 ]
 
 [[package]]

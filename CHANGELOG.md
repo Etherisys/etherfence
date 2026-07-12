@@ -17,6 +17,12 @@ field guards; `ef-mcp-policy/v0.1` policies are unaffected. EtherFence still
 has no daemon mode, shell hooks, command interception, terminal-command
 scanning, or network interception.
 
+## [Unreleased]
+
+### Fixed
+
+- **Scan posture presentation**: default and verbose human reports now wrap long titles, targets, impact statements, and recommendations using Unicode display columns with stable continuation indentation. Narrow terminals, `NO_COLOR`, redirected/non-TTY output, and plain terminals remain readable and deterministic without raw ANSI sequences. This is presentation-only: posture calculation, finding selection/order, machine formats, schemas, baselines, policies, exit behavior, SARIF, and MCP runtime enforcement are unchanged.
+
 ## [1.7.0] - 2026-07-12
 
 ### Added

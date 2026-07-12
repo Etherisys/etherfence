@@ -26,9 +26,9 @@ CLI filtering with `--severity-threshold` changes which findings are included in
 | `policy` | object/null | optional | Policy evaluation metadata when `--policy` or `--policy-profile` is used. |
 | `baseline` | object/null | optional | Baseline comparison metadata when `--baseline` is used. |
 
-## Additive posture summary (v1.7.0)
+## Additive posture summary (v1.7.0; human layout stabilized in v1.7.1)
 
-`posture` is an optional additive object in the unchanged `ef-scan-report/v0.1.1` contract. v1.7.0 scans populate it; consumers that read the pre-v1.7.0 fields remain compatible by ignoring it. It is local, read-only, advisory prioritization: it neither remediates findings nor proves that a host is secure.
+`posture` is an optional additive object in the unchanged `ef-scan-report/v0.1.1` contract. v1.7.0+ scans populate it; consumers that read the pre-v1.7.0 fields remain compatible by ignoring it. It is local, read-only, advisory prioritization: it neither remediates findings nor proves that a host is secure. v1.7.1 changes only human terminal wrapping; field names, types, and semantics are unchanged.
 
 | Field | Type | Description |
 | --- | --- | --- |

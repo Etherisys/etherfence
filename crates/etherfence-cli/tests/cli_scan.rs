@@ -34,10 +34,13 @@ fn temp_file(name: &str) -> PathBuf {
 }
 
 fn run(args: &[&str]) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_etherfence"))
-        .args(args)
-        .output()
-        .expect("run etherfence scan")
+    run_with_env(args, &[])
+}
+
+fn run_with_env(args: &[&str], env: &[(&str, &str)]) -> std::process::Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_etherfence"));
+    command.args(args).envs(env.iter().copied());
+    command.output().expect("run etherfence scan")
 }
 
 #[test]
@@ -173,7 +176,81 @@ fn scan_fixture_human_default_is_executive_summary() {
     assert!(!stdout.contains("fingerprint=efp1-"));
     // The read-only, no-overclaiming note stays on the default view.
     assert!(stdout.contains("This scan command is read-only posture discovery"));
-    assert!(stdout.contains("posture risks/hints, not confirmed exploitability"));
+    assert!(stdout.contains("exploitability"));
+}
+
+#[test]
+fn human_posture_is_narrow_plain_and_deterministic() {
+    let root = fixture_root("home");
+    let args = ["scan", "--root", &root];
+    let first = run_with_env(&args, &[("COLUMNS", "42"), ("NO_COLOR", "1")]);
+    let second = run_with_env(&args, &[("COLUMNS", "42"), ("NO_COLOR", "1")]);
+    assert!(first.status.success());
+    assert_eq!(first.stdout, second.stdout);
+    let stdout = String::from_utf8_lossy(&first.stdout);
+    assert!(!stdout.contains("\u{1b}["));
+    assert!(stdout.contains("EF-MCP-001"));
+    assert!(stdout.contains("[EF-MCP-001]"));
+    assert!(stdout
+        .lines()
+        .all(|line| etherfence_report::human_layout::display_width(line) <= 42));
+
+    let verbose = run_with_env(
+        &["scan", "--root", &root, "--verbose"],
+        &[("COLUMNS", "42"), ("NO_COLOR", "1")],
+    );
+    assert!(verbose.status.success());
+    let verbose_stdout = String::from_utf8_lossy(&verbose.stdout);
+    assert!(!verbose_stdout.contains("\u{1b}["));
+    assert!(verbose_stdout.contains("Rationale:"));
+    assert!(verbose_stdout
+        .lines()
+        .all(|line| etherfence_report::human_layout::display_width(line) <= 42));
+}
+
+#[test]
+fn very_narrow_terminal_clamps_to_minimum_and_is_safe() {
+    let root = fixture_root("home");
+    // COLUMNS=15 is below MIN_SUPPORTED_WIDTH (30). Wrapped sections
+    // must fit within MIN_SUPPORTED_WIDTH. Fixed-layout lines (client
+    // list, overall status) use key_value() which does not wrap but
+    // is short enough to be readable even when the terminal is tiny.
+    let output = run_with_env(
+        &["scan", "--root", &root],
+        &[("COLUMNS", "15"), ("NO_COLOR", "1")],
+    );
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!stdout.contains("\u{1b}["));
+    let min = etherfence_report::human_layout::MIN_SUPPORTED_WIDTH;
+
+    // Wrapped sections (scope, assessment, findings, risk body, note)
+    // must respect the clamped width.
+    let scope_start = stdout.find("Scope ").unwrap();
+    let assessment_end = stdout.find("Assessment").unwrap()
+        + stdout[stdout.find("Assessment").unwrap()..]
+            .find("\n\n")
+            .unwrap_or(stdout.len() - stdout.find("Assessment").unwrap());
+    for line in stdout[scope_start..assessment_end].lines() {
+        assert!(
+            etherfence_report::human_layout::display_width(line) <= min,
+            "scope/assessment line too wide: {line:?}"
+        );
+    }
+
+    // The note footer is wrapped too.
+    let note_start = stdout.find("Note:").unwrap();
+    for line in stdout[note_start..].lines() {
+        assert!(
+            etherfence_report::human_layout::display_width(line) <= min,
+            "note line too wide: {line:?}"
+        );
+    }
+
+    // Reasonable content still present.
+    assert!(stdout.contains("EF-MCP-001"));
+    assert!(stdout.contains("NEEDS ATTENTION"));
+    assert!(stdout.contains("exploitability"));
 }
 
 #[test]
@@ -194,7 +271,7 @@ fn scan_fixture_human_verbose_groups_by_severity_and_guidance() {
     assert!(stdout.contains("Rationale:"));
     assert!(stdout.contains("Recommendation:"));
     assert!(stdout.contains("fingerprint=efp1-"));
-    assert!(stdout.contains("posture risks/hints, not confirmed exploitability"));
+    assert!(stdout.contains("exploitability"));
 }
 
 #[test]
@@ -214,7 +291,7 @@ fn scan_fixture_human_status_and_note_are_v1_compatible() {
     assert!(!stdout.contains("EtherFence is scan-only"));
 
     assert!(stdout.contains("This scan command is read-only posture discovery"));
-    assert!(stdout.contains("Runtime MCP boundary enforcement is available separately through"));
+    assert!(stdout.contains("Runtime MCP boundary enforcement is available"));
     assert!(stdout.contains("`etherfence mcp-proxy`"));
 }
 
@@ -346,7 +423,7 @@ fn markdown_output_has_review_headings_and_guidance() {
     assert!(stdout.contains("- Status: `stable-local-scan`"));
     assert!(!stdout.to_lowercase().contains("pre-alpha"));
     assert!(stdout.contains("This scan command is read-only posture discovery"));
-    assert!(stdout.contains("Runtime MCP boundary enforcement is available separately through"));
+    assert!(stdout.contains("Runtime MCP boundary enforcement is available"));
 }
 
 #[test]

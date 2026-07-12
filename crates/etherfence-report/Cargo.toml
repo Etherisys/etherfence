@@ -9,3 +9,4 @@ repository.workspace = true
 anyhow.workspace = true
 etherfence-core = { path = "../etherfence-core" }
 serde_json.workspace = true
+unicode-width.workspace = true
