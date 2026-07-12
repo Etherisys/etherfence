@@ -1,3 +1,5 @@
+mod banner;
+
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use etherfence_core::{
@@ -379,8 +381,59 @@ const BUILT_IN_POLICIES: &[BuiltInPolicy] = &[
     },
 ];
 
+/// Classifies each CLI command into a banner output mode.
+///
+/// Human-facing commands show the startup splash on an interactive color
+/// terminal; machine formats (JSON, Markdown, SARIF, raw TOML) and MCP
+/// protocol traffic never do. The banner module additionally suppresses
+/// the splash for redirected stdout, CI, NO_COLOR, CLICOLOR=0, and
+/// TERM=dumb.
+fn command_banner_mode(command: &Command) -> banner::OutputMode {
+    match command {
+        Command::Scan { format, .. } => match format {
+            OutputFormat::Human => banner::OutputMode::Human,
+            OutputFormat::Json | OutputFormat::Markdown | OutputFormat::Sarif => {
+                banner::OutputMode::Machine
+            }
+        },
+        // `policy list`/`policy show` emit machine-consumable lists and
+        // raw TOML for piping into files.
+        Command::Policy { .. } => banner::OutputMode::Machine,
+        // The proxy speaks MCP JSON-RPC over stdio; nothing may pollute it.
+        Command::McpProxy { .. } => banner::OutputMode::Protocol,
+        Command::McpPolicy { command } => match command {
+            // `mcp-policy init` emits raw policy TOML for piping.
+            McpPolicyCommand::Init { .. } => banner::OutputMode::Machine,
+            McpPolicyCommand::Validate { .. }
+            | McpPolicyCommand::Explain { .. }
+            | McpPolicyCommand::Check { .. } => banner::OutputMode::Human,
+        },
+        Command::Setup { command } => match command {
+            // Bare `etherfence setup` launches the interactive wizard.
+            None => banner::OutputMode::Human,
+            Some(SetupCommand::Detect { format, .. })
+            | Some(SetupCommand::Catalog { format, .. }) => match format {
+                SetupOutputFormat::Human => banner::OutputMode::Human,
+                SetupOutputFormat::Json => banner::OutputMode::Machine,
+            },
+            Some(SetupCommand::Baseline { command }) => match command {
+                SetupBaselineCommand::Write { .. } => banner::OutputMode::Human,
+                SetupBaselineCommand::Check { format, .. } => match format {
+                    SetupOutputFormat::Human => banner::OutputMode::Human,
+                    SetupOutputFormat::Json => banner::OutputMode::Machine,
+                },
+            },
+            Some(SetupCommand::Plan { .. })
+            | Some(SetupCommand::Apply { .. })
+            | Some(SetupCommand::Rollback { .. })
+            | Some(SetupCommand::Doctor { .. }) => banner::OutputMode::Human,
+        },
+    }
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    banner::print_startup_banner(command_banner_mode(&cli.command));
     match cli.command {
         Command::Scan {
             format,
@@ -1257,11 +1310,14 @@ fn run_setup_wizard() -> Result<()> {
         for &pick in &picks {
             let server = &client.servers[pick];
             let key = format!("{}:{}", client.agent, server.name);
-            selected_server_keys.push(key.clone());
 
             eprintln!();
             eprintln!("    Server: {}", server.name);
             let mut quarantine_only = false;
+            // Nothing is committed to the selections until every decision
+            // for this server is complete: any skip path below simply
+            // `continue`s and the server stays fully unselected.
+            let mut pending_pin: Option<String> = None;
 
             // Trust gate (Step 4)
             match server.trust_assessment.aggregate {
@@ -1290,7 +1346,6 @@ fn run_setup_wizard() -> Result<()> {
                             .interact(),
                     )?;
                     match choice {
-                        0 => continue,
                         1 => quarantine_only = true,
                         _ => continue,
                     }
@@ -1304,17 +1359,21 @@ fn run_setup_wizard() -> Result<()> {
                 _ => {}
             }
 
-            // Package version pinning
-            if let Some(ve) = server.trust_assessment.invocation.version_expression {
-                if matches!(
-                    ve,
-                    etherfence_setup::VersionExpressionKind::Omitted
-                        | etherfence_setup::VersionExpressionKind::MutableTag
-                        | etherfence_setup::VersionExpressionKind::VersionRange
-                ) {
+            // Package version pinning, assessed from the server's real
+            // invocation. Only exact, immutable versions are accepted.
+            let (runner, _pkg, version_status) = match server.command.as_deref() {
+                Some(command) => etherfence_setup::extract_package_version(command, &server.args),
+                None => (
+                    None,
+                    None,
+                    etherfence_setup::PackageVersionStatus::NotApplicable,
+                ),
+            };
+            if let Some(runner) = runner {
+                if version_status.needs_pinning() {
                     eprintln!(
                         "      Package version is {} (not pinned).",
-                        etherfence_setup::human_label_version_expression(ve)
+                        version_status.human_label()
                     );
                     let version = interact_text_or_bail(
                         Input::new()
@@ -1322,11 +1381,17 @@ fn run_setup_wizard() -> Result<()> {
                                 "      Enter exact version to pin (e.g. 1.2.3, or empty to skip)",
                             )
                             .allow_empty(true)
+                            .validate_with(|input: &String| -> Result<(), String> {
+                                if input.trim().is_empty() {
+                                    return Ok(());
+                                }
+                                etherfence_setup::validate_exact_version(runner, input.trim())
+                            })
                             .interact_text(),
                     )?;
                     if !version.trim().is_empty() {
-                        version_pins.insert(key.clone(), version.trim().to_string());
-                        eprintln!("        Pinned to @{}", version.trim());
+                        pending_pin = Some(version.trim().to_string());
+                        eprintln!("        Will pin to @{}", version.trim());
                     }
                 }
             }
@@ -1349,14 +1414,11 @@ fn run_setup_wizard() -> Result<()> {
                     .interact(),
             )?;
 
-            if quarantine_only {
-                policy_types.insert(key.clone(), etherfence_setup::PolicyType::DenyAllQuarantine);
+            let policy_type = if quarantine_only {
+                etherfence_setup::PolicyType::DenyAllQuarantine
             } else {
                 match posture_choice {
-                    0 => {
-                        policy_types
-                            .insert(key.clone(), etherfence_setup::PolicyType::DenyAllQuarantine);
-                    }
+                    0 => etherfence_setup::PolicyType::DenyAllQuarantine,
                     1 => {
                         let tools = interact_text_or_bail(
                             Input::new()
@@ -1368,14 +1430,18 @@ fn run_setup_wizard() -> Result<()> {
                             .map(|t| t.trim().to_string())
                             .filter(|t| !t.is_empty())
                             .collect();
-                        policy_types.insert(
-                            key.clone(),
-                            etherfence_setup::PolicyType::CustomToolAllowlist(allowlist),
-                        );
+                        etherfence_setup::PolicyType::CustomToolAllowlist(allowlist)
                     }
                     _ => continue,
                 }
+            };
+
+            // All decisions made — commit this server's selection.
+            selected_server_keys.push(key.clone());
+            if let Some(version) = pending_pin {
+                version_pins.insert(key.clone(), version);
             }
+            policy_types.insert(key, policy_type);
         }
     }
 

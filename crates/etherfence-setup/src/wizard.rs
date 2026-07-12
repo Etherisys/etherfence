@@ -133,6 +133,14 @@ impl From<TrustPackageRunner> for WizardPackageRunner {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PinningChange {
+    /// Owning agent display name; filled by `build_wizard_plan` (empty when
+    /// produced by a direct `resolve_pinning` call).
+    #[serde(default)]
+    pub agent: String,
+    /// Owning config display path; filled by `build_wizard_plan` (empty when
+    /// produced by a direct `resolve_pinning` call).
+    #[serde(default)]
+    pub config_path: String,
     pub server_name: String,
     pub runner: Option<WizardPackageRunner>,
     pub package_identity: Option<String>,
@@ -164,6 +172,10 @@ pub enum PolicyType {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PolicyEntry {
+    /// Owning agent display name.
+    pub agent: String,
+    /// Owning config display path.
+    pub config_path: String,
     pub server_name: String,
     pub policy_type: PolicyType,
     /// The full validated TOML content.
@@ -503,6 +515,8 @@ pub fn resolve_pinning(server: &McpServer, proposed_version: &str) -> Option<Pin
     };
 
     Some(PinningChange {
+        agent: String::new(),
+        config_path: String::new(),
         server_name: server.name.clone(),
         runner: Some(runner),
         package_identity,
@@ -796,16 +810,11 @@ pub fn build_wizard_plan(
                 continue;
             }
 
-            // Resolve package version status.
-            // Try trust assessment first; fall back to extraction.
-            let (runner, package_identity, existing_status) = {
-                let inv = &server.trust_assessment.invocation;
-                let status = match inv.version_expression {
-                    Some(kind) => PackageVersionStatus::from(kind),
-                    None => PackageVersionStatus::NotApplicable,
-                };
-                let runner: Option<WizardPackageRunner> = inv.runner.map(Into::into);
-                (runner, inv.package_identity.clone(), status)
+            // Resolve package version status from the server's real
+            // invocation as parsed out of its config file.
+            let (runner, package_identity, existing_status) = match server.command.as_deref() {
+                Some(command) => extract_package_version(command, &server.args),
+                None => (None, None, PackageVersionStatus::NotApplicable),
             };
 
             let sel = SelectedServer {
@@ -820,15 +829,35 @@ pub fn build_wizard_plan(
             };
             selected_servers.push(sel);
 
-            // Pinning change.
+            // Pinning change, computed against the server's real command
+            // and argument list so the planned rewrite matches what apply
+            // will actually mutate. Fail closed instead of silently
+            // dropping a pin the user asked for.
             if let Some(version) = selections.version_pins.get(&key) {
-                // Build an McpServer from the SetupServer data so we can
-                // call resolve_pinning.  We approximate command + args
-                // from the trust assessment's runner info.
-                let mcp = build_mcp_from_setup(server, detection)?;
-                if let Some(change) = resolve_pinning(&mcp, version) {
-                    pinning_changes.push(change);
-                }
+                let runner = runner.ok_or_else(|| {
+                    format!(
+                        "cannot pin '{}': no recognised package runner (npx, uvx, pipx run) in its invocation",
+                        server.name
+                    )
+                })?;
+                validate_exact_version(runner, version)
+                    .map_err(|e| format!("cannot pin '{}': {e}", server.name))?;
+                let mcp = McpServer {
+                    name: server.name.clone(),
+                    command: server.command.clone(),
+                    args: server.args.clone(),
+                    env: Vec::new(),
+                    url: server.url.clone(),
+                };
+                let mut change = resolve_pinning(&mcp, version).ok_or_else(|| {
+                    format!(
+                        "cannot pin '{}': its current invocation does not support version pinning",
+                        server.name
+                    )
+                })?;
+                change.agent = detection.agent.clone();
+                change.config_path = detection.config_path.clone();
+                pinning_changes.push(change);
             }
 
             // Policy generation.
@@ -845,6 +874,8 @@ pub fn build_wizard_plan(
                         sanitize_policy_identifier(&server.name)
                     );
                     policies.push(PolicyEntry {
+                        agent: detection.agent.clone(),
+                        config_path: detection.config_path.clone(),
                         server_name: server.name.clone(),
                         policy_type: PolicyType::DenyAllQuarantine,
                         content,
@@ -865,6 +896,8 @@ pub fn build_wizard_plan(
                         sanitize_policy_identifier(&server.name)
                     );
                     policies.push(PolicyEntry {
+                        agent: detection.agent.clone(),
+                        config_path: detection.config_path.clone(),
                         server_name: server.name.clone(),
                         policy_type: PolicyType::Curated,
                         content,
@@ -884,6 +917,8 @@ pub fn build_wizard_plan(
                         sanitize_policy_identifier(&server.name)
                     );
                     policies.push(PolicyEntry {
+                        agent: detection.agent.clone(),
+                        config_path: detection.config_path.clone(),
                         server_name: server.name.clone(),
                         policy_type: PolicyType::CustomToolAllowlist(tools.clone()),
                         content,
@@ -934,59 +969,51 @@ pub fn build_wizard_plan(
     })
 }
 
-/// Apply a wizard-built plan using the existing apply engine.
-/// The plan was constructed from user selections, so only selected
-/// clients/servers are affected — unlike `apply(root)` which wraps every
-/// eligible unwrapped stdio server.
-pub fn apply_wizard_plan(root: &std::path::Path, _plan: &WizardPlan) -> anyhow::Result<()> {
-    crate::apply(root)
+/// Applies a wizard-built plan selectively: only the servers the plan
+/// selected are pinned, given their planned policy, and wrapped. Servers
+/// the user skipped — and configs without any selected server — are left
+/// untouched. See `crate::apply_selected` for the fail-closed semantics.
+pub fn apply_wizard_plan(root: &std::path::Path, plan: &WizardPlan) -> anyhow::Result<()> {
+    crate::apply_selected(root, plan)
 }
 
-/// Builds an `McpServer` approximation from a `SetupServer` in its
-/// detection context so that `resolve_pinning` can operate on it.
-fn build_mcp_from_setup(
-    server: &SetupServer,
-    _detection: &SetupDetection,
-) -> Result<McpServer, String> {
-    // We cannot reconstruct the exact command/args from trust assessment
-    // alone (the raw values are intentionally not stored).  If the
-    // invocation is not applicable (remote server), return a minimal
-    // placeholder — pinning is a no-op for those anyway.
-    if !server.trust_assessment.invocation.applicable {
-        return Err(format!(
-            "server '{}' has no local invocation; pinning not applicable",
-            server.name
-        ));
+/// Validates that a proposed version string is an exact, immutable version
+/// for the given package runner. Rejects mutable tags (`latest`, `beta`),
+/// ranges (`^1.2`, `>=2`), and anything ambiguous — the wizard's pinning
+/// promise is only meaningful for an exact version.
+pub fn validate_exact_version(runner: WizardPackageRunner, version: &str) -> Result<(), String> {
+    let version = version.trim();
+    if version.is_empty() {
+        return Err("version must not be empty".to_string());
     }
-
-    // Re-derive the command from the runner if possible.
-    let command = match server.trust_assessment.invocation.runner {
-        Some(TrustPackageRunner::Npx) => "npx",
-        Some(TrustPackageRunner::Uvx) => "uvx",
-        Some(TrustPackageRunner::PipxRun) => "pipx",
-        None => {
-            return Err(format!(
-                "server '{}' has no recognised runner; pinning not applicable",
-                server.name
-            ));
+    match runner {
+        WizardPackageRunner::Npx => {
+            if MUTABLE_NPM_TAGS.contains(&version) {
+                Err(format!(
+                    "'{version}' is a mutable npm dist-tag, not an exact version"
+                ))
+            } else if looks_like_npm_range(version) {
+                Err(format!(
+                    "'{version}' is a version range, not an exact version"
+                ))
+            } else if !looks_like_exact_version(version) {
+                Err(format!(
+                    "'{version}' is not an exact npm version (expected e.g. 1.2.3)"
+                ))
+            } else {
+                Ok(())
+            }
         }
-    };
-
-    // Build empty-ish args — the trust assessment doesn't store raw args
-    // for security reasons.  For pinning purposes, we reconstruct a minimal
-    // arg list from the package identity.
-    let mut args: Vec<String> = Vec::new();
-    if let Some(pkg) = &server.trust_assessment.invocation.package_identity {
-        args.push(pkg.clone());
+        WizardPackageRunner::Uvx | WizardPackageRunner::Pipx => {
+            if is_exact_pep440_version(version) {
+                Ok(())
+            } else {
+                Err(format!(
+                    "'{version}' is not an exact PEP 440 version (expected e.g. 1.2.3)"
+                ))
+            }
+        }
     }
-
-    Ok(McpServer {
-        name: server.name.clone(),
-        command: Some(command.to_string()),
-        args,
-        env: Vec::new(),
-        url: None,
-    })
 }
 
 /// Generates a curated policy for a server based on its capability labels.

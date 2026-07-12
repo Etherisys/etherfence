@@ -37,8 +37,8 @@ pub use trust::{
 };
 pub use wizard::{
     apply_wizard_plan, build_wizard_plan, extract_package_version, resolve_pinning,
-    PackageVersionStatus, PinningChange, PolicyEntry, PolicyType, SelectedServer,
-    WizardPackageRunner, WizardPlan, WizardSelections,
+    validate_exact_version, PackageVersionStatus, PinningChange, PolicyEntry, PolicyType,
+    SelectedServer, WizardPackageRunner, WizardPlan, WizardSelections,
 };
 
 const BACKUP_MARKER: &str = "etherfence-setup-backup/v1";
@@ -74,6 +74,18 @@ pub struct SetupServer {
     pub capabilities: ClassifiedCapabilities,
     pub recommendation: StarterPolicyRecommendation,
     pub trust_assessment: TrustAssessment,
+    /// Raw invocation command from the parsed config. Kept out of JSON
+    /// output (the detect/baseline contracts stay unchanged); retained in
+    /// memory so the wizard can plan and apply pinning against the real
+    /// invocation instead of a reconstruction.
+    #[serde(skip)]
+    pub command: Option<String>,
+    /// Raw invocation arguments from the parsed config (see `command`).
+    #[serde(skip)]
+    pub args: Vec<String>,
+    /// Raw remote URL from the parsed config (see `command`).
+    #[serde(skip)]
+    pub url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -319,8 +331,12 @@ pub fn doctor(root: &Path) -> DoctorReport {
 
 pub fn apply(root: &Path) -> Result<()> {
     let prepared = prepare_apply(root)?;
+    write_prepared_changes(root, &prepared)
+}
+
+fn write_prepared_changes(root: &Path, prepared: &[PreparedApply]) -> Result<()> {
     let mut completed: Vec<&PreparedApply> = Vec::new();
-    for change in &prepared {
+    for change in prepared {
         if let Err(error) = write_prepared_apply(root, change) {
             let mut cleanup_errors = Vec::new();
             cleanup_prepared_apply(change, false, &mut cleanup_errors);
@@ -338,6 +354,203 @@ pub fn apply(root: &Path) -> Result<()> {
         completed.push(change);
     }
     Ok(())
+}
+
+/// One selected server's apply-time instructions, derived from a
+/// `wizard::WizardPlan`.
+struct WizardDirective {
+    pin_version: Option<String>,
+    policy_content: Option<String>,
+}
+
+/// One selected server's fully resolved change, ready to be written.
+struct PlannedServerChange {
+    server_name: String,
+    pinned_args: Option<Vec<String>>,
+    policy: Vec<u8>,
+    policy_path: PathBuf,
+}
+
+/// Applies a wizard plan selectively: only the servers the user selected
+/// are pinned, given a policy, and wrapped. Every other server and every
+/// config without a selected server is left untouched.
+///
+/// Fails closed: if a selected server disappeared from its config, or a
+/// promised version pin cannot be applied to the server's real invocation,
+/// the whole apply is aborted before any file is written.
+pub(crate) fn apply_selected(root: &Path, plan: &wizard::WizardPlan) -> Result<()> {
+    let prepared = prepare_wizard_apply(root, plan)?;
+    write_prepared_changes(root, &prepared)
+}
+
+fn prepare_wizard_apply(root: &Path, plan: &wizard::WizardPlan) -> Result<Vec<PreparedApply>> {
+    let mut prepared = Vec::new();
+    for config in SUPPORTED_CONFIGS {
+        let path = root.join(config.relative_path);
+        if !path.is_file() {
+            continue;
+        }
+        let mut directives: std::collections::BTreeMap<String, WizardDirective> =
+            std::collections::BTreeMap::new();
+        for server in &plan.selected_servers {
+            if !display_path_matches(&server.config_path, config.relative_path) {
+                continue;
+            }
+            let pin_version = plan
+                .pinning_changes
+                .iter()
+                .find(|change| {
+                    change.config_path == server.config_path
+                        && change.server_name == server.server_name
+                })
+                .and_then(|change| change.proposed_version.clone());
+            let policy_content = plan
+                .policies
+                .iter()
+                .find(|policy| {
+                    policy.config_path == server.config_path
+                        && policy.server_name == server.server_name
+                })
+                .map(|policy| policy.content.clone());
+            directives.insert(
+                server.server_name.clone(),
+                WizardDirective {
+                    pin_version,
+                    policy_content,
+                },
+            );
+        }
+        if directives.is_empty() {
+            continue;
+        }
+        if let Some(change) = prepare_wizard_config(&path, config, &directives)? {
+            prepared.push(change);
+        }
+    }
+    Ok(prepared)
+}
+
+fn prepare_wizard_config(
+    path: &Path,
+    config: &SupportedConfig,
+    directives: &std::collections::BTreeMap<String, WizardDirective>,
+) -> Result<Option<PreparedApply>> {
+    let original_content = fs::read(path)
+        .with_context(|| format!("reading supported MCP config {}", path.display()))?;
+    if original_content.len() as u64 > MAX_CONFIG_FILE_BYTES {
+        anyhow::bail!("config {} exceeds size limit", path.display());
+    }
+    let content = std::str::from_utf8(&original_content)
+        .with_context(|| format!("supported MCP config {} is not UTF-8", path.display()))?;
+    let mut value: JsonValue = serde_json::from_str(content)
+        .with_context(|| format!("parsing supported MCP config JSON {}", path.display()))?;
+
+    let policy_dir = path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(POLICY_DIR);
+    let mut policies = Vec::new();
+    {
+        let Some(servers) = servers_object_mut(&mut value, config.shape) else {
+            anyhow::bail!(
+                "config {} no longer contains an MCP servers object; aborting wizard apply",
+                path.display()
+            );
+        };
+        let mut changes: Vec<PlannedServerChange> = Vec::new();
+        for (server_name, directive) in directives {
+            let Some(server_value) = servers.get(server_name) else {
+                anyhow::bail!(
+                    "selected server '{}' no longer exists in {}; aborting wizard apply",
+                    server_name,
+                    path.display()
+                );
+            };
+            let server = json_server(server_name, server_value);
+            if transport_for_server(&server) != ServerTransport::Stdio {
+                // Remote servers cannot be wrapped; the plan records these
+                // as skip-non-stdio actions.
+                continue;
+            }
+            if is_wrapped_server(&server) {
+                continue;
+            }
+            let pinned_args = match &directive.pin_version {
+                Some(version) => {
+                    let change = wizard::resolve_pinning(&server, version).with_context(|| {
+                        format!(
+                            "planned version pin for '{}' cannot be applied to its current invocation in {}; aborting wizard apply",
+                            server_name,
+                            path.display()
+                        )
+                    })?;
+                    Some(change.pinned_args)
+                }
+                None => None,
+            };
+            let policy = match &directive.policy_content {
+                Some(content) => {
+                    etherfence_mcp::parse_mcp_policy(content).with_context(|| {
+                        format!("planned policy for '{server_name}' failed validation")
+                    })?;
+                    content.clone()
+                }
+                None => generated_policy_template(server_name)?,
+            };
+            let policy_path =
+                policy_dir.join(format!("{}.toml", sanitize_policy_identifier(server_name)));
+            changes.push(PlannedServerChange {
+                server_name: server_name.clone(),
+                pinned_args,
+                policy: policy.into_bytes(),
+                policy_path,
+            });
+        }
+        if changes.is_empty() {
+            return Ok(None);
+        }
+        for change in changes {
+            let Some(server_value) = servers.get_mut(&change.server_name) else {
+                continue;
+            };
+            if let Some(args) = change.pinned_args {
+                if let Some(object) = server_value.as_object_mut() {
+                    object.insert(
+                        "args".to_string(),
+                        JsonValue::Array(args.into_iter().map(JsonValue::String).collect()),
+                    );
+                }
+            }
+            wrap_server_value(server_value, &change.server_name, &change.policy_path)?;
+            policies.push(PreparedPolicy {
+                path: change.policy_path,
+                content: change.policy,
+            });
+        }
+    }
+
+    let next_content = serde_json::to_vec_pretty(&value)?;
+    let backup_dir = timestamped_backup_dir(path)?;
+    Ok(Some(PreparedApply {
+        original_path: path.to_path_buf(),
+        backup_path: backup_dir.join("original.json"),
+        backup_dir,
+        original_content,
+        next_content,
+        policies,
+    }))
+}
+
+/// Matches a detection's display config path (e.g. `~/.claude.json`, or an
+/// absolute path when it sat outside the scan root) against a supported
+/// config's root-relative path.
+fn display_path_matches(display: &str, relative: &str) -> bool {
+    let display = display.replace('\\', "/");
+    let relative = relative.replace('\\', "/");
+    display == relative
+        || display
+            .strip_suffix(&relative)
+            .is_some_and(|prefix| prefix.ends_with('/'))
 }
 
 pub fn rollback(root: &Path) -> Result<()> {
@@ -617,6 +830,9 @@ pub(crate) fn server_from_mcp(server: &McpServer) -> SetupServer {
         capabilities,
         recommendation,
         trust_assessment,
+        command: server.command.clone(),
+        args: server.args.clone(),
+        url: server.url.clone(),
     }
 }
 
