@@ -211,19 +211,46 @@ and terminals without ANSI color support.
 ## `scan` example
 
 ```sh
+etherfence scan                  # readable executive summary
+etherfence scan --verbose        # full evidence: rationale, recommendations, fingerprints
 etherfence scan --format json
 etherfence scan --policy-profile ci-runner --fail-on high
 etherfence scan --baseline etherfence-baseline.json --fail-on-new high
 etherfence scan --format sarif > etherfence.sarif
 ```
 
-```text
-EtherFence scan report
-======================
-Schema: ef-scan-report/v0.1.1
-Status: stable-local-scan
-Summary: 7 inventory item(s), 24 finding(s): high=12, medium=8, low=4, info=0
+The default human output is an executive summary:
 
+```text
+Security posture
+────────────────────────────────────────────────────────────
+Scanned       /home/user
+AI clients    5 detected
+MCP servers   6 configured
+Findings      2 high · 5 medium · 9 low · 0 info
+
+Overall status:  NEEDS ATTENTION
+
+Clients
+────────────────────────────────────────────────────────────
+✓ Claude Code         2 MCP servers
+○ Codex CLI           no MCP servers
+
+Priority findings
+────────────────────────────────────────────────────────────
+HIGH    Broad filesystem access hint  EF-MCP-001
+        Claude Code / filesystem
+
+Next steps
+────────────────────────────────────────────────────────────
+Run `etherfence scan --verbose` for evidence, remediation, and fingerprints.
+Run `etherfence setup` to secure detected MCP servers.
+```
+
+`--verbose` adds the complete finding list with rationale, recommendation,
+and full fingerprints:
+
+```text
 HIGH
 - EF-POL-001 Unexpected MCP server for agent policy: shell-tools [Claude Code / ~/.claude.json]
   Rationale: The MCP server is not in the policy allowlist for this agent.
