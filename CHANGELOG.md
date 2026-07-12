@@ -17,6 +17,36 @@ field guards; `ef-mcp-policy/v0.1` policies are unaffected. EtherFence still
 has no daemon mode, shell hooks, command interception, terminal-command
 scanning, or network interception.
 
+## [1.7.3] - 2026-07-12
+
+### Changed
+
+- **Enhanced startup banner**: added a clean separator and metadata line
+  beneath the ASCII art showing the product tagline, version, and scan mode
+  (`LOCAL POSTURE ASSESSMENT`). The ASCII art itself is unchanged.
+  Compatible with narrow terminals and ANSI-disabled output.
+- **Redesigned `scan --verbose` output**: organized by AI client → MCP server
+  → findings with consolidated, deduplicated recommended actions. Uses the
+  same themed visual system as the default summary.
+- **Removed internal implementation noise from verbose output**: schema
+  identifiers, internal status strings, and fingerprints no longer appear
+  in normal verbose mode.
+
+### Added
+
+- **`--debug` flag on `scan`**: when combined with `--verbose`, includes
+  full technical evidence (fingerprints, schema IDs, policy-status,
+  baseline-status) in the human output.
+- **Unicode/ASCII fallback**: box-drawing characters and Unicode symbols
+  automatically fall back to ASCII equivalents when the terminal does not
+  support Unicode (detected via TERM=dumb, NO_UNICODE, and C locale).
+
+### Fixed
+
+- All human output now wraps correctly on narrow terminals (≤42 columns).
+- ANSI color codes are fully suppressed when NO_COLOR, CI, or dumb
+  terminals are detected.
+
 ## [1.7.2] - 2026-07-12
 
 ### Added

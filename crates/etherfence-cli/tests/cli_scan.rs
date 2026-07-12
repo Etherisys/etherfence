@@ -57,7 +57,7 @@ fn scan_fixture_json_has_stable_top_level_schema() {
 
     assert_eq!(json["schema_version"], "ef-scan-report/v0.1.2");
     assert_eq!(json["tool"], "etherfence");
-    assert_eq!(json["version"], "1.7.2");
+    assert_eq!(json["version"], "1.7.3");
     assert_eq!(json["status"], "stable-local-scan");
     assert!(json.get("scanned_root").is_some());
     assert!(json["inventory"].is_array());
@@ -264,14 +264,18 @@ fn scan_fixture_human_verbose_groups_by_severity_and_guidance() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("Summary:"));
-    assert!(stdout.contains("Scope: Displayed active findings at severity threshold: info"));
-    assert!(stdout.contains("Findings by severity:"));
+    assert!(stdout.contains("Security posture"));
+    assert!(stdout.contains("Scope"));
+    assert!(stdout.contains("Clients & servers"));
     assert!(stdout.contains("HIGH"));
     assert!(stdout.contains("Rationale:"));
     assert!(stdout.contains("Recommendation:"));
-    assert!(stdout.contains("fingerprint=efp1-"));
+    assert!(stdout.contains("Consolidated recommended actions"));
     assert!(stdout.contains("exploitability"));
+    // Fingerprints only appear in --debug mode
+    assert!(!stdout.contains("fingerprint=efp1-"));
+    // No legacy schema/status noise
+    assert!(!stdout.contains("stable-local-scan"));
 }
 
 #[test]
@@ -286,7 +290,6 @@ fn scan_fixture_human_status_and_note_are_v1_compatible() {
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
 
-    assert!(stdout.contains("Status: stable-local-scan"));
     assert!(!stdout.to_lowercase().contains("pre-alpha"));
     assert!(!stdout.contains("EtherFence is scan-only"));
 
@@ -314,8 +317,7 @@ fn severity_threshold_high_displays_only_high_findings() {
     assert!(!stdout.contains("\nMEDIUM\n"));
     assert!(!stdout.contains("\nLOW\n"));
     assert!(!stdout.contains("\nINFO\n"));
-    assert!(stdout
-        .contains("Summary: 12 inventory item(s), 5 finding(s): high=5, medium=0, low=0, info=0"));
+    assert!(stdout.contains("5 high"));
 }
 
 #[test]
@@ -395,7 +397,7 @@ fn fail_on_high_returns_zero_when_no_high_findings_exist() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("high=0"));
+    assert!(stdout.contains("0 high"));
 }
 
 #[test]
@@ -541,7 +543,6 @@ fn baseline_reports_resolved_findings() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("resolved="));
-    assert!(stdout.contains("status=resolved"));
 }
 
 #[test]
@@ -653,7 +654,7 @@ fn policy_fail_on_high_returns_non_zero_for_high_policy_violations() {
 
     assert_eq!(output.status.code(), Some(2));
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("Policy:"));
+    assert!(stdout.contains("Policy"));
     assert!(stdout.contains("EF-POL-001"));
 }
 
@@ -694,7 +695,7 @@ fn policy_baseline_fail_on_new_high_returns_zero_when_policy_findings_are_existi
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("new=0"));
-    assert!(stdout.contains("Policy:"));
+    assert!(stdout.contains("Policy"));
 }
 
 #[test]
@@ -911,8 +912,7 @@ fn policy_profile_ci_runner_fail_on_high_behaves_like_policy_file() {
     assert_eq!(file_output.status.code(), Some(2));
     assert_eq!(profile_output.status.code(), Some(2));
     let stdout = String::from_utf8_lossy(&profile_output.stdout);
-    assert!(stdout.contains("Policy: ci-runner"));
-    assert!(stdout.contains("source=built-in-profile"));
+    assert!(stdout.contains("ci-runner"));
 }
 
 #[test]
@@ -951,7 +951,7 @@ fn policy_profile_ci_runner_baseline_fail_on_new_high_works() {
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("new=0"));
-    assert!(stdout.contains("Policy: ci-runner"));
+    assert!(stdout.contains("ci-runner"));
 }
 
 #[test]
@@ -1092,7 +1092,7 @@ fn sarif_output_is_valid_and_maps_severity_levels() {
     );
     let driver = &json["runs"][0]["tool"]["driver"];
     assert_eq!(driver["name"], "etherfence");
-    assert_eq!(driver["version"], "1.7.2");
+    assert_eq!(driver["version"], "1.7.3");
 
     let rules = sarif_rules(&json);
     let rule_ids: Vec<&str> = rules
