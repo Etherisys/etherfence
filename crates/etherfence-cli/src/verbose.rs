@@ -4,7 +4,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
-use etherfence_core::{Finding, PostureSummary, ScanReport, Severity};
+use etherfence_core::{
+    AgentKind, Finding, InventoryItem, PostureSummary, ScanReport, Severity,
+    PARSE_ERROR_EVIDENCE_PREFIX,
+};
 
 use crate::ui::{self, UiTheme};
 
@@ -178,107 +181,135 @@ fn render_clients_and_servers(
         return;
     }
 
-    // Map findings: (agent_display_name, config_path) → Vec<&Finding>
+    // Group inventory items by agent display name so one client with
+    // several config files reads as one client, not several installations.
+    let mut agents: BTreeMap<String, (AgentKind, Vec<&InventoryItem>)> = BTreeMap::new();
+    for item in &report.inventory {
+        let key = item.agent.display_name().to_string();
+        agents
+            .entry(key)
+            .or_insert_with(|| (item.agent, Vec::new()))
+            .1
+            .push(item);
+    }
+
+    // Map findings: (agent_str, config_path) → Vec<&Finding>
     let mut findings_map: BTreeMap<(String, String), Vec<&Finding>> = BTreeMap::new();
     for finding in &report.findings {
         let key = (finding.agent.to_string(), finding.config_path.clone());
         findings_map.entry(key).or_default().push(finding);
     }
 
-    for item in &report.inventory {
-        let agent_name = item.agent.display_name();
-        let config_path = &item.config_path;
+    for (agent, items) in agents.values() {
+        let agent_name = agent.display_name();
+        let total_servers: usize = items.iter().map(|i| i.mcp_servers.len()).sum();
+        let has_parse_error = items.iter().any(|i| {
+            i.evidence
+                .iter()
+                .any(|e| e.starts_with(PARSE_ERROR_EVIDENCE_PREFIX))
+        });
 
-        let _ = writeln!(
-            out,
-            "\n{}",
-            ui::wrap_prefixed(
-                &format!("{}  ", theme.heading.apply_to(agent_name)),
-                "  ",
-                &theme.muted.apply_to(format!("({config_path})")).to_string(),
-                width,
-            )
-        );
+        // Collect all config paths for this agent
+        let config_paths: Vec<&str> = items.iter().map(|i| i.config_path.as_str()).collect();
 
-        if item.mcp_servers.is_empty() {
+        // Client header: agent name + config paths
+        let _ = writeln!(out);
+        let _ = writeln!(out, "{}", theme.heading.apply_to(agent_name));
+        for path in &config_paths {
+            let _ = writeln!(out, "  {}", theme.muted.apply_to(format!("({path})")));
+        }
+
+        if total_servers > 0 {
+            // Show per-server findings across all configs for this agent
+            for item in items {
+                for server in &item.mcp_servers {
+                    let server_findings: Vec<&&Finding> = findings_map
+                        .get(&(agent.to_string(), item.config_path.clone()))
+                        .map(|findings| {
+                            findings
+                                .iter()
+                                .filter(|f| f.target.contains(&server.name))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+
+                    let has_findings = !server_findings.is_empty();
+                    let highest_severity = server_findings.iter().map(|f| f.severity).max();
+
+                    let status_marker = match highest_severity {
+                        Some(Severity::High) => {
+                            theme.danger.apply_to("HIGH".to_string()).to_string()
+                        }
+                        Some(Severity::Medium) => {
+                            theme.warning.apply_to("MEDIUM".to_string()).to_string()
+                        }
+                        Some(Severity::Low) => theme.info.apply_to("LOW".to_string()).to_string(),
+                        Some(Severity::Info) => {
+                            theme.muted.apply_to("INFO".to_string()).to_string()
+                        }
+                        None => theme.success.apply_to("OK").to_string(),
+                    };
+
+                    let server_pad = if width < 60 {
+                        14
+                    } else if width < 80 {
+                        20
+                    } else {
+                        28
+                    };
+
+                    let _ = writeln!(
+                        out,
+                        "  {}  {}  {}",
+                        ui::pad(&server.name, server_pad),
+                        status_marker,
+                        theme
+                            .muted
+                            .apply_to(format!("{} finding(s)", server_findings.len()))
+                    );
+
+                    if has_findings {
+                        let sf: Vec<&Finding> = server_findings.iter().map(|f| **f).collect();
+                        render_findings(out, theme, &sf, width, debug);
+                    }
+                }
+            }
+        } else if has_parse_error {
+            let _ = writeln!(
+                out,
+                "  {}",
+                theme
+                    .warning
+                    .apply_to("Configuration could not be parsed — server state unknown.")
+            );
+        } else {
             let _ = writeln!(
                 out,
                 "  {}",
                 theme.muted.apply_to("No MCP servers configured.")
             );
-            // Show agent-level findings (no MCP server target)
-            let agent_findings = findings_map
-                .get(&(agent_name.to_string(), config_path.clone()))
-                .map(|v| v.as_slice())
-                .unwrap_or(&[]);
-            if !agent_findings.is_empty() {
-                let _ = writeln!(out);
-                render_findings(out, theme, agent_findings, width, debug);
-            }
-            continue;
         }
 
-        for server in &item.mcp_servers {
-            let server_findings: Vec<&&Finding> = findings_map
-                .get(&(agent_name.to_string(), config_path.clone()))
-                .map(|findings| {
-                    findings
-                        .iter()
-                        .filter(|f| f.target.contains(&server.name))
-                        .collect()
-                })
-                .unwrap_or_default();
-
-            let has_findings = !server_findings.is_empty();
-            let highest_severity = server_findings.iter().map(|f| f.severity).max();
-
-            let status_marker = match highest_severity {
-                Some(Severity::High) => theme.danger.apply_to("HIGH".to_string()).to_string(),
-                Some(Severity::Medium) => theme.warning.apply_to("MEDIUM".to_string()).to_string(),
-                Some(Severity::Low) => theme.info.apply_to("LOW".to_string()).to_string(),
-                Some(Severity::Info) => theme.muted.apply_to("INFO".to_string()).to_string(),
-                None => theme.success.apply_to("OK").to_string(),
-            };
-
-            // Adaptive server name padding: narrower on small terminals
-            let server_pad = if width < 60 {
-                14
-            } else if width < 80 {
-                20
-            } else {
-                28
-            };
-
-            let _ = writeln!(
-                out,
-                "  {}  {}  {}",
-                ui::pad(&server.name, server_pad),
-                status_marker,
-                theme
-                    .muted
-                    .apply_to(format!("{} finding(s)", server_findings.len()))
-            );
-
-            if has_findings {
-                let server_findings: Vec<&Finding> = server_findings.iter().map(|f| **f).collect();
-                render_findings(out, theme, &server_findings, width, debug);
+        // Agent-level findings that don't target a specific server
+        let mut agent_level: Vec<&Finding> = Vec::new();
+        for item in items {
+            if let Some(findings) = findings_map.get(&(agent.to_string(), item.config_path.clone()))
+            {
+                for finding in findings {
+                    let targets_server = items.iter().any(|i| {
+                        i.mcp_servers
+                            .iter()
+                            .any(|s| finding.target.contains(&s.name))
+                    });
+                    if !targets_server {
+                        agent_level.push(finding);
+                    }
+                }
             }
         }
-
-        // Show agent-level findings that don't target a specific server
-        let other_findings: Vec<&&Finding> = findings_map
-            .get(&(agent_name.to_string(), config_path.clone()))
-            .map(|findings| {
-                findings
-                    .iter()
-                    .filter(|f| !item.mcp_servers.iter().any(|s| f.target.contains(&s.name)))
-                    .collect()
-            })
-            .unwrap_or_default();
-        if !other_findings.is_empty() {
+        if !agent_level.is_empty() {
             let _ = writeln!(out, "\n  {}:", theme.muted.apply_to("Agent-level"));
-            let other_findings: Vec<&Finding> = other_findings.iter().map(|f| **f).collect();
-            render_findings(out, theme, &other_findings, width, debug);
+            render_findings(out, theme, &agent_level, width, debug);
         }
     }
 }
