@@ -253,11 +253,15 @@ pub(crate) fn rule(width: usize) -> String {
 mod unicode_tests {
     use super::*;
     use std::env;
+    use std::sync::Mutex;
+
+    static ENV_MUTEX: Mutex<()> = Mutex::new(());
 
     fn with_env<F, T>(vars: &[(&str, &str)], f: F) -> T
     where
         F: FnOnce() -> T,
     {
+        let _lock = ENV_MUTEX.lock().unwrap();
         // Save and restore env
         let saved: Vec<(&str, Option<String>)> =
             vars.iter().map(|(k, _)| (*k, env::var(k).ok())).collect();
