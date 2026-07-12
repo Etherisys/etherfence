@@ -1,0 +1,8 @@
+[agents."Claude Code"]
+allowed_mcp_servers = ["filesystem", "memory"]
+
+[agents.Cursor]
+allowed_mcp_servers = ["filesystem"]
+
+[agents.Hermes]
+allowed_mcp_servers = []

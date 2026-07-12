@@ -1,7 +1,7 @@
 {
   "schema_version": "ef-baseline/v0.1.3",
   "tool": "etherfence",
-  "version": "1.7.0",
+  "version": "1.7.2",
   "findings": [
     {
       "id": "EF-MCP-000",

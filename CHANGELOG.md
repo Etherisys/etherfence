@@ -17,11 +17,27 @@ field guards; `ef-mcp-policy/v0.1` policies are unaffected. EtherFence still
 has no daemon mode, shell hooks, command interception, terminal-command
 scanning, or network interception.
 
-## [Unreleased]
+## [1.7.2] - 2026-07-12
 
-### Fixed
+### Added
 
-- **Scan posture presentation**: default and verbose human reports now wrap long titles, targets, impact statements, and recommendations using Unicode display columns with stable continuation indentation. Narrow terminals, `NO_COLOR`, redirected/non-TTY output, and plain terminals remain readable and deterministic without raw ANSI sequences. This is presentation-only: posture calculation, finding selection/order, machine formats, schemas, baselines, policies, exit behavior, SARIF, and MCP runtime enforcement are unchanged.
+- **Protection coverage in scan output**: when `etherfence scan` is run with
+  `--policy` or `--policy-profile`, all output formats now include a
+  Protection Coverage section showing which detected MCP servers are
+  covered by the active policy and which are not. The coverage data
+  maps every MCP server to its coverage status under the policy:
+  `covered` (in allowlist), `not_covered` (not in allowlist),
+  `no_policy_for_agent` (no agent section in policy), `empty_allowlist`
+  (implicit allow-all), or `not_applicable` (Tirith, excluded from MCP
+  server coverage). Coverage appears in:
+  - Human summary: a "Protection coverage" section between Clients and
+    Priority Findings with per-server ✓/✗ markers
+  - Human verbose: `[covered]`/`[not covered]` badges on each MCP server
+  - Markdown: a "## Protection Coverage" table
+  - JSON: a `protection_coverage` field in the report root
+  - SARIF: `protectionCoverage` in run.properties
+- Additive schema bump: `ef-scan-report/v0.1.1` → `ef-scan-report/v0.1.2`
+  (optional `protection_coverage` field; existing consumers unaffected).
 
 ## [1.7.0] - 2026-07-12
 
@@ -35,6 +51,10 @@ scanning, or network interception.
 
 - Posture is local, read-only, and advisory. It does not add detectors, alter severities/finding IDs, remediate configurations, prove a host is secure, or change `mcp-proxy` enforcement.
 - The score derives from displayed active findings after existing severity filtering and baseline comparison; resolved historical findings remain evidence but do not lower the score or consume a priority slot.
+
+### Fixed
+
+- **Scan posture presentation**: default and verbose human reports now wrap long titles, targets, impact statements, and recommendations using Unicode display columns with stable continuation indentation. Narrow terminals, `NO_COLOR`, redirected/non-TTY output, and plain terminals remain readable and deterministic without raw ANSI sequences. This is presentation-only: posture calculation, finding selection/order, machine formats, schemas, baselines, policies, exit behavior, SARIF, and MCP runtime enforcement are unchanged.
 
 ## [1.6.2] - 2026-07-12
 
