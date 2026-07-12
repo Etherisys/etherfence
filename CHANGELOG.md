@@ -39,6 +39,12 @@ scanning, or network interception.
 - Additive schema bump: `ef-scan-report/v0.1.1` → `ef-scan-report/v0.1.2`
   (optional `protection_coverage` field; existing consumers unaffected).
 
+## [1.7.1] - 2026-07-12
+
+### Fixed
+
+- **Scan posture presentation**: default and verbose human reports now wrap long titles, targets, impact statements, and recommendations using Unicode display columns with stable continuation indentation. Narrow terminals, `NO_COLOR`, redirected/non-TTY output, and plain terminals remain readable and deterministic without raw ANSI sequences. This is presentation-only: posture calculation, finding selection/order, machine formats, schemas, baselines, policies, exit behavior, SARIF, and MCP runtime enforcement are unchanged.
+
 ## [1.7.0] - 2026-07-12
 
 ### Added
@@ -51,12 +57,6 @@ scanning, or network interception.
 
 - Posture is local, read-only, and advisory. It does not add detectors, alter severities/finding IDs, remediate configurations, prove a host is secure, or change `mcp-proxy` enforcement.
 - The score derives from displayed active findings after existing severity filtering and baseline comparison; resolved historical findings remain evidence but do not lower the score or consume a priority slot.
-
-## [1.7.1] - 2026-07-12
-
-### Fixed
-
-- **Scan posture presentation**: default and verbose human reports now wrap long titles, targets, impact statements, and recommendations using Unicode display columns with stable continuation indentation. Narrow terminals, `NO_COLOR`, redirected/non-TTY output, and plain terminals remain readable and deterministic without raw ANSI sequences. This is presentation-only: posture calculation, finding selection/order, machine formats, schemas, baselines, policies, exit behavior, SARIF, and MCP runtime enforcement are unchanged.
 
 ## [1.6.2] - 2026-07-12
 
