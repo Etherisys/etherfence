@@ -239,12 +239,12 @@ pub fn detect(root: &Path) -> Vec<SetupDetection> {
 /// Records a canonical-entry hash for every server in a writable
 /// supported config. Best-effort here: a server that ends up without a
 /// snapshot is rejected later, at plan time, if the user selects it.
-fn attach_entry_snapshots(root: &Path, detection: &mut SetupDetection) {
+pub(crate) fn attach_entry_snapshots(root: &Path, detection: &mut SetupDetection) {
     let Ok(config) = resolve_supported_config(&detection.config_path) else {
         return;
     };
     let path = root.join(config.relative_path);
-    let Ok(content) = fs::read_to_string(&path) else {
+    let Ok(content) = read_bounded_text_file(&path, MAX_CONFIG_FILE_BYTES) else {
         return;
     };
     let Ok(value) = serde_json::from_str::<JsonValue>(&content) else {
@@ -1366,5 +1366,141 @@ mod tests {
             url: None,
         };
         assert!(is_wrapped_server(&server));
+    }
+
+    #[test]
+    fn attach_entry_snapshots_rejects_oversized_config() {
+        let root = temp_dir("snapshots-oversized");
+        let config_path = root.join(".claude.json");
+        // Write a valid JSON config whose total size exceeds 5 MiB.
+        let padding = "x".repeat(5 * 1024 * 1024 + 1024);
+        let json = serde_json::json!({
+            "mcpServers": {
+                "test-server": {
+                    "command": "npx",
+                    "args": ["-y", "some-package"],
+                    "_padding": padding
+                }
+            }
+        });
+        fs::write(&config_path, json.to_string()).unwrap();
+        assert!(
+            config_path.metadata().unwrap().len() > 5 * 1024 * 1024,
+            "precondition: config must exceed 5 MiB"
+        );
+
+        // Construct a detection by hand around the oversized config so
+        // we exercise `attach_entry_snapshots` independently of inventory.
+        let server = McpServer {
+            name: "test-server".to_string(),
+            command: Some("npx".to_string()),
+            args: vec!["-y".to_string(), "some-package".to_string()],
+            env: vec![],
+            url: None,
+        };
+        let mut setup_server = server_from_mcp(&server);
+        setup_server.raw_entry_sha256 = None;
+        let mut detection = SetupDetection {
+            agent: "Claude Code".to_string(),
+            config_path: "~/.claude.json".to_string(),
+            write_support: WriteSupport::Supported,
+            servers: vec![setup_server],
+            notes: vec![],
+        };
+
+        attach_entry_snapshots(&root, &mut detection);
+        assert!(
+            detection.servers[0].raw_entry_sha256.is_none(),
+            "oversized config must not produce a snapshot hash"
+        );
+    }
+
+    #[test]
+    fn attach_entry_snapshots_rejects_non_utf8_config() {
+        let root = temp_dir("snapshots-bad-utf8");
+        let config_path = root.join(".claude.json");
+        // Write a file with invalid UTF-8 bytes.
+        let mut bad = vec![b'{', b'"', b'm', b'c', b'p', b'S'];
+        bad.push(0xFF);
+        fs::write(&config_path, &bad).unwrap();
+
+        let server = McpServer {
+            name: "any-server".to_string(),
+            command: Some("npx".to_string()),
+            args: vec![],
+            env: vec![],
+            url: None,
+        };
+        let mut setup_server = server_from_mcp(&server);
+        setup_server.raw_entry_sha256 = None;
+        let mut detection = SetupDetection {
+            agent: "Claude Code".to_string(),
+            config_path: "~/.claude.json".to_string(),
+            write_support: WriteSupport::Supported,
+            servers: vec![setup_server],
+            notes: vec![],
+        };
+
+        attach_entry_snapshots(&root, &mut detection);
+        assert!(
+            detection.servers[0].raw_entry_sha256.is_none(),
+            "non-UTF-8 config must not produce a snapshot hash"
+        );
+    }
+
+    #[test]
+    fn attach_entry_snapshots_produces_hash_for_valid_config() {
+        let root = temp_dir("snapshots-valid");
+        let config_path = root.join(".claude.json");
+        fs::write(
+            &config_path,
+            r#"{"mcpServers":{"filesystem":{"command":"npx","args":["-y","@modelcontextprotocol/server-filesystem"]}}}"#,
+        )
+        .unwrap();
+
+        let server = McpServer {
+            name: "filesystem".to_string(),
+            command: Some("npx".to_string()),
+            args: vec![
+                "-y".to_string(),
+                "@modelcontextprotocol/server-filesystem".to_string(),
+            ],
+            env: vec![],
+            url: None,
+        };
+        let mut setup_server = server_from_mcp(&server);
+        setup_server.raw_entry_sha256 = None;
+        let mut detection = SetupDetection {
+            agent: "Claude Code".to_string(),
+            config_path: "~/.claude.json".to_string(),
+            write_support: WriteSupport::Supported,
+            servers: vec![setup_server],
+            notes: vec![],
+        };
+
+        attach_entry_snapshots(&root, &mut detection);
+        let hash = detection.servers[0]
+            .raw_entry_sha256
+            .as_ref()
+            .expect("valid config must produce a snapshot hash");
+        assert_eq!(hash.len(), 64, "hash must be 64 hex chars");
+        assert!(
+            hash.chars().all(|c| c.is_ascii_hexdigit()),
+            "hash must be hex: {hash}"
+        );
+    }
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "etherfence-unit-{}-{}-{nanos}",
+            name,
+            std::process::id()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        dir
     }
 }

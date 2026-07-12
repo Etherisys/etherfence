@@ -17,6 +17,18 @@ field guards; `ef-mcp-policy/v0.1` policies are unaffected. EtherFence still
 has no daemon mode, shell hooks, command interception, terminal-command
 scanning, or network interception.
 
+## [1.6.2] - 2026-07-12
+
+### Fixed
+
+- **Detection snapshot consistency**: `attach_entry_snapshots` now uses
+  the bounded `read_bounded_text_file` (5 MiB limit) instead of the
+  unbounded `fs::read_to_string`, so snapshot derivation, trust assessment,
+  and inventory data all respect the same file-size bound. An oversized
+  (> 5 MiB) or unreadable supported config never receives a canonical-entry
+  snapshot, and the apply drift gate correctly refuses to wrap servers
+  without a reviewed snapshot (fail-closed).
+
 ## [1.6.1] - 2026-07-12
 
 ### Added
