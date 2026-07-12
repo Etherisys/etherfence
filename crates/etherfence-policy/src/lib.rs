@@ -599,14 +599,18 @@ fn build_coverage(inventory: &[InventoryItem], compiled: &CompiledPolicy) -> Pro
 
     for item in inventory {
         if item.agent == AgentKind::Tirith {
-            for server in &item.mcp_servers {
-                servers.push(ServerCoverage {
-                    agent: item.agent,
-                    server_name: server.name.clone(),
-                    status: CoverageStatus::NotApplicable,
-                    config_path: item.config_path.clone(),
-                });
-            }
+            // Tirith items have empty mcp_servers; create a synthetic coverage entry.
+            let name = if item.mcp_servers.is_empty() {
+                "tirith".to_string()
+            } else {
+                item.mcp_servers.first().unwrap().name.clone()
+            };
+            servers.push(ServerCoverage {
+                agent: item.agent,
+                server_name: name,
+                status: CoverageStatus::NotApplicable,
+                config_path: item.config_path.clone(),
+            });
             continue;
         }
         for server in &item.mcp_servers {

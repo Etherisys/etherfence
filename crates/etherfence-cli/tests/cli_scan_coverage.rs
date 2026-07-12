@@ -30,16 +30,22 @@ fn scan_with_policy_shows_coverage_json() {
     let coverage = &json["protection_coverage"];
     assert!(coverage.is_object(), "protection_coverage must be present");
 
-    // With 3 Claude + 2 Cursor + 1 VS Code + 2 Hermes = 8 servers
-    assert_eq!(coverage["total_servers"], 8);
+    // With 3 Claude + 2 Cursor + 1 VS Code + 2 Hermes + 1 Tirith = 9 servers
+    assert_eq!(coverage["total_servers"], 9);
     assert_eq!(coverage["covered"], 3); // Claude: filesystem+memory, Cursor: filesystem
     assert_eq!(coverage["not_covered"], 2); // Claude: github, Cursor: browser-tools
     assert_eq!(coverage["no_policy_for_agent"], 1); // VS Code: lint
     assert_eq!(coverage["empty_allowlist"], 2); // Hermes: calculator+filesystem
-    assert_eq!(coverage["not_applicable"], 0);
+    assert_eq!(coverage["not_applicable"], 1); // Tirith
 
     let servers = coverage["servers"].as_array().expect("servers array");
-    assert_eq!(servers.len(), 8);
+    assert_eq!(servers.len(), 9);
+
+    // Tirith server present with not_applicable status
+    let tirith: Vec<&Value> = servers.iter().filter(|s| s["agent"] == "tirith").collect();
+    assert_eq!(tirith.len(), 1, "Tirith server must be present in coverage");
+    assert_eq!(tirith[0]["status"], "not_applicable");
+    assert_eq!(tirith[0]["server_name"], "tirith");
 
     // Spot-check: first server is claude-code/filesystem with covered status
     assert_eq!(servers[0]["agent"], "claude-code");
