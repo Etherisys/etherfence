@@ -1066,6 +1066,7 @@ fn doctor_status_label(value: etherfence_setup::DoctorStatus) -> &'static str {
 fn run_setup_wizard() -> Result<()> {
     use dialoguer::console::Term;
     use dialoguer::{Confirm, Input, MultiSelect, Select};
+    use std::collections::HashMap;
 
     let term = Term::stderr();
     if !term.is_term() {
@@ -1117,22 +1118,18 @@ fn run_setup_wizard() -> Result<()> {
     let root = etherfence_inventory::default_scan_root();
 
     // -----------------------------------------------------------------
-    // Step 1 — Scan
+    // Step 1 - Scan
     // -----------------------------------------------------------------
     eprintln!(
-        "EtherFence v{} — Guided Secure Setup Wizard",
+        "\nEtherFence v{} - Guided Secure Setup Wizard",
         env!("CARGO_PKG_VERSION")
     );
-    eprintln!("{}", "─".repeat(60));
-    eprintln!();
-    eprintln!("[1/7] Scanning for AI clients and MCP configurations...");
-    eprintln!();
+    eprintln!("{}\n", "\u{2500}".repeat(60));
+    eprintln!("[1/7] Scanning for AI clients and MCP configurations...\n");
 
     let detections = etherfence_setup::detect(&root);
     if detections.is_empty() {
-        eprintln!("  No known AI client MCP configurations were detected on this system.");
-        eprintln!("  This may be expected if you don't use AI coding agents with MCP servers.");
-        eprintln!();
+        eprintln!("  No known AI client MCP configurations were detected.");
         eprintln!("  Run 'etherfence setup catalog' to see which clients EtherFence can detect.");
         return Ok(());
     }
@@ -1144,105 +1141,72 @@ fn run_setup_wizard() -> Result<()> {
         } else {
             "advisory-only"
         };
-        eprintln!("  ── {} ({})", detection.agent, ws);
+        eprintln!("  -- {} ({})", detection.agent, ws);
         eprintln!("     Config: {}", detection.config_path);
         if !detection.servers.is_empty() {
             for server in &detection.servers {
                 let wrapped = if server.wrapped { " [wrapped]" } else { "" };
                 let agg = kebab_label(&server.trust_assessment.aggregate);
-                eprintln!("     · {}{}  (aggregate={})", server.name, wrapped, agg);
+                eprintln!("     . {}{}  (aggregate={})", server.name, wrapped, agg);
             }
         } else {
             eprintln!("     (no MCP servers)");
         }
-        if !detection.notes.is_empty() {
-            for note in &detection.notes {
-                eprintln!("     note: {note}");
-            }
-        }
     }
     eprintln!();
 
-    // ==================== local data types ============================
-
-    /// Lightweight copy of one server's info for wizard bookkeeping.
-    #[derive(Clone)]
-    struct WizardEntry {
-        agent: String,
-        config_path: String,
-        server_name: String,
-        _transport: etherfence_setup::ServerTransport,
-        _wrapped: bool,
-        trust_assessment: etherfence_setup::TrustAssessment,
-        capabilities: etherfence_setup::ClassifiedCapabilities,
-        version_expression: Option<etherfence_setup::VersionExpressionKind>,
-    }
-
-    #[derive(Clone)]
-    enum BlockerResolution {
-        Pinned(String),
-        SkipServer,
-        SkipBlocker,
-    }
-
-    #[derive(Clone)]
-    enum WizardPosture {
-        DenyAll,
-        CustomAllowlist(Vec<String>),
-        Skip,
-    }
-
-    #[derive(Clone)]
-    struct PosturedServer {
-        entry: WizardEntry,
-        posture: WizardPosture,
-        quarantine_only: bool,
-        pinned_version: Option<String>,
-    }
-
     // -----------------------------------------------------------------
-    // Step 2 — Select Clients
+    // Step 2 - Select Clients
     // -----------------------------------------------------------------
-    eprintln!("[2/7] Select which AI clients to configure...");
-    eprintln!();
+    eprintln!("[2/7] Select which AI clients to configure...\n");
 
     let client_prompt_items: Vec<String> = detections
         .iter()
         .map(|d| {
-            let ws = if d.write_support == etherfence_setup::WriteSupport::Supported {
-                "write-supported"
-            } else {
-                "advisory-only"
-            };
-            format!("{} — {} ({})", d.agent, d.config_path, ws)
+            format!(
+                "{} - {} ({})",
+                d.agent,
+                d.config_path,
+                if d.write_support == etherfence_setup::WriteSupport::Supported {
+                    "write-supported"
+                } else {
+                    "advisory-only"
+                }
+            )
         })
         .collect();
 
     let client_indices = interact_opt_or_bail(
         MultiSelect::new()
             .items(&client_prompt_items)
-            .with_prompt("Use ↑↓ to navigate, Space to select, Enter to confirm")
+            .with_prompt("Use up/down to navigate, Space to select, Enter to confirm")
             .interact_opt(),
     )?;
 
-    let selected_clients: Vec<&etherfence_setup::SetupDetection> = match client_indices {
-        Some(indices) => indices.iter().map(|&i| &detections[i]).collect(),
+    let client_indices = match client_indices {
+        Some(ref idx) if idx.is_empty() => {
+            eprintln!("  No clients selected. Exiting wizard.");
+            return Ok(());
+        }
+        Some(idx) => idx,
         None => {
             eprintln!("  No clients selected. Exiting wizard.");
             return Ok(());
         }
     };
-    eprintln!("  Selected {} client(s).", selected_clients.len());
-    eprintln!();
+    eprintln!("  Selected {} client(s).\n", client_indices.len());
 
     // -----------------------------------------------------------------
-    // Step 3 — Select Servers
+    // Step 3-5 - Select Servers, Resolve Blockers, Select Posture
     // -----------------------------------------------------------------
     eprintln!("[3/7] Select MCP servers to configure for each client...");
 
-    let mut all_servers: Vec<WizardEntry> = Vec::new();
+    let mut version_pins: HashMap<String, String> = HashMap::new();
+    let mut policy_types: HashMap<String, etherfence_setup::PolicyType> = HashMap::new();
+    let mut selected_server_keys: Vec<String> = Vec::new();
 
-    for client in &selected_clients {
+    for &idx in &client_indices {
+        let client = &detections[idx];
         if client.servers.is_empty() {
             continue;
         }
@@ -1254,7 +1218,6 @@ fn run_setup_wizard() -> Result<()> {
             .servers
             .iter()
             .map(|s| {
-                let wrapped = if s.wrapped { " [wrapped]" } else { "" };
                 let agg = kebab_label(&s.trust_assessment.aggregate);
                 let version = s
                     .trust_assessment
@@ -1267,299 +1230,228 @@ fn run_setup_wizard() -> Result<()> {
                         )
                     })
                     .unwrap_or_default();
-                let caps: Vec<&str> = s
-                    .capabilities
-                    .labels
-                    .iter()
-                    .copied()
-                    .map(etherfence_setup::human_label)
-                    .collect();
-                let review = if s.recommendation.needs_review {
-                    " ⚠ review"
-                } else {
-                    ""
-                };
                 format!(
-                    "{} — {} transport={}{} caps=[{}]{}{}",
+                    "{} - {} transport={}{}{}",
                     s.name,
                     agg,
                     transport_label(s.transport),
-                    wrapped,
-                    caps.join(", "),
-                    version,
-                    review,
+                    if s.wrapped { " [wrapped]" } else { "" },
+                    version
                 )
             })
             .collect();
 
-        let selections = interact_opt_or_bail(
+        let picks = interact_opt_or_bail(
             MultiSelect::new()
                 .items(&server_items)
-                .with_prompt("  Use ↑↓, Space to select, Enter to confirm")
+                .with_prompt("  Use up/down, Space to select, Enter to confirm")
                 .interact_opt(),
         )?;
 
-        if let Some(indices) = selections {
-            for &i in &indices {
-                let s = &client.servers[i];
-                all_servers.push(WizardEntry {
-                    agent: client.agent.clone(),
-                    config_path: client.config_path.clone(),
-                    server_name: s.name.clone(),
-                    _transport: s.transport,
-                    _wrapped: s.wrapped,
-                    trust_assessment: s.trust_assessment.clone(),
-                    capabilities: s.capabilities.clone(),
-                    version_expression: s.trust_assessment.invocation.version_expression,
-                });
-            }
-        }
-    }
+        let picks = match picks {
+            Some(ref p) if p.is_empty() => continue,
+            Some(p) => p,
+            None => continue,
+        };
 
-    if all_servers.is_empty() {
-        eprintln!("  No servers selected. Exiting wizard.");
-        return Ok(());
-    }
-    eprintln!();
-    eprintln!("  Selected {} server(s) total.", all_servers.len());
-    eprintln!();
+        for &pick in &picks {
+            let server = &client.servers[pick];
+            let key = format!("{}:{}", client.agent, server.name);
+            selected_server_keys.push(key.clone());
 
-    // -----------------------------------------------------------------
-    // Step 4 — Resolve Blockers
-    // -----------------------------------------------------------------
-    eprintln!("[4/7] Resolving configuration blockers...");
-    eprintln!();
+            eprintln!();
+            eprintln!("    Server: {}", server.name);
+            let mut quarantine_only = false;
 
-    let mut resolved_servers: Vec<(WizardEntry, BlockerResolution, bool)> = Vec::new();
-
-    for entry in &all_servers {
-        let mut resolution = BlockerResolution::SkipBlocker;
-        let mut quarantine_only = false;
-
-        // 4a — version pinning for omitted / mutable / range expressions
-        if let Some(ve) = entry.version_expression {
-            if matches!(
-                ve,
-                etherfence_setup::VersionExpressionKind::Omitted
-                    | etherfence_setup::VersionExpressionKind::MutableTag
-                    | etherfence_setup::VersionExpressionKind::VersionRange
-            ) {
-                eprintln!(
-                    "  ── {}:{} — package version is {} (not pinned).",
-                    entry.agent,
-                    entry.server_name,
-                    etherfence_setup::human_label_version_expression(ve)
-                );
-                let version = interact_text_or_bail(
-                    Input::new()
-                        .with_prompt("  Enter exact version to pin (or leave empty to skip)")
-                        .allow_empty(true)
-                        .interact_text(),
-                )?;
-                if version.trim().is_empty() {
-                    eprintln!("     (version pinning skipped for this server)");
-                    resolution = BlockerResolution::SkipBlocker;
-                } else {
-                    resolution = BlockerResolution::Pinned(version.trim().to_string());
-                }
-                eprintln!();
-            }
-        }
-
-        // 4b — high-risk aggregate warning
-        if entry.trust_assessment.aggregate == etherfence_setup::AggregateAssessmentStatus::HighRisk
-        {
-            eprintln!(
-                "  ⚠  HIGH-RISK server: {}:{}",
-                entry.agent, entry.server_name
-            );
-            for indicator in &entry.trust_assessment.indicators {
-                if indicator.severity >= etherfence_core::Severity::High {
+            // Trust gate (Step 4)
+            match server.trust_assessment.aggregate {
+                etherfence_setup::AggregateAssessmentStatus::HighRisk => {
                     eprintln!(
-                        "      [{}] {} — {}",
-                        kebab_label(&indicator.severity),
-                        indicator.id,
-                        indicator.summary
+                        "      WARNING: high-risk server - cannot receive normal permissive setup"
                     );
+                    for ind in &server.trust_assessment.indicators {
+                        if ind.severity >= etherfence_core::Severity::High {
+                            eprintln!(
+                                "        [{}] {} - {}",
+                                kebab_label(&ind.severity),
+                                ind.id,
+                                ind.summary
+                            );
+                        }
+                    }
+                    let choice = interact_or_bail(
+                        Select::new()
+                            .items(&[
+                                "Skip this server (recommended)",
+                                "Proceed with quarantine-only mode",
+                            ])
+                            .with_prompt("      High-risk action")
+                            .default(0)
+                            .interact(),
+                    )?;
+                    match choice {
+                        0 => continue,
+                        1 => quarantine_only = true,
+                        _ => continue,
+                    }
                 }
-            }
-            let choice = interact_or_bail(
-                Select::new()
-                    .items(&[
-                        "Skip this server (recommended)",
-                        "Proceed with quarantine-only mode",
-                        "Proceed anyway (not recommended)",
-                    ])
-                    .with_prompt("  High-risk action")
-                    .default(0)
-                    .interact(),
-            )?;
-            match choice {
-                0 => {
-                    eprintln!("     Server skipped.");
-                    resolution = BlockerResolution::SkipServer;
+                etherfence_setup::AggregateAssessmentStatus::NeedsReview => {
+                    eprintln!("      NOTE: needs-review - flagged for review");
                 }
-                1 => {
-                    eprintln!("     Quarantine-only mode enabled.");
-                    quarantine_only = true;
-                }
-                2 => {
-                    eprintln!("     Proceeding with high-risk server.");
+                etherfence_setup::AggregateAssessmentStatus::Unknown => {
+                    eprintln!("      NOTE: unknown - cannot verify server identity");
                 }
                 _ => {}
             }
-            eprintln!();
-        }
 
-        resolved_servers.push((entry.clone(), resolution, quarantine_only));
-    }
-
-    // Discard servers the user chose to skip entirely.
-    resolved_servers.retain(|(_, r, _)| !matches!(r, BlockerResolution::SkipServer));
-
-    if resolved_servers.is_empty() {
-        eprintln!("  No servers remain after resolving blockers. Exiting wizard.");
-        return Ok(());
-    }
-
-    // -----------------------------------------------------------------
-    // Step 5 — Select Posture
-    // -----------------------------------------------------------------
-    eprintln!("[5/7] Select security posture for each server...");
-    eprintln!();
-
-    let mut postured_servers: Vec<PosturedServer> = Vec::new();
-
-    for (entry, resolution, quarantine_only) in &resolved_servers {
-        eprintln!("  ── {}:{}", entry.agent, entry.server_name);
-
-        let choice = interact_or_bail(
-            Select::new()
-                .items(&[
-                    "Deny all tools (block all tool executions, most secure)",
-                    "Custom tool allowlist (specify which tools to allow)",
-                    "Skip this server",
-                ])
-                .with_prompt("    Posture")
-                .default(0)
-                .interact(),
-        )?;
-
-        let posture = match choice {
-            0 => WizardPosture::DenyAll,
-            1 => {
-                let tools = interact_text_or_bail(
-                    Input::new()
-                        .with_prompt(
-                            "    Enter tool names to allow (comma-separated, e.g. read_file, write_file)",
-                        )
-                        .interact_text(),
-                )?;
-                let allowlist: Vec<String> = tools
-                    .split(',')
-                    .map(|t| t.trim().to_string())
-                    .filter(|t| !t.is_empty())
-                    .collect();
-                WizardPosture::CustomAllowlist(allowlist)
-            }
-            2 => WizardPosture::Skip,
-            _ => WizardPosture::Skip,
-        };
-
-        let pinned_version = match resolution {
-            BlockerResolution::Pinned(v) => Some(v.clone()),
-            _ => None,
-        };
-
-        postured_servers.push(PosturedServer {
-            entry: entry.clone(),
-            posture,
-            quarantine_only: *quarantine_only,
-            pinned_version,
-        });
-    }
-
-    // Drop servers the user chose to skip in posture selection.
-    postured_servers.retain(|ps| !matches!(ps.posture, WizardPosture::Skip));
-
-    if postured_servers.is_empty() {
-        eprintln!("  No servers selected for configuration. Exiting wizard.");
-        return Ok(());
-    }
-
-    // -----------------------------------------------------------------
-    // Step 6 — Preview
-    // -----------------------------------------------------------------
-    eprintln!("[6/7] Preview of planned changes...");
-    eprintln!("{}", "─".repeat(60));
-    {
-        use std::fmt::Write as _;
-        let mut preview = String::new();
-        let _ = writeln!(preview, "Root: {}", root.display());
-        let _ = writeln!(preview);
-
-        for ps in &postured_servers {
-            let _ = write!(preview, "  {}:{}", ps.entry.agent, ps.entry.server_name);
-            if ps.quarantine_only {
-                let _ = write!(preview, " [quarantine-only]");
-            }
-            let _ = writeln!(preview);
-            let _ = writeln!(preview, "    Config: {}", ps.entry.config_path);
-            let _ = write!(preview, "    Posture: ");
-            match &ps.posture {
-                WizardPosture::DenyAll => {
-                    let _ = writeln!(preview, "deny all tools");
-                }
-                WizardPosture::CustomAllowlist(tools) => {
-                    let _ = writeln!(preview, "custom allowlist — {}", tools.join(", "));
-                }
-                WizardPosture::Skip => unreachable!(),
-            }
-            if let Some(version) = &ps.pinned_version {
-                let _ = writeln!(preview, "    Version pin: {version}");
-            }
-            let caps: Vec<&str> = ps
-                .entry
-                .capabilities
-                .labels
-                .iter()
-                .copied()
-                .map(etherfence_setup::human_label)
-                .collect();
-            let _ = writeln!(preview, "    Capabilities: {}", caps.join(", "));
-            let _ = writeln!(
-                preview,
-                "    Trust: {}",
-                kebab_label(&ps.entry.trust_assessment.aggregate)
-            );
-            if !ps.entry.trust_assessment.indicators.is_empty() {
-                let _ = writeln!(preview, "    Indicators:");
-                for ind in &ps.entry.trust_assessment.indicators {
-                    let _ = writeln!(
-                        preview,
-                        "      · [{}] {} — {}",
-                        kebab_label(&ind.severity),
-                        ind.id,
-                        ind.summary
+            // Package version pinning
+            if let Some(ve) = server.trust_assessment.invocation.version_expression {
+                if matches!(
+                    ve,
+                    etherfence_setup::VersionExpressionKind::Omitted
+                        | etherfence_setup::VersionExpressionKind::MutableTag
+                        | etherfence_setup::VersionExpressionKind::VersionRange
+                ) {
+                    eprintln!(
+                        "      Package version is {} (not pinned).",
+                        etherfence_setup::human_label_version_expression(ve)
                     );
+                    let version = interact_text_or_bail(
+                        Input::new()
+                            .with_prompt(
+                                "      Enter exact version to pin (e.g. 1.2.3, or empty to skip)",
+                            )
+                            .allow_empty(true)
+                            .interact_text(),
+                    )?;
+                    if !version.trim().is_empty() {
+                        version_pins.insert(key.clone(), version.trim().to_string());
+                        eprintln!("        Pinned to @{}", version.trim());
+                    }
+                }
+            }
+
+            // Policy posture (Step 5)
+            let posture_items: &[&str] = if quarantine_only {
+                &["Deny-all quarantine (only option for high-risk)"]
+            } else {
+                &[
+                    "Deny-all quarantine (safe default)",
+                    "Custom tool allowlist (type tool names)",
+                    "Skip this server",
+                ]
+            };
+            let posture_choice = interact_or_bail(
+                Select::new()
+                    .items(posture_items)
+                    .with_prompt("      Policy posture")
+                    .default(0)
+                    .interact(),
+            )?;
+
+            if quarantine_only {
+                policy_types.insert(key.clone(), etherfence_setup::PolicyType::DenyAllQuarantine);
+            } else {
+                match posture_choice {
+                    0 => {
+                        policy_types
+                            .insert(key.clone(), etherfence_setup::PolicyType::DenyAllQuarantine);
+                    }
+                    1 => {
+                        let tools = interact_text_or_bail(
+                            Input::new()
+                                .with_prompt("      Allowed tool names (comma-separated)")
+                                .interact_text(),
+                        )?;
+                        let allowlist: Vec<String> = tools
+                            .split(',')
+                            .map(|t| t.trim().to_string())
+                            .filter(|t| !t.is_empty())
+                            .collect();
+                        policy_types.insert(
+                            key.clone(),
+                            etherfence_setup::PolicyType::CustomToolAllowlist(allowlist),
+                        );
+                    }
+                    _ => continue,
                 }
             }
         }
-        let _ = writeln!(
-            preview,
-            "\n  Total servers to configure: {}",
-            postured_servers.len()
-        );
-        eprint!("{preview}");
     }
-    eprintln!("{}", "─".repeat(60));
-    eprintln!();
+
+    if selected_server_keys.is_empty() {
+        eprintln!("\n  No servers selected for configuration. Exiting wizard.");
+        return Ok(());
+    }
+
+    // Build WizardSelections and construct the plan via wizard.rs engine
+    let selections = etherfence_setup::WizardSelections {
+        selected_keys: selected_server_keys,
+        version_pins,
+        policy_types,
+        trust_overrides: HashMap::new(),
+    };
+
+    let plan =
+        etherfence_setup::build_wizard_plan(&detections, &selections, &root.display().to_string())
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
 
     // -----------------------------------------------------------------
-    // Step 7 — Confirm
+    // Step 6 - Preview (from the plan, not local state)
     // -----------------------------------------------------------------
-    eprintln!("[7/7] Confirm and apply...");
-    eprintln!();
+    eprintln!("\n[6/7] Preview of planned changes...");
+    eprintln!("{}", "\u{2500}".repeat(60));
+    eprintln!("Root: {}", plan.root);
+
+    for server in &plan.selected_servers {
+        // Find matching policy for this server
+        let policy_label: String = plan
+            .policies
+            .iter()
+            .find(|p| p.server_name == server.server_name)
+            .map(|p| match &p.policy_type {
+                etherfence_setup::PolicyType::DenyAllQuarantine => {
+                    "deny-all quarantine".to_string()
+                }
+                etherfence_setup::PolicyType::Curated => "curated profile".to_string(),
+                etherfence_setup::PolicyType::CustomToolAllowlist(t) => {
+                    format!("custom: {}", t.join(", "))
+                }
+            })
+            .unwrap_or_else(|| "unknown".to_string());
+        eprintln!(
+            "  {}:{} -> {}",
+            server.agent, server.server_name, policy_label
+        );
+        eprintln!(
+            "    Config: {}  Trust: {}  Pkg: {}",
+            server.config_path,
+            kebab_label(&server.trust_assessment.aggregate),
+            server.existing_status.human_label()
+        );
+    }
+
+    for change in &plan.pinning_changes {
+        eprintln!(
+            "  Pin: {} -> @{}",
+            change.server_name,
+            change.proposed_version.as_deref().unwrap_or("<none>")
+        );
+        eprintln!("    Original args: {:?}", change.pinned_args);
+    }
+
+    eprintln!(
+        "  Servers: {}  Pins: {}  Policies: {}",
+        plan.selected_servers.len(),
+        plan.pinning_changes.len(),
+        plan.policies.len()
+    );
+    eprintln!("{}", "\u{2500}".repeat(60));
+
+    // -----------------------------------------------------------------
+    // Step 7 - Confirm and apply via wizard plan
+    // -----------------------------------------------------------------
+    eprintln!("\n[7/7] Confirm and apply...\n");
 
     let confirmed = interact_or_bail(
         Confirm::new()
@@ -1573,15 +1465,10 @@ fn run_setup_wizard() -> Result<()> {
         return Ok(());
     }
 
-    eprintln!();
-    eprintln!("  Applying setup changes...");
-    etherfence_setup::apply(&root)?;
-    eprintln!("  ✓ Setup changes applied successfully!");
-    eprintln!();
-    eprintln!("  Next steps:");
-    eprintln!("   · Run 'etherfence setup doctor' to check setup health");
-    eprintln!("   · Run 'etherfence mcp-proxy --policy <path>' to wrap MCP server connections");
-    eprintln!("   · Run 'etherfence setup rollback' to undo these changes if needed");
+    eprintln!("\n  Applying setup changes via wizard plan...");
+    etherfence_setup::apply_wizard_plan(&root, &plan)?;
+    eprintln!("  Done. Run 'etherfence setup doctor' to verify the result.");
+    eprintln!("  Run 'etherfence setup rollback' to undo all changes.\n");
     Ok(())
 }
 

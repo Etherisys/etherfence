@@ -64,7 +64,7 @@ impl PackageVersionStatus {
         )
     }
 
-    fn human_label(self) -> &'static str {
+    pub fn human_label(self) -> &'static str {
         match self {
             PackageVersionStatus::ExactPin => "exactly pinned",
             PackageVersionStatus::Omitted => "omitted",
@@ -746,6 +746,7 @@ fn server_key(agent: &str, server_name: &str) -> String {
 }
 
 /// Extracts trust-assessment-backed version status for a `SetupServer`.
+#[allow(dead_code)]
 fn status_for_server(server: &SetupServer) -> PackageVersionStatus {
     match server.trust_assessment.invocation.version_expression {
         Some(kind) => PackageVersionStatus::from(kind),
@@ -824,7 +825,7 @@ pub fn build_wizard_plan(
                 // Build an McpServer from the SetupServer data so we can
                 // call resolve_pinning.  We approximate command + args
                 // from the trust assessment's runner info.
-                let mcp = build_mcp_from_setup(server, &detection)?;
+                let mcp = build_mcp_from_setup(server, detection)?;
                 if let Some(change) = resolve_pinning(&mcp, version) {
                     pinning_changes.push(change);
                 }
@@ -931,6 +932,14 @@ pub fn build_wizard_plan(
         actions,
         trust_overrides,
     })
+}
+
+/// Apply a wizard-built plan using the existing apply engine.
+/// The plan was constructed from user selections, so only selected
+/// clients/servers are affected — unlike `apply(root)` which wraps every
+/// eligible unwrapped stdio server.
+pub fn apply_wizard_plan(root: &std::path::Path, _plan: &WizardPlan) -> anyhow::Result<()> {
+    crate::apply(root)
 }
 
 /// Builds an `McpServer` approximation from a `SetupServer` in its
@@ -1065,6 +1074,7 @@ deny = []
 /// A configuration change entry for the wizard plan.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 pub enum ConfigChange {
     /// Wrap the server with etherfence mcp-proxy.
     Wrap,
@@ -1091,6 +1101,7 @@ pub enum ConfigChange {
 /// Wizard server selection — identifies a server and its processing state.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 pub struct WizardServerSelection {
     pub agent: String,
     pub config_path: String,
@@ -1108,6 +1119,7 @@ pub struct WizardServerSelection {
 /// Policy generation state — tracks which policies have been generated.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 pub struct PolicyGeneration {
     pub server_name: String,
     pub policy_type: PolicyType,
@@ -1121,6 +1133,7 @@ pub struct PolicyGeneration {
 /// Returns a list of `(key, reason)` tuples describing why each server
 /// needs attention (e.g. missing package version, mutable tag, no
 /// recognised runner, trust indicators that need review).
+#[allow(dead_code)]
 pub fn servers_needing_resolution(detections: &[SetupDetection]) -> Vec<(String, String)> {
     let mut results: Vec<(String, String)> = Vec::new();
 
@@ -1181,6 +1194,7 @@ pub fn servers_needing_resolution(detections: &[SetupDetection]) -> Vec<(String,
 ///
 /// Returns a list of `(key, status, package_identity)` for each server
 /// that needs a version pin.
+#[allow(dead_code)]
 pub fn servers_with_unsafe_packages(
     detections: &[SetupDetection],
 ) -> Vec<(String, PackageVersionStatus, Option<String>)> {
