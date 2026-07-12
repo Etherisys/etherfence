@@ -1416,9 +1416,8 @@ fn run_setup_wizard() -> Result<()> {
                 match server.trust_assessment.aggregate {
                     etherfence_setup::AggregateAssessmentStatus::HighRisk => {
                         eprintln!(
-                            "{}  {}",
-                            theme.danger.apply_to("HIGH RISK"),
-                            "this server cannot receive a permissive setup"
+                            "{}  this server cannot receive a permissive setup",
+                            theme.danger.apply_to("HIGH RISK")
                         );
                         for ind in &server.trust_assessment.indicators {
                             if ind.severity >= etherfence_core::Severity::High {
@@ -1448,16 +1447,14 @@ fn run_setup_wizard() -> Result<()> {
                     }
                     etherfence_setup::AggregateAssessmentStatus::NeedsReview => {
                         eprintln!(
-                            "{}  {}",
-                            theme.warning.apply_to("REVIEW"),
-                            "trust indicators were raised for this server"
+                            "{}  trust indicators were raised for this server",
+                            theme.warning.apply_to("REVIEW")
                         );
                     }
                     etherfence_setup::AggregateAssessmentStatus::Unknown => {
                         eprintln!(
-                            "{}  {}",
-                            theme.warning.apply_to("UNKNOWN"),
-                            "publisher identity could not be verified"
+                            "{}  publisher identity could not be verified",
+                            theme.warning.apply_to("UNKNOWN")
                         );
                     }
                     _ => {}
