@@ -21,6 +21,70 @@ scanning, or network interception.
 
 ### Added
 
+- **Interactive selection flow**: the guided setup wizard now walks
+  one-decision-per-screen steps — scan, choose AI clients (grouped by
+  product with CAN CONFIGURE / DETECT ONLY badges), choose MCP servers
+  (risk badges instead of raw trust tokens), resolve trust and pinning
+  issues, choose policy posture, review the exact change plan, apply and
+  verify. Advisory-only clients are selectable for review with an explicit
+  note that EtherFence cannot modify them.
+- **Package pinning engine**: unpinned, mutable-tag, or range-based
+  `npx`/`uvx`/`pipx run` invocations can be pinned to an exact version
+  during the wizard. Pins are computed against the server's real parsed
+  invocation (launcher flags and trailing arguments are preserved) and
+  validated per runner — only exact npm or PEP 440 versions are accepted;
+  `latest`, `^1.2`, `>=2`, and other mutable or range expressions are
+  rejected at input time and again at plan time. Resolves
+  EF-TRUST-PIN-001 in actual configuration output.
+- **Trust gates**: high-risk servers cannot receive a permissive setup —
+  the wizard offers skip (recommended) or quarantine-only mode, and
+  needs-review/unknown servers are flagged before any decision.
+- **Selective wizard apply**: confirming the wizard applies exactly the
+  reviewed plan via a new fail-closed engine. Only selected servers are
+  pinned, given their planned policy (deny-all quarantine, curated, or
+  custom tool allowlist written verbatim), and wrapped; skipped servers
+  and configs without selected servers stay byte-identical. If a selected
+  server disappeared or a promised pin no longer applies, the apply
+  aborts before writing anything.
+- **Terminal UI layer**: a semantic theme (restrained colors with meaning:
+  green success, yellow review, red high-risk, cyan paths, dim technical
+  IDs) shared by the wizard and scan output, degrading to plain text for
+  redirected output, `NO_COLOR`, `CLICOLOR=0`, CI, and `TERM=dumb`.
+- **Scan executive summary**: `etherfence scan` now defaults to a readable
+  posture summary (overall status, clients grouped by product, priority
+  findings, next steps). New `--verbose` flag shows the previous full
+  evidence view: rationale, recommendation, complete finding list, full
+  fingerprints, and schema/status metadata. JSON, Markdown, and SARIF
+  outputs are unchanged.
+- Integration tests that verify wizard-applied files (not just the plan):
+  selective wrapping, pin-in-invocation, custom allowlist content,
+  byte-identical skips, and plan/apply correspondence; plus PTY tests
+  proving the startup splash is wired into the binary.
+
+### Fixed
+
+- `apply_wizard_plan()` previously ignored the confirmed plan and ran the
+  generic apply path: every unwrapped stdio server was wrapped regardless
+  of selection, custom allowlists were replaced by deny-all templates,
+  and version pins were never written. The apply now executes the
+  reviewed plan exactly.
+- Choosing "Skip this server" in the wizard previously left the server
+  selected (it was committed before the trust/posture decisions); skip
+  now truly skips — nothing is committed until every decision for a
+  server is complete.
+- Pinning plans were previously constructed from a synthetic minimal
+  argument list; they are now derived from the server's real parsed
+  configuration arguments.
+- The terminal splash module existed but was never wired into the binary;
+  `command_banner_mode()` now classifies every command (bare
+  `etherfence setup` and human-format commands show the splash on an
+  interactive color TTY; JSON/Markdown/SARIF, raw policy TOML, and MCP
+  proxy protocol traffic never do).
+
+## [1.6.0] - 2026-07-11
+
+### Added
+
 - **Guided setup wizard**: `etherfence setup` (no subcommand) now launches an
   interactive guided setup experience on TTYs. The wizard scans for AI clients,
   detects MCP servers, and provides step-by-step guidance toward applying
