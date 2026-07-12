@@ -9,7 +9,7 @@
 
 ### Session 2026-07-12
 
-- Q: What evidence contributes to the posture calculation? → A: Every finding displayed by the scan after the existing severity filter; resolved baseline findings are excluded because they are historical, while new and existing active findings both contribute.
+- Q: What evidence contributes to the posture calculation? → A: Every finding displayed by the scan after the existing severity filter; resolved baseline findings are excluded because they are historical, while new and existing active findings both contribute. The posture carries structured scope metadata recording `displayed-active-findings`, the effective severity threshold, and resolved-baseline exclusion; it is not an unfiltered host-wide security score.
 - Q: How is a deterministic posture score calculated? → A: Start at 100, subtract 25 per high, 10 per medium, and 2 per low active finding; clamp the result to the inclusive 0–100 range; informational findings do not change the score. EtherFence's existing scan severity vocabulary has no critical level, so this release does not introduce one.
 - Q: How is the posture grade assigned? → A: A for 90–100, B for 75–89, C for 55–74, D for 30–54, and F for 0–29.
 - Q: How are priority and next actions chosen? → A: Active findings sort by severity descending, then stable finding ID, target, agent, and fingerprint; the first three are displayed as priority risks and their per-finding recommendations form the first three next actions in that same stable order.

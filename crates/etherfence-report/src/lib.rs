@@ -263,9 +263,10 @@ fn append_human_posture(out: &mut String, report: &ScanReport) {
         return;
     };
     out.push_str(&format!(
-        "Security posture: {}/100 (grade {})\nAssessment: {}\n",
+        "Security posture: {}/100 (grade {})\nScope: {}\nAssessment: {}\n",
         posture.score,
         posture.grade.label(),
+        posture.scope.human_label(),
         posture.assessment
     ));
     if !posture.priority_risks.is_empty() {
@@ -303,6 +304,7 @@ fn append_markdown_posture(out: &mut String, report: &ScanReport) {
         posture.low,
         posture.info
     ));
+    out.push_str(&format!("**Scope:** {}\n\n", posture.scope.human_label()));
     out.push_str(&format!("**Assessment:** {}\n\n", posture.assessment));
     if !posture.priority_risks.is_empty() {
         out.push_str("### Priority Risks\n\n");
@@ -471,7 +473,7 @@ mod tests {
 
     #[test]
     fn renders_posture_in_human_and_markdown_reports() {
-        use etherfence_core::{PostureGrade, PostureSummary};
+        use etherfence_core::{PostureGrade, PostureScope, PostureSummary};
         let report = ScanReport {
             schema_version: "ef-scan-report/v0.1.1".to_string(),
             tool: "etherfence".to_string(),
@@ -482,6 +484,7 @@ mod tests {
             findings: Vec::new(),
             summary: Summary::from_counts(0, &[]),
             posture: Some(PostureSummary {
+                scope: PostureScope::displayed_active(Severity::Info),
                 score: 100,
                 grade: PostureGrade::A,
                 assessment: "No active scored findings are displayed. This is not proof that the host is secure.".to_string(),
@@ -497,7 +500,11 @@ mod tests {
             baseline: None,
         };
         assert!(to_human(&report).contains("Security posture: 100/100 (grade A)"));
+        assert!(to_human(&report)
+            .contains("Scope: Displayed active findings at severity threshold: info"));
         assert!(to_markdown(&report).contains("## Security Posture"));
+        assert!(to_markdown(&report)
+            .contains("**Scope:** Displayed active findings at severity threshold: info"));
     }
 
     #[test]

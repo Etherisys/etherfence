@@ -155,6 +155,8 @@ fn scan_fixture_human_default_is_executive_summary() {
     assert!(stdout.contains("Security posture"));
     assert!(stdout.contains("Posture"));
     assert!(stdout.contains("GRADE F"));
+    assert!(stdout.contains("Scope"));
+    assert!(stdout.contains("Displayed active findings at severity threshold: info"));
     assert!(stdout.contains("Assessment"));
     assert!(stdout.contains("Overall status:"));
     assert!(stdout.contains("Clients"));
@@ -186,6 +188,7 @@ fn scan_fixture_human_verbose_groups_by_severity_and_guidance() {
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("Summary:"));
+    assert!(stdout.contains("Scope: Displayed active findings at severity threshold: info"));
     assert!(stdout.contains("Findings by severity:"));
     assert!(stdout.contains("HIGH"));
     assert!(stdout.contains("Rationale:"));
@@ -236,6 +239,62 @@ fn severity_threshold_high_displays_only_high_findings() {
     assert!(!stdout.contains("\nINFO\n"));
     assert!(stdout
         .contains("Summary: 12 inventory item(s), 5 finding(s): high=5, medium=0, low=0, info=0"));
+}
+
+#[test]
+fn posture_scope_is_visible_and_matches_the_effective_threshold_in_all_formats() {
+    let root = fixture_root("home");
+    let expected_scope = "Displayed active findings at severity threshold: high";
+
+    let default_human = run(&["scan", "--root", &root, "--severity-threshold", "high"]);
+    assert!(default_human.status.success());
+    assert!(String::from_utf8_lossy(&default_human.stdout).contains(expected_scope));
+
+    let verbose_human = run(&[
+        "scan",
+        "--root",
+        &root,
+        "--severity-threshold",
+        "high",
+        "--verbose",
+    ]);
+    assert!(verbose_human.status.success());
+    assert!(String::from_utf8_lossy(&verbose_human.stdout).contains(expected_scope));
+
+    let markdown = run(&[
+        "scan",
+        "--root",
+        &root,
+        "--severity-threshold",
+        "high",
+        "--format",
+        "markdown",
+    ]);
+    assert!(markdown.status.success());
+    assert!(
+        String::from_utf8_lossy(&markdown.stdout).contains(&format!("**Scope:** {expected_scope}"))
+    );
+
+    let json = run(&[
+        "scan",
+        "--root",
+        &root,
+        "--severity-threshold",
+        "high",
+        "--format",
+        "json",
+    ]);
+    assert!(json.status.success());
+    let report: Value = serde_json::from_slice(&json.stdout).expect("valid JSON output");
+    assert_eq!(
+        report["posture"]["scope"]["finding_selection"],
+        "displayed-active-findings"
+    );
+    assert_eq!(report["posture"]["scope"]["severity_threshold"], "high");
+    assert_eq!(
+        report["posture"]["scope"]["resolved_baseline_findings"],
+        "excluded"
+    );
 }
 
 #[test]

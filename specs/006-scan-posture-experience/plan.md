@@ -52,12 +52,13 @@ See [research.md](./research.md). All technical unknowns are resolved with exist
 
 Add shared report-model types in `crates/etherfence-core/src/lib.rs`:
 
-- `PostureSummary`: `score`, `grade`, `assessment`, active severity counts, `priority_risks`, and `recommended_actions`.
+- `PostureSummary`: `scope`, `score`, `grade`, `assessment`, active severity counts, `priority_risks`, and `recommended_actions`.
+- `PostureScope`: fixed `displayed-active-findings` selection token, the effective `--severity-threshold`, and resolved-baseline exclusion, so users do not mistake posture for an unfiltered host-wide score.
 - `PostureRisk`: finding ID, severity, title, agent, target, fingerprint, and `why_this_matters` (copied from `Finding.impact`).
 - `RecommendedAction`: the linked finding ID and the existing recommendation text.
 - `PostureGrade`: fixed `a`/`b`/`c`/`d`/`f` serialized token with a human label helper.
 
-Expose `PostureSummary::from_findings(&[Finding])`. Its input is the report's `display_findings` after existing baseline comparison and severity filtering. It selects active findings where `baseline_status != Resolved` and calculates:
+Expose `PostureSummary::from_findings(&[Finding], Severity)`. Its input is the report's `display_findings` after existing baseline comparison and severity filtering; the passed severity records the effective threshold in additive scope metadata. It selects active findings where `baseline_status != Resolved` and calculates:
 
 ```text
 score = clamp(100 - 25*high - 10*medium - 2*low, 0, 100)

@@ -4,6 +4,7 @@
 
 | Field | Type | JSON key | Rules |
 |---|---|---|---|
+| scope | object | `scope` | Explicit selection metadata: displayed active findings, effective severity threshold, and resolved-baseline exclusion. |
 | score | unsigned integer | `score` | Inclusive 0–100; 100 minus active displayed severity deductions, clamped. |
 | grade | closed enum | `grade` | `a`, `b`, `c`, `d`, or `f`; fixed score ranges. |
 | assessment | string | `assessment` | Deterministic advisory sentence based on grade/no active scored findings. |

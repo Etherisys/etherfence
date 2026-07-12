@@ -14,6 +14,11 @@
 {
   "schema_version": "ef-scan-report/v0.1.1",
   "posture": {
+    "scope": {
+      "finding_selection": "displayed-active-findings",
+      "severity_threshold": "info",
+      "resolved_baseline_findings": "excluded"
+    },
     "score": 65,
     "grade": "c",
     "assessment": "Meaningful posture risks need review.",
@@ -45,6 +50,7 @@
 
 ## Deterministic rules
 
+- `scope.finding_selection` is always `displayed-active-findings`; `scope.severity_threshold` is the effective `--severity-threshold` for this invocation; and `scope.resolved_baseline_findings` is always `excluded`. This explicitly prevents interpreting posture as an unfiltered host-wide score.
 - Active means `baseline_status` is not `resolved`.
 - Score: `max(0, 100 - 25*high - 10*medium - 2*low)`; informational findings do not reduce score.
 - Grades: A 90–100, B 75–89, C 55–74, D 30–54, F 0–29; serialized lower-case tokens are `a` to `f`.

@@ -32,6 +32,7 @@ CLI filtering with `--severity-threshold` changes which findings are included in
 
 | Field | Type | Description |
 | --- | --- | --- |
+| `scope` | object | Explicit additive selection context: `finding_selection` is `displayed-active-findings`, `severity_threshold` is the effective CLI threshold, and `resolved_baseline_findings` is `excluded`. The score is not an unfiltered host-wide security score. |
 | `score` | integer | Inclusive 0–100 score: `max(0, 100 - 25*high - 10*medium - 2*low)` over active displayed findings. Info findings do not reduce the score. |
 | `grade` | string | `a`, `b`, `c`, `d`, or `f`: 90–100, 75–89, 55–74, 30–54, and 0–29 respectively. |
 | `assessment` | string | Deterministic advisory interpretation of the score/grade. |

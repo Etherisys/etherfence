@@ -2272,7 +2272,7 @@ fn run_scan(options: ScanOptions) -> Result<()> {
     display_findings.retain(|finding| finding.severity >= options.severity_threshold);
 
     let summary = Summary::from_counts(inventory.len(), &display_findings);
-    let posture = PostureSummary::from_findings(&display_findings);
+    let posture = PostureSummary::from_findings(&display_findings, options.severity_threshold);
     let report = ScanReport {
         schema_version: "ef-scan-report/v0.1.1".to_string(),
         tool: "etherfence".to_string(),
@@ -2374,6 +2374,11 @@ fn render_scan_summary(report: &ScanReport) -> String {
                     grade_style.apply_to(format!("GRADE {}", posture.grade.label()))
                 )
             )
+        );
+        let _ = writeln!(
+            out,
+            "{}",
+            theme.key_value("Scope", &posture.scope.human_label())
         );
         let _ = writeln!(
             out,

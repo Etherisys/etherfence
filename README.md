@@ -229,6 +229,7 @@ AI clients    5 detected
 MCP servers   6 configured
 Findings      2 high · 5 medium · 9 low · 0 info
 Posture       0/100 — GRADE F
+Scope         Displayed active findings at severity threshold: info
 Assessment    Multiple significant posture risks need prompt review.
 
 Overall status:  NEEDS ATTENTION
@@ -250,6 +251,8 @@ Next steps
 Run `etherfence scan --verbose` for full evidence and fingerprints.
 Run `etherfence setup` to secure detected MCP servers.
 ```
+
+The posture score intentionally covers only displayed active findings after the effective `--severity-threshold` (the default is `info`); its explicit scope line and JSON metadata are not an unfiltered host-wide security score. Resolved baseline findings remain report evidence but are excluded from the score. The result remains advisory and does not prove the host is secure.
 
 `--verbose` adds the complete finding list with rationale, recommendation,
 and full fingerprints:

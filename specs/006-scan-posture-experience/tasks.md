@@ -117,3 +117,13 @@
 4. Add priority/action context, then verbose/Markdown/JSON presentation.
 5. Update docs/examples/version only after implementation output is real.
 6. Run the full gate, conduct convergence, commit, push, and open a PR without merging.
+
+## Post-PR Review Follow-up: Explicit Posture Scope and Boundary Coverage
+
+**Purpose**: Address review findings without changing scan selection, detectors, exits, SARIF, or enforcement behavior.
+
+- [x] R001 Add additive structured `PostureScope` metadata recording displayed-active selection, effective severity threshold, and resolved-baseline exclusion in `crates/etherfence-core/src/lib.rs`.
+- [x] R002 Render the deterministic scope line in default human, verbose human, and Markdown output, and serialize it only under the optional JSON `posture` object.
+- [x] R003 Add table-driven grade boundary coverage for 100, 90/89, 75/74, 55/54, 30/29, and 0 plus repeated priority/action ordering coverage.
+- [x] R004 Add fixture-backed CLI assertions that scope is visible in default human, verbose human, Markdown, and JSON at an explicit `high` threshold.
+- [x] R005 Update README, schema documentation, and feature design artifacts to make clear that posture is scoped to displayed active findings and is not a host-wide score.
