@@ -6,7 +6,7 @@ Status: pre-alpha. This document describes the current scan report and baseline 
 
 Current report schema: `ef-scan-report/v0.1.2`
 
-EtherFence v1.7.2 adds an optional `protection_coverage` field to the scan report. This is a backward-compatible additive change: consumers that do not know about `protection_coverage` will ignore the field. Existing field names, types, and semantics are unchanged. Policy schema/source metadata appears in scan output when `--policy` or `--policy-profile` is used.
+EtherFence v1.7.3 adds an optional `protection_coverage` field to the scan report. This is a backward-compatible additive change: consumers that do not know about `protection_coverage` will ignore the field. Existing field names, types, and semantics are unchanged. Policy schema/source metadata appears in scan output when `--policy` or `--policy-profile` is used.
 
 CLI filtering with `--severity-threshold` changes which findings are included in the emitted report and recomputes `summary` for the displayed findings, but it does not change field names or object layout. Policy findings are ordinary findings for filtering, `--fail-on`, baseline comparison, and `--fail-on-new`.
 

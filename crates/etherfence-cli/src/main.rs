@@ -1,5 +1,6 @@
 mod banner;
 mod ui;
+mod verbose;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
@@ -36,6 +37,10 @@ enum Command {
         /// fingerprints. Human format only.
         #[arg(long)]
         verbose: bool,
+        /// Include technical evidence (fingerprints, schema IDs, policy-status)
+        /// in verbose human output. Requires --verbose.
+        #[arg(long)]
+        debug: bool,
         /// Only display findings at or above this severity.
         #[arg(long, value_enum, default_value_t = CliSeverity::Info)]
         severity_threshold: CliSeverity,
@@ -394,56 +399,71 @@ const BUILT_IN_POLICIES: &[BuiltInPolicy] = &[
 /// protocol traffic never do. The banner module additionally suppresses
 /// the splash for redirected stdout, CI, NO_COLOR, CLICOLOR=0, and
 /// TERM=dumb.
-fn command_banner_mode(command: &Command) -> banner::OutputMode {
+fn command_banner_mode(command: &Command) -> (banner::OutputMode, Option<String>) {
     match command {
-        Command::Scan { format, .. } => match format {
-            OutputFormat::Human => banner::OutputMode::Human,
-            OutputFormat::Json | OutputFormat::Markdown | OutputFormat::Sarif => {
-                banner::OutputMode::Machine
-            }
-        },
+        Command::Scan { format, .. } => {
+            let mode = match format {
+                OutputFormat::Human => banner::OutputMode::Human,
+                OutputFormat::Json | OutputFormat::Markdown | OutputFormat::Sarif => {
+                    banner::OutputMode::Machine
+                }
+            };
+            let label = match format {
+                OutputFormat::Human => Some("LOCAL POSTURE ASSESSMENT".to_string()),
+                _ => None,
+            };
+            (mode, label)
+        }
         // `policy list`/`policy show` emit machine-consumable lists and
         // raw TOML for piping into files.
-        Command::Policy { .. } => banner::OutputMode::Machine,
+        Command::Policy { .. } => (banner::OutputMode::Machine, None),
         // The proxy speaks MCP JSON-RPC over stdio; nothing may pollute it.
-        Command::McpProxy { .. } => banner::OutputMode::Protocol,
-        Command::McpPolicy { command } => match command {
-            // `mcp-policy init` emits raw policy TOML for piping.
-            McpPolicyCommand::Init { .. } => banner::OutputMode::Machine,
-            McpPolicyCommand::Validate { .. }
-            | McpPolicyCommand::Explain { .. }
-            | McpPolicyCommand::Check { .. } => banner::OutputMode::Human,
-        },
-        Command::Setup { command } => match command {
-            // Bare `etherfence setup` launches the interactive wizard.
-            None => banner::OutputMode::Human,
-            Some(SetupCommand::Detect { format, .. })
-            | Some(SetupCommand::Catalog { format, .. }) => match format {
-                SetupOutputFormat::Human => banner::OutputMode::Human,
-                SetupOutputFormat::Json => banner::OutputMode::Machine,
-            },
-            Some(SetupCommand::Baseline { command }) => match command {
-                SetupBaselineCommand::Write { .. } => banner::OutputMode::Human,
-                SetupBaselineCommand::Check { format, .. } => match format {
+        Command::McpProxy { .. } => (banner::OutputMode::Protocol, None),
+        Command::McpPolicy { command } => {
+            let mode = match command {
+                // `mcp-policy init` emits raw policy TOML for piping.
+                McpPolicyCommand::Init { .. } => banner::OutputMode::Machine,
+                McpPolicyCommand::Validate { .. }
+                | McpPolicyCommand::Explain { .. }
+                | McpPolicyCommand::Check { .. } => banner::OutputMode::Human,
+            };
+            (mode, None)
+        }
+        Command::Setup { command } => {
+            let mode = match command {
+                // Bare `etherfence setup` launches the interactive wizard.
+                None => banner::OutputMode::Human,
+                Some(SetupCommand::Detect { format, .. })
+                | Some(SetupCommand::Catalog { format, .. }) => match format {
                     SetupOutputFormat::Human => banner::OutputMode::Human,
                     SetupOutputFormat::Json => banner::OutputMode::Machine,
                 },
-            },
-            Some(SetupCommand::Plan { .. })
-            | Some(SetupCommand::Apply { .. })
-            | Some(SetupCommand::Rollback { .. })
-            | Some(SetupCommand::Doctor { .. }) => banner::OutputMode::Human,
-        },
+                Some(SetupCommand::Baseline { command }) => match command {
+                    SetupBaselineCommand::Write { .. } => banner::OutputMode::Human,
+                    SetupBaselineCommand::Check { format, .. } => match format {
+                        SetupOutputFormat::Human => banner::OutputMode::Human,
+                        SetupOutputFormat::Json => banner::OutputMode::Machine,
+                    },
+                },
+                Some(SetupCommand::Plan { .. })
+                | Some(SetupCommand::Apply { .. })
+                | Some(SetupCommand::Rollback { .. })
+                | Some(SetupCommand::Doctor { .. }) => banner::OutputMode::Human,
+            };
+            (mode, None)
+        }
     }
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    banner::print_startup_banner(command_banner_mode(&cli.command));
+    let (banner_mode, banner_label) = command_banner_mode(&cli.command);
+    banner::print_startup_banner(banner_mode, banner_label.as_deref());
     match cli.command {
         Command::Scan {
             format,
             verbose,
+            debug,
             severity_threshold,
             fail_on,
             baseline,
@@ -455,6 +475,7 @@ fn main() -> Result<()> {
         } => run_scan(ScanOptions {
             format,
             verbose,
+            debug,
             severity_threshold: severity_threshold.into(),
             fail_on: fail_on.map(Severity::from),
             baseline,
@@ -2190,6 +2211,7 @@ fn run_policy_command(command: PolicyCommand) -> Result<()> {
 struct ScanOptions {
     format: OutputFormat,
     verbose: bool,
+    debug: bool,
     severity_threshold: Severity,
     fail_on: Option<Severity>,
     baseline: Option<PathBuf>,
@@ -2291,7 +2313,7 @@ fn run_scan(options: ScanOptions) -> Result<()> {
     };
     let output = match options.format {
         OutputFormat::Human if options.verbose => {
-            etherfence_report::to_human_with_width(&report, ui::human_width())
+            verbose::render_scan_verbose(&report, options.debug)
         }
         OutputFormat::Human => render_scan_summary(&report),
         OutputFormat::Json => etherfence_report::to_json(&report)?,

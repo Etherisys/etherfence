@@ -1,6 +1,6 @@
 # EtherFence Architecture
 
-EtherFence v1.7.2 is a small Rust workspace with scan-only posture discovery
+EtherFence v1.7.3 is a small Rust workspace with scan-only posture discovery
 plus an experimental MCP stdio boundary proxy.
 
 ## Crates
