@@ -159,7 +159,7 @@ fn scan_with_policy_shows_coverage_human() {
     );
     assert!(stdout.contains("~ no policy"), "must show no policy marker");
     assert!(
-        stdout.contains("— empty allowlist"),
+        stdout.contains("─ empty allowlist") || stdout.contains("- empty allowlist"),
         "must show empty allowlist marker"
     );
 }

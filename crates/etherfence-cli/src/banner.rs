@@ -137,32 +137,76 @@ fn render_banner_footer(out: &mut String, env: &TerminalEnvironment, mode_label:
     let version = env!("CARGO_PKG_VERSION");
     let rule = rule_for_width(banner_rule_width(env));
     let tagline = "AI Agent Security Posture & Runtime Control";
-    let metadata = match mode_label {
+
+    // Build the metadata — split to two lines when the single-line form
+    // would overflow the terminal width.
+    let single_line = match mode_label {
         Some(label) => format!("{tagline}           v{version} \u{00b7} {label}"),
         None => format!("{tagline}           v{version}"),
     };
+    let version_line = match mode_label {
+        Some(label) => format!("v{version} \u{00b7} {label}"),
+        None => format!("v{version}"),
+    };
+
+    let width = env.columns.map(usize::from).unwrap_or(80);
+    let single_line_fits = single_line.len() <= width;
 
     if env.colors_enabled() {
         out.push_str(DARK_GRAY);
         out.push_str(&rule);
         out.push_str(RESET);
-
         out.push('\n');
-        out.push_str(DIM_WHITE);
-        out.push_str(&metadata);
-        out.push_str(RESET);
 
+        if single_line_fits {
+            out.push_str(DIM_WHITE);
+            out.push_str(&single_line);
+            out.push_str(RESET);
+        } else if tagline.len() <= width {
+            out.push_str(DIM_WHITE);
+            out.push_str(tagline);
+            out.push_str(RESET);
+            out.push('\n');
+            out.push_str(DIM_WHITE);
+            out.push_str(&version_line);
+            out.push_str(RESET);
+        } else {
+            out.push_str(DIM_WHITE);
+            out.push_str("AI Agent Security Posture &");
+            out.push_str(RESET);
+            out.push('\n');
+            out.push_str(DIM_WHITE);
+            out.push_str("Runtime Control");
+            out.push_str(RESET);
+            out.push('\n');
+            out.push_str(DIM_WHITE);
+            out.push_str(&version_line);
+            out.push_str(RESET);
+        }
         out.push('\n');
+
         out.push_str(DARK_GRAY);
         out.push_str(&rule);
         out.push_str(RESET);
     } else {
         out.push_str(&rule);
-
         out.push('\n');
-        out.push_str(&metadata);
 
+        if single_line_fits {
+            out.push_str(&single_line);
+        } else if tagline.len() <= width {
+            out.push_str(tagline);
+            out.push('\n');
+            out.push_str(&version_line);
+        } else {
+            out.push_str("AI Agent Security Posture &");
+            out.push('\n');
+            out.push_str("Runtime Control");
+            out.push('\n');
+            out.push_str(&version_line);
+        }
         out.push('\n');
+
         out.push_str(&rule);
     }
     out.push('\n');
@@ -274,5 +318,77 @@ mod tests {
     #[test]
     fn compact_banner_selected_when_width_is_unknown() {
         assert_eq!(banner_style(&env(true, None)), BannerStyle::Compact);
+    }
+
+    // ── Footer width tests ──────────────────────────────────────────
+
+    fn ansi_free(text: &str) -> String {
+        // Strip ANSI escape sequences for width measurement.
+        let mut out = String::new();
+        let mut chars = text.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c == '\x1b' && chars.peek() == Some(&'[') {
+                // Skip CSI sequence until the final byte (letter)
+                chars.next(); // [
+                while let Some(&n) = chars.peek() {
+                    chars.next();
+                    if n.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+                continue;
+            }
+            out.push(c);
+        }
+        out
+    }
+
+    fn rendered_widths(columns: u16, label: Option<&str>) -> Vec<usize> {
+        let term = env(true, Some(columns));
+        let rendered = render_startup_banner(OutputMode::Human, &term, label).unwrap();
+        ansi_free(&rendered)
+            .lines()
+            .map(|l| l.chars().count())
+            .collect()
+    }
+
+    #[test]
+    fn compact_banner_footer_single_line_at_100_cols() {
+        let widths = rendered_widths(100, Some("LOCAL POSTURE ASSESSMENT"));
+        for (i, w) in widths.iter().enumerate() {
+            assert!(*w <= 100, "line {i} width {w} > 100");
+        }
+    }
+
+    #[test]
+    fn compact_banner_footer_two_lines_at_80_cols() {
+        let widths = rendered_widths(80, Some("LOCAL POSTURE ASSESSMENT"));
+        for (i, w) in widths.iter().enumerate() {
+            assert!(*w <= 80, "line {i} width {w} > 80");
+        }
+    }
+
+    #[test]
+    fn compact_banner_footer_two_lines_at_60_cols() {
+        let widths = rendered_widths(60, Some("LOCAL POSTURE ASSESSMENT"));
+        for (i, w) in widths.iter().enumerate() {
+            assert!(*w <= 60, "line {i} width {w} > 60");
+        }
+    }
+
+    #[test]
+    fn compact_banner_footer_two_lines_at_42_cols() {
+        let widths = rendered_widths(42, Some("LOCAL POSTURE ASSESSMENT"));
+        for (i, w) in widths.iter().enumerate() {
+            assert!(*w <= 42, "line {i} width {w} > 42");
+        }
+    }
+
+    #[test]
+    fn compact_banner_footer_no_mode_label() {
+        let widths = rendered_widths(60, None);
+        for (i, w) in widths.iter().enumerate() {
+            assert!(*w <= 60, "line {i} width {w} > 60");
+        }
     }
 }

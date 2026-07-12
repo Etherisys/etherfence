@@ -2459,9 +2459,9 @@ fn render_scan_summary(report: &ScanReport) -> String {
     }
     for (client, servers) in &clients {
         let marker = if *servers > 0 {
-            theme.success.apply_to("\u{2713}").to_string()
+            theme.success.apply_to(ui::checkmark()).to_string()
         } else {
-            theme.muted.apply_to("\u{25cb}").to_string()
+            theme.muted.apply_to(ui::circle()).to_string()
         };
         let servers_label = if *servers > 0 {
             ui::count_servers(*servers)
@@ -2502,23 +2502,39 @@ fn render_scan_summary(report: &ScanReport) -> String {
                 let _ = writeln!(out, "\n{}:", theme.info.apply_to(&current_agent));
             }
             let (marker, _label): (String, &str) = match server.status {
-                CoverageStatus::Covered => {
-                    (theme.success.apply_to("✓ covered").to_string(), "covered")
-                }
+                CoverageStatus::Covered => (
+                    theme
+                        .success
+                        .apply_to(format!("{} covered", ui::checkmark()))
+                        .to_string(),
+                    "covered",
+                ),
                 CoverageStatus::NotCovered => (
-                    theme.danger.apply_to("✗ not covered").to_string(),
+                    theme
+                        .danger
+                        .apply_to(format!("{} not covered", ui::cross_mark()))
+                        .to_string(),
                     "not covered",
                 ),
                 CoverageStatus::NoPolicyForAgent => (
-                    theme.warning.apply_to("~ no policy").to_string(),
+                    theme
+                        .warning
+                        .apply_to("~ no policy".to_string())
+                        .to_string(),
                     "no policy",
                 ),
                 CoverageStatus::EmptyAllowlist => (
-                    theme.muted.apply_to("— empty allowlist").to_string(),
+                    theme
+                        .muted
+                        .apply_to(format!("{} empty allowlist", ui::rule_char()))
+                        .to_string(),
                     "empty allowlist",
                 ),
                 CoverageStatus::NotApplicable => (
-                    theme.muted.apply_to("  not applicable").to_string(),
+                    theme
+                        .muted
+                        .apply_to("  not applicable".to_string())
+                        .to_string(),
                     "not applicable",
                 ),
             };

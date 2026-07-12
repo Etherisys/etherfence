@@ -67,7 +67,7 @@ impl UiTheme {
 
     fn rule(&self) -> String {
         self.muted
-            .apply_to("─".repeat(human_width().min(60)))
+            .apply_to(rule_char().repeat(human_width().min(60)))
             .to_string()
     }
 
@@ -108,10 +108,13 @@ pub(crate) fn severity_counts(
     info: usize,
 ) -> String {
     format!(
-        "{} · {} · {} · {}",
+        "{} {} {} {} {} {} {}",
         colored_count(&theme.danger, high, "high"),
+        middle_dot(),
         colored_count(&theme.warning, medium, "medium"),
+        middle_dot(),
         colored_count(&theme.info, low, "low"),
+        middle_dot(),
         colored_count(&theme.muted, info, "info"),
     )
 }
@@ -216,6 +219,14 @@ pub(crate) fn cross_mark() -> &'static str {
 pub(crate) fn rule_char() -> &'static str {
     if unicode_supported() {
         "\u{2500}"
+    } else {
+        "-"
+    }
+}
+
+pub(crate) fn middle_dot() -> &'static str {
+    if unicode_supported() {
+        "\u{00b7}"
     } else {
         "-"
     }

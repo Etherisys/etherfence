@@ -228,7 +228,7 @@ fn render_clients_and_servers(
                         .map(|findings| {
                             findings
                                 .iter()
-                                .filter(|f| f.target.contains(&server.name))
+                                .filter(|f| f.target == server.name)
                                 .collect()
                         })
                         .unwrap_or_default();
@@ -296,11 +296,9 @@ fn render_clients_and_servers(
             if let Some(findings) = findings_map.get(&(agent.to_string(), item.config_path.clone()))
             {
                 for finding in findings {
-                    let targets_server = items.iter().any(|i| {
-                        i.mcp_servers
-                            .iter()
-                            .any(|s| finding.target.contains(&s.name))
-                    });
+                    let targets_server = items
+                        .iter()
+                        .any(|i| i.mcp_servers.iter().any(|s| finding.target == s.name));
                     if !targets_server {
                         agent_level.push(finding);
                     }
