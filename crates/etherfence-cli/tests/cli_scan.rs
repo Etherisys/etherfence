@@ -54,13 +54,26 @@ fn scan_fixture_json_has_stable_top_level_schema() {
 
     assert_eq!(json["schema_version"], "ef-scan-report/v0.1.1");
     assert_eq!(json["tool"], "etherfence");
-    assert_eq!(json["version"], "1.6.2");
+    assert_eq!(json["version"], "1.7.0");
     assert_eq!(json["status"], "stable-local-scan");
     assert!(json.get("scanned_root").is_some());
     assert!(json["inventory"].is_array());
     assert!(json["findings"].is_array());
     assert!(json["summary"].is_object());
     assert_eq!(json["summary"]["inventory_items"], 12);
+    let posture = &json["posture"];
+    assert_eq!(posture["score"], 0);
+    assert_eq!(posture["grade"], "f");
+    assert!(posture["assessment"]
+        .as_str()
+        .unwrap()
+        .contains("prompt review"));
+    assert!(posture["priority_risks"].is_array());
+    assert_eq!(posture["priority_risks"].as_array().unwrap().len(), 3);
+    assert_eq!(
+        posture["priority_risks"][0]["finding_id"],
+        posture["recommended_actions"][0]["finding_id"]
+    );
 
     let first = json["findings"]
         .as_array()
@@ -140,9 +153,15 @@ fn scan_fixture_human_default_is_executive_summary() {
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("Security posture"));
+    assert!(stdout.contains("Posture"));
+    assert!(stdout.contains("GRADE F"));
+    assert!(stdout.contains("Scope"));
+    assert!(stdout.contains("Displayed active findings at severity threshold: info"));
+    assert!(stdout.contains("Assessment"));
     assert!(stdout.contains("Overall status:"));
     assert!(stdout.contains("Clients"));
     assert!(stdout.contains("Priority findings"));
+    assert!(stdout.contains("Why this matters:"));
     assert!(stdout.contains("Next steps"));
     assert!(stdout.contains("`etherfence scan --verbose`"));
     assert!(stdout.contains("`etherfence setup`"));
@@ -169,6 +188,7 @@ fn scan_fixture_human_verbose_groups_by_severity_and_guidance() {
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("Summary:"));
+    assert!(stdout.contains("Scope: Displayed active findings at severity threshold: info"));
     assert!(stdout.contains("Findings by severity:"));
     assert!(stdout.contains("HIGH"));
     assert!(stdout.contains("Rationale:"));
@@ -222,6 +242,62 @@ fn severity_threshold_high_displays_only_high_findings() {
 }
 
 #[test]
+fn posture_scope_is_visible_and_matches_the_effective_threshold_in_all_formats() {
+    let root = fixture_root("home");
+    let expected_scope = "Displayed active findings at severity threshold: high";
+
+    let default_human = run(&["scan", "--root", &root, "--severity-threshold", "high"]);
+    assert!(default_human.status.success());
+    assert!(String::from_utf8_lossy(&default_human.stdout).contains(expected_scope));
+
+    let verbose_human = run(&[
+        "scan",
+        "--root",
+        &root,
+        "--severity-threshold",
+        "high",
+        "--verbose",
+    ]);
+    assert!(verbose_human.status.success());
+    assert!(String::from_utf8_lossy(&verbose_human.stdout).contains(expected_scope));
+
+    let markdown = run(&[
+        "scan",
+        "--root",
+        &root,
+        "--severity-threshold",
+        "high",
+        "--format",
+        "markdown",
+    ]);
+    assert!(markdown.status.success());
+    assert!(
+        String::from_utf8_lossy(&markdown.stdout).contains(&format!("**Scope:** {expected_scope}"))
+    );
+
+    let json = run(&[
+        "scan",
+        "--root",
+        &root,
+        "--severity-threshold",
+        "high",
+        "--format",
+        "json",
+    ]);
+    assert!(json.status.success());
+    let report: Value = serde_json::from_slice(&json.stdout).expect("valid JSON output");
+    assert_eq!(
+        report["posture"]["scope"]["finding_selection"],
+        "displayed-active-findings"
+    );
+    assert_eq!(report["posture"]["scope"]["severity_threshold"], "high");
+    assert_eq!(
+        report["posture"]["scope"]["resolved_baseline_findings"],
+        "excluded"
+    );
+}
+
+#[test]
 fn fail_on_high_returns_non_zero_when_high_findings_exist() {
     let root = fixture_root("home");
     let output = run(&["scan", "--root", &root, "--fail-on", "high"]);
@@ -253,6 +329,9 @@ fn markdown_output_has_review_headings_and_guidance() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("# EtherFence Scan Report"));
+    assert!(stdout.contains("## Security Posture"));
+    assert!(stdout.contains("### Priority Risks"));
+    assert!(stdout.contains("### Recommended Next Actions"));
     assert!(stdout.contains("## Summary"));
     assert!(stdout.contains("| Inventory items | Findings | High | Medium | Low | Info |"));
     assert!(stdout.contains("## Inventory"));
@@ -936,7 +1015,7 @@ fn sarif_output_is_valid_and_maps_severity_levels() {
     );
     let driver = &json["runs"][0]["tool"]["driver"];
     assert_eq!(driver["name"], "etherfence");
-    assert_eq!(driver["version"], "1.6.2");
+    assert_eq!(driver["version"], "1.7.0");
 
     let rules = sarif_rules(&json);
     let rule_ids: Vec<&str> = rules

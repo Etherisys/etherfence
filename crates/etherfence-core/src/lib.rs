@@ -470,6 +470,198 @@ impl Summary {
     }
 }
 
+/// Fixed, deterministic posture grade derived from displayed active findings.
+/// This is advisory presentation metadata; it never changes scan semantics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PostureGrade {
+    A,
+    B,
+    C,
+    D,
+    F,
+}
+
+impl PostureGrade {
+    pub fn from_score(score: u8) -> Self {
+        match score {
+            90..=100 => Self::A,
+            75..=89 => Self::B,
+            55..=74 => Self::C,
+            30..=54 => Self::D,
+            _ => Self::F,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::A => "A",
+            Self::B => "B",
+            Self::C => "C",
+            Self::D => "D",
+            Self::F => "F",
+        }
+    }
+}
+
+/// Explicit selection context for advisory posture. The score is intentionally
+/// not an unfiltered host-wide security score.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PostureScope {
+    /// Stable token describing the pre-existing report selection flow.
+    pub finding_selection: String,
+    /// Effective severity threshold applied to findings before posture derives.
+    pub severity_threshold: Severity,
+    /// Stable token describing treatment of historical baseline evidence.
+    pub resolved_baseline_findings: String,
+}
+
+impl PostureScope {
+    pub fn displayed_active(severity_threshold: Severity) -> Self {
+        Self {
+            finding_selection: "displayed-active-findings".to_string(),
+            severity_threshold,
+            resolved_baseline_findings: "excluded".to_string(),
+        }
+    }
+
+    pub fn human_label(&self) -> String {
+        format!(
+            "Displayed active findings at severity threshold: {}",
+            self.severity_threshold.label().to_lowercase()
+        )
+    }
+}
+
+/// A selected active finding in the concise posture experience.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PostureRisk {
+    pub finding_id: String,
+    pub severity: Severity,
+    pub title: String,
+    pub agent: AgentKind,
+    pub target: String,
+    pub fingerprint: String,
+    pub why_this_matters: String,
+}
+
+/// An existing finding recommendation linked to a posture priority risk.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecommendedAction {
+    pub finding_id: String,
+    pub recommendation: String,
+}
+
+/// Deterministic, advisory scan posture derived from displayed active findings.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PostureSummary {
+    pub scope: PostureScope,
+    pub score: u8,
+    pub grade: PostureGrade,
+    pub assessment: String,
+    pub active_findings: usize,
+    pub high: usize,
+    pub medium: usize,
+    pub low: usize,
+    pub info: usize,
+    pub priority_risks: Vec<PostureRisk>,
+    pub recommended_actions: Vec<RecommendedAction>,
+}
+
+impl PostureSummary {
+    /// Derives posture after the caller's established finding-selection flow.
+    /// Resolved baseline entries remain report evidence but are historical and
+    /// therefore never lower the score or consume a priority slot.
+    pub fn from_findings(findings: &[Finding], severity_threshold: Severity) -> Self {
+        let mut active: Vec<&Finding> = findings
+            .iter()
+            .filter(|finding| finding.baseline_status != BaselineStatus::Resolved)
+            .collect();
+        let high = active
+            .iter()
+            .filter(|finding| finding.severity == Severity::High)
+            .count();
+        let medium = active
+            .iter()
+            .filter(|finding| finding.severity == Severity::Medium)
+            .count();
+        let low = active
+            .iter()
+            .filter(|finding| finding.severity == Severity::Low)
+            .count();
+        let info = active
+            .iter()
+            .filter(|finding| finding.severity == Severity::Info)
+            .count();
+        let score = (100_i32 - (25 * high as i32) - (10 * medium as i32) - (2 * low as i32))
+            .clamp(0, 100) as u8;
+        let grade = PostureGrade::from_score(score);
+
+        active.sort_by(|left, right| {
+            right
+                .severity
+                .cmp(&left.severity)
+                .then_with(|| left.id.cmp(&right.id))
+                .then_with(|| left.target.cmp(&right.target))
+                .then_with(|| left.agent.key().cmp(right.agent.key()))
+                .then_with(|| left.fingerprint.cmp(&right.fingerprint))
+        });
+        let priority_risks: Vec<PostureRisk> = active
+            .iter()
+            .filter(|finding| finding.severity != Severity::Info)
+            .take(3)
+            .map(|finding| PostureRisk {
+                finding_id: finding.id.clone(),
+                severity: finding.severity,
+                title: finding.title.clone(),
+                agent: finding.agent,
+                target: finding.target.clone(),
+                fingerprint: finding.fingerprint.clone(),
+                why_this_matters: finding.impact.clone(),
+            })
+            .collect();
+        let recommended_actions = active
+            .iter()
+            .filter(|finding| finding.severity != Severity::Info)
+            .take(3)
+            .map(|finding| RecommendedAction {
+                finding_id: finding.id.clone(),
+                recommendation: finding.recommendation.clone(),
+            })
+            .collect();
+        let assessment = if high == 0 && medium == 0 && low == 0 {
+            "No active scored findings are displayed. This is not proof that the host is secure."
+                .to_string()
+        } else {
+            match grade {
+                PostureGrade::A => {
+                    "Posture risks are limited, but findings still need review.".to_string()
+                }
+                PostureGrade::B => "Review findings to improve posture.".to_string(),
+                PostureGrade::C => "Meaningful posture risks need review.".to_string(),
+                PostureGrade::D => "High-priority posture risks need prompt review.".to_string(),
+                PostureGrade::F => {
+                    "Multiple significant posture risks need prompt review.".to_string()
+                }
+            }
+        };
+
+        Self {
+            scope: PostureScope::displayed_active(severity_threshold),
+            score,
+            grade,
+            assessment,
+            active_findings: active.len(),
+            high,
+            medium,
+            low,
+            info,
+            priority_risks,
+            recommended_actions,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BaselineComparison {
     pub baseline_path: String,
@@ -505,6 +697,8 @@ pub struct ScanReport {
     pub inventory: Vec<InventoryItem>,
     pub findings: Vec<Finding>,
     pub summary: Summary,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub posture: Option<PostureSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub policy: Option<PolicyMetadata>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -619,6 +813,135 @@ mod tests {
         b.target = "other".to_string();
         b.refresh_fingerprint();
         assert_ne!(a.fingerprint, b.fingerprint);
+    }
+
+    #[test]
+    fn posture_score_grade_and_priority_are_deterministic() {
+        let mut zeta = sample_finding(vec!["zeta".to_string()]);
+        zeta.id = "EF-Z-001".to_string();
+        zeta.target = "zeta".to_string();
+        zeta.refresh_fingerprint();
+        let mut alpha = sample_finding(vec!["alpha".to_string()]);
+        alpha.id = "EF-A-001".to_string();
+        alpha.target = "alpha".to_string();
+        alpha.refresh_fingerprint();
+        let mut medium = sample_finding(vec!["medium".to_string()]);
+        medium.id = "EF-M-001".to_string();
+        medium.severity = Severity::Medium;
+        medium.refresh_fingerprint();
+        let posture = PostureSummary::from_findings(&[zeta, medium, alpha], Severity::Info);
+
+        assert_eq!(posture.score, 40);
+        assert_eq!(posture.grade, PostureGrade::D);
+        assert_eq!(posture.priority_risks.len(), 3);
+        assert_eq!(posture.priority_risks[0].finding_id, "EF-A-001");
+        assert_eq!(posture.priority_risks[1].finding_id, "EF-Z-001");
+        assert_eq!(posture.recommended_actions[0].finding_id, "EF-A-001");
+    }
+
+    #[test]
+    fn posture_excludes_resolved_and_clamps_score() {
+        let mut resolved = sample_finding(vec!["resolved".to_string()]);
+        resolved.baseline_status = BaselineStatus::Resolved;
+        let active: Vec<Finding> = (0..5)
+            .map(|index| {
+                let mut finding = sample_finding(vec![format!("active-{index}")]);
+                finding.id = format!("EF-A-{index:03}");
+                finding.refresh_fingerprint();
+                finding
+            })
+            .collect();
+        let mut findings = active;
+        findings.push(resolved);
+        let posture = PostureSummary::from_findings(&findings, Severity::Info);
+
+        assert_eq!(posture.score, 0);
+        assert_eq!(posture.grade, PostureGrade::F);
+        assert_eq!(posture.active_findings, 5);
+        assert_eq!(posture.high, 5);
+        assert_eq!(posture.priority_risks.len(), 3);
+        assert!(posture
+            .priority_risks
+            .iter()
+            .all(|risk| risk.finding_id != "EF-MCP-001"));
+    }
+
+    #[test]
+    fn posture_no_scored_findings_is_a_grade() {
+        let mut info = sample_finding(vec!["info".to_string()]);
+        info.severity = Severity::Info;
+        info.refresh_fingerprint();
+        let posture = PostureSummary::from_findings(&[info], Severity::Info);
+
+        assert_eq!(posture.score, 100);
+        assert_eq!(posture.grade, PostureGrade::A);
+        assert!(posture.assessment.contains("not proof"));
+        assert!(posture.priority_risks.is_empty());
+        assert!(posture.recommended_actions.is_empty());
+    }
+
+    #[test]
+    fn posture_grade_boundaries_are_exact() {
+        let cases = [
+            (100, PostureGrade::A),
+            (90, PostureGrade::A),
+            (89, PostureGrade::B),
+            (75, PostureGrade::B),
+            (74, PostureGrade::C),
+            (55, PostureGrade::C),
+            (54, PostureGrade::D),
+            (30, PostureGrade::D),
+            (29, PostureGrade::F),
+            (0, PostureGrade::F),
+        ];
+
+        for (score, expected_grade) in cases {
+            assert_eq!(
+                PostureGrade::from_score(score),
+                expected_grade,
+                "score={score}"
+            );
+        }
+    }
+
+    #[test]
+    fn posture_scope_records_the_effective_display_threshold() {
+        let posture = PostureSummary::from_findings(&[], Severity::High);
+
+        assert_eq!(posture.scope.finding_selection, "displayed-active-findings");
+        assert_eq!(posture.scope.severity_threshold, Severity::High);
+        assert_eq!(posture.scope.resolved_baseline_findings, "excluded");
+        assert_eq!(
+            posture.scope.human_label(),
+            "Displayed active findings at severity threshold: high"
+        );
+    }
+
+    #[test]
+    fn posture_repeated_input_has_identical_priority_and_action_order() {
+        let mut first = sample_finding(vec!["first".to_string()]);
+        first.id = "EF-B-001".to_string();
+        first.target = "first".to_string();
+        first.refresh_fingerprint();
+        let mut second = sample_finding(vec!["second".to_string()]);
+        second.id = "EF-A-001".to_string();
+        second.target = "second".to_string();
+        second.refresh_fingerprint();
+        let findings = vec![first, second];
+
+        let initial = PostureSummary::from_findings(&findings, Severity::Info);
+        let repeated = PostureSummary::from_findings(&findings, Severity::Info);
+
+        assert_eq!(initial.priority_risks, repeated.priority_risks);
+        assert_eq!(initial.recommended_actions, repeated.recommended_actions);
+        assert_eq!(
+            initial
+                .priority_risks
+                .iter()
+                .map(|risk| risk.finding_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["EF-A-001", "EF-B-001"]
+        );
     }
 
     fn write_temp_file(name: &str, contents: &[u8]) -> std::path::PathBuf {

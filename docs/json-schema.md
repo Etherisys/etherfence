@@ -22,8 +22,25 @@ CLI filtering with `--severity-threshold` changes which findings are included in
 | `inventory` | array | additive | Discovered agent config inventory. |
 | `findings` | array | additive | Displayed findings after severity threshold and optional baseline comparison. |
 | `summary` | object | stable | Counts for displayed findings and inventory items. |
+| `posture` | object/null | optional, additive | Deterministic advisory score, grade, assessment, active counts, up to three priority risks, and linked next actions derived from displayed active findings. |
 | `policy` | object/null | optional | Policy evaluation metadata when `--policy` or `--policy-profile` is used. |
 | `baseline` | object/null | optional | Baseline comparison metadata when `--baseline` is used. |
+
+## Additive posture summary (v1.7.0)
+
+`posture` is an optional additive object in the unchanged `ef-scan-report/v0.1.1` contract. v1.7.0 scans populate it; consumers that read the pre-v1.7.0 fields remain compatible by ignoring it. It is local, read-only, advisory prioritization: it neither remediates findings nor proves that a host is secure.
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `scope` | object | Explicit additive selection context: `finding_selection` is `displayed-active-findings`, `severity_threshold` is the effective CLI threshold, and `resolved_baseline_findings` is `excluded`. The score is not an unfiltered host-wide security score. |
+| `score` | integer | Inclusive 0–100 score: `max(0, 100 - 25*high - 10*medium - 2*low)` over active displayed findings. Info findings do not reduce the score. |
+| `grade` | string | `a`, `b`, `c`, `d`, or `f`: 90–100, 75–89, 55–74, 30–54, and 0–29 respectively. |
+| `assessment` | string | Deterministic advisory interpretation of the score/grade. |
+| `active_findings`, `high`, `medium`, `low`, `info` | integer | Counts after excluding `baseline_status: "resolved"`. These counts use the same displayed-finding selection as the report. |
+| `priority_risks` | array | At most three active risks, sorted by severity descending, then finding ID, target, agent key, and fingerprint. Each has `finding_id`, `severity`, `title`, `agent`, `target`, `fingerprint`, and `why_this_matters` (the finding's existing impact text). |
+| `recommended_actions` | array | One existing recommendation per priority risk, in the same order, with `finding_id` and `recommendation`. |
+
+Resolved baseline entries remain in the existing report evidence but never lower `score` or consume a priority/action slot. `--severity-threshold` continues to define which findings are displayed; posture describes that output and does not affect detector behavior, baselines, `--fail-on`, `--fail-on-new`, or exit codes. SARIF and baseline-file schemas are unchanged.
 
 ## Finding
 
