@@ -1,5 +1,13 @@
 use anyhow::Result;
-use etherfence_core::{CoverageStatus, Finding, ScanReport, Severity};
+use etherfence_core::{CoverageStatus, Finding, FindingCategory, ScanReport, Severity};
+
+/// Category display order for grouped human/Markdown findings: inventory and
+/// informational findings (never scored) before the scored-risk group.
+const CATEGORY_ORDERED: [FindingCategory; 3] = [
+    FindingCategory::Inventory,
+    FindingCategory::Informational,
+    FindingCategory::Risk,
+];
 use serde_json::{json, Value as JsonValue};
 
 pub mod human_layout;
@@ -88,6 +96,7 @@ fn sarif_result(finding: &Finding) -> JsonValue {
         "target": finding.target,
         "configPath": finding.config_path,
         "etherfenceSeverity": finding.severity.label().to_ascii_lowercase(),
+        "etherfenceCategory": finding.category.key(),
         "baselineStatus": finding.baseline_status.label(),
         "policyStatus": finding.policy_status.label(),
         "evidence": finding.evidence,
@@ -288,39 +297,50 @@ pub fn to_markdown(report: &ScanReport) -> String {
     if report.findings.is_empty() {
         out.push_str("No findings displayed. Missing files are skipped gracefully; this does not prove the host is secure.\n\n");
     } else {
-        for severity in Severity::ORDERED_DESC {
-            let findings: Vec<&Finding> = report
+        for category in CATEGORY_ORDERED {
+            let category_findings: Vec<&Finding> = report
                 .findings
                 .iter()
-                .filter(|finding| finding.severity == severity)
+                .filter(|finding| finding.category == category)
                 .collect();
-            if findings.is_empty() {
+            if category_findings.is_empty() {
                 continue;
             }
-            out.push_str(&format!("### {}\n\n", severity.label()));
-            for finding in findings {
-                out.push_str(&format!("#### {} - {}\n\n", finding.id, finding.title));
-                out.push_str(&format!(
-                    "- Status: `{}`\n",
-                    finding.baseline_status.label()
-                ));
-                out.push_str(&format!(
-                    "- Policy status: `{}`\n",
-                    finding.policy_status.label()
-                ));
-                if let Some(policy_id) = &finding.policy_id {
-                    out.push_str(&format!("- Policy ID: `{policy_id}`\n"));
+            out.push_str(&format!("### {}\n\n", category.label()));
+            for severity in Severity::ORDERED_DESC {
+                let findings: Vec<&Finding> = category_findings
+                    .iter()
+                    .filter(|finding| finding.severity == severity)
+                    .copied()
+                    .collect();
+                if findings.is_empty() {
+                    continue;
                 }
-                out.push_str(&format!("- Fingerprint: `{}`\n", finding.fingerprint));
-                out.push_str(&format!("- Agent: **{}**\n", finding.agent));
-                out.push_str(&format!(
-                    "- Target: `{}`\n",
-                    human_layout::sanitize_untrusted_text(&finding.target)
-                ));
-                out.push_str(&format!("- Config: `{}`\n", finding.config_path));
-                out.push_str(&format!("- Rationale: {}\n", finding.rationale));
-                out.push_str(&format!("- Impact: {}\n", finding.impact));
-                out.push_str(&format!("- Recommendation: {}\n\n", finding.recommendation));
+                out.push_str(&format!("#### {}\n\n", severity.label()));
+                for finding in findings {
+                    out.push_str(&format!("##### {} - {}\n\n", finding.id, finding.title));
+                    out.push_str(&format!(
+                        "- Status: `{}`\n",
+                        finding.baseline_status.label()
+                    ));
+                    out.push_str(&format!(
+                        "- Policy status: `{}`\n",
+                        finding.policy_status.label()
+                    ));
+                    if let Some(policy_id) = &finding.policy_id {
+                        out.push_str(&format!("- Policy ID: `{policy_id}`\n"));
+                    }
+                    out.push_str(&format!("- Fingerprint: `{}`\n", finding.fingerprint));
+                    out.push_str(&format!("- Agent: **{}**\n", finding.agent));
+                    out.push_str(&format!(
+                        "- Target: `{}`\n",
+                        human_layout::sanitize_untrusted_text(&finding.target)
+                    ));
+                    out.push_str(&format!("- Config: `{}`\n", finding.config_path));
+                    out.push_str(&format!("- Rationale: {}\n", finding.rationale));
+                    out.push_str(&format!("- Impact: {}\n", finding.impact));
+                    out.push_str(&format!("- Recommendation: {}\n\n", finding.recommendation));
+                }
             }
         }
     }
@@ -545,49 +565,60 @@ fn append_human_findings(out: &mut String, report: &ScanReport, width: usize) {
             width,
         );
     } else {
-        out.push_str("Findings by severity:\n");
-        for severity in Severity::ORDERED_DESC {
-            let findings: Vec<&Finding> = report
+        out.push_str("Findings by category, then severity:\n");
+        for category in CATEGORY_ORDERED {
+            let category_findings: Vec<&Finding> = report
                 .findings
                 .iter()
-                .filter(|finding| finding.severity == severity)
+                .filter(|finding| finding.category == category)
                 .collect();
-            if findings.is_empty() {
+            if category_findings.is_empty() {
                 continue;
             }
-            out.push_str(&format!("\n{}\n", severity.label()));
-            for finding in findings {
-                append_wrapped(
-                    out,
-                    "- ",
-                    "  ",
-                    &format!(
-                        "{} {}: {} [{} / {}] status={} policy_status={} fingerprint={}",
-                        finding.id,
-                        finding.title,
-                        human_layout::sanitize_untrusted_text(&finding.target),
-                        finding.agent,
-                        finding.config_path,
-                        finding.baseline_status.label(),
-                        finding.policy_status.label(),
-                        finding.fingerprint
-                    ),
-                    width,
-                );
-                append_wrapped(
-                    out,
-                    "  Rationale: ",
-                    "             ",
-                    &finding.rationale,
-                    width,
-                );
-                append_wrapped(
-                    out,
-                    "  Recommendation: ",
-                    "                  ",
-                    &finding.recommendation,
-                    width,
-                );
+            out.push_str(&format!("\n== {} ==\n", category.label()));
+            for severity in Severity::ORDERED_DESC {
+                let findings: Vec<&Finding> = category_findings
+                    .iter()
+                    .filter(|finding| finding.severity == severity)
+                    .copied()
+                    .collect();
+                if findings.is_empty() {
+                    continue;
+                }
+                out.push_str(&format!("\n{}\n", severity.label()));
+                for finding in findings {
+                    append_wrapped(
+                        out,
+                        "- ",
+                        "  ",
+                        &format!(
+                            "{} {}: {} [{} / {}] status={} policy_status={} fingerprint={}",
+                            finding.id,
+                            finding.title,
+                            human_layout::sanitize_untrusted_text(&finding.target),
+                            finding.agent,
+                            finding.config_path,
+                            finding.baseline_status.label(),
+                            finding.policy_status.label(),
+                            finding.fingerprint
+                        ),
+                        width,
+                    );
+                    append_wrapped(
+                        out,
+                        "  Rationale: ",
+                        "             ",
+                        &finding.rationale,
+                        width,
+                    );
+                    append_wrapped(
+                        out,
+                        "  Recommendation: ",
+                        "                  ",
+                        &finding.recommendation,
+                        width,
+                    );
+                }
             }
         }
     }
@@ -626,6 +657,76 @@ fn coverage_md_label(status: &CoverageStatus) -> &'static str {
 mod tests {
     use super::*;
     use etherfence_core::{ScanReport, Summary};
+
+    fn mixed_category_finding(id: &str, severity: Severity, category: FindingCategory) -> Finding {
+        use etherfence_core::{AgentKind, BaselineStatus, FindingKind, PolicyStatus};
+        let mut finding = Finding {
+            id: id.to_string(),
+            title: format!("{id} title"),
+            severity,
+            kind: FindingKind::McpServerConfigured,
+            agent: AgentKind::ClaudeCode,
+            target: "server".to_string(),
+            config_path: "~/.claude.json".to_string(),
+            rationale: "rationale".to_string(),
+            impact: "impact".to_string(),
+            recommendation: "recommendation".to_string(),
+            references: Vec::new(),
+            fingerprint: String::new(),
+            baseline_status: BaselineStatus::NotApplicable,
+            policy_status: PolicyStatus::NotApplicable,
+            policy_id: None,
+            evidence: vec!["server=server".to_string()],
+            category,
+        };
+        finding.refresh_fingerprint();
+        finding
+    }
+
+    #[test]
+    fn markdown_and_human_findings_group_by_category_then_severity() {
+        let findings = vec![
+            mixed_category_finding("EF-MCP-000", Severity::Info, FindingCategory::Inventory),
+            mixed_category_finding(
+                "EF-TIRITH-001",
+                Severity::Info,
+                FindingCategory::Informational,
+            ),
+            mixed_category_finding("EF-MCP-001", Severity::High, FindingCategory::Risk),
+        ];
+        let report = ScanReport {
+            schema_version: "ef-scan-report/v0.1.3".to_string(),
+            tool: "etherfence".to_string(),
+            version: "1.7.4".to_string(),
+            status: "stable-local-scan".to_string(),
+            scanned_root: "/home/user".to_string(),
+            inventory: Vec::new(),
+            findings,
+            summary: Summary::from_counts(0, &[]),
+            posture: None,
+            policy: None,
+            baseline: None,
+            protection_coverage: None,
+        };
+
+        let markdown = to_markdown(&report);
+        let inventory_pos = markdown.find("### Inventory").expect("inventory heading");
+        let informational_pos = markdown
+            .find("### Informational")
+            .expect("informational heading");
+        let risk_pos = markdown.find("### Scored risk").expect("risk heading");
+        assert!(inventory_pos < informational_pos);
+        assert!(informational_pos < risk_pos);
+
+        let human = to_human(&report);
+        let human_inventory_pos = human.find("== Inventory ==").expect("inventory section");
+        let human_informational_pos = human
+            .find("== Informational ==")
+            .expect("informational section");
+        let human_risk_pos = human.find("== Scored risk ==").expect("risk section");
+        assert!(human_inventory_pos < human_informational_pos);
+        assert!(human_informational_pos < human_risk_pos);
+    }
 
     #[test]
     fn renders_empty_human_report() {
@@ -709,10 +810,11 @@ mod tests {
         };
         assert!(to_human(&report).contains("Security posture: 100/100 (grade A)"));
         assert!(to_human(&report)
-            .contains("Scope: Displayed active findings at severity threshold: info"));
+            .contains("Scope: Displayed active scored-risk findings at severity threshold: info"));
         assert!(to_markdown(&report).contains("## Security Posture"));
-        assert!(to_markdown(&report)
-            .contains("**Scope:** Displayed active findings at severity threshold: info"));
+        assert!(to_markdown(&report).contains(
+            "**Scope:** Displayed active scored-risk findings at severity threshold: info"
+        ));
     }
 
     #[test]
@@ -821,7 +923,9 @@ mod tests {
 
     #[test]
     fn renders_sarif_with_rule_and_result_for_finding() {
-        use etherfence_core::{AgentKind, BaselineStatus, FindingKind, PolicyStatus};
+        use etherfence_core::{
+            AgentKind, BaselineStatus, FindingCategory, FindingKind, PolicyStatus,
+        };
         let mut finding = Finding {
             id: "EF-MCP-001".to_string(),
             title: "Broad filesystem access hint".to_string(),
@@ -838,7 +942,8 @@ mod tests {
             baseline_status: BaselineStatus::NotApplicable,
             policy_status: PolicyStatus::NotApplicable,
             policy_id: None,
-            evidence: vec!["/home/user".to_string()],
+            evidence: vec!["args[1]=/home/user".to_string()],
+            category: FindingCategory::Risk,
         };
         finding.refresh_fingerprint();
         let report = ScanReport {
@@ -877,5 +982,6 @@ mod tests {
             .unwrap()
             .starts_with("efp1-"));
         assert_eq!(result["properties"]["baselineStatus"], "not_applicable");
+        assert_eq!(result["properties"]["etherfenceCategory"], "risk");
     }
 }

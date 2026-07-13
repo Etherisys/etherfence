@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
 use etherfence_core::{
-    AgentKind, Finding, InventoryItem, PostureSummary, ScanReport, Severity,
+    AgentKind, Finding, FindingCategory, InventoryItem, PostureSummary, ScanReport, Severity,
     PARSE_ERROR_EVIDENCE_PREFIX,
 };
 
@@ -239,9 +239,15 @@ fn render_clients_and_servers(
                         .unwrap_or_default();
 
                     let has_findings = !server_findings.is_empty();
-                    let highest_severity = server_findings.iter().map(|f| f.severity).max();
+                    // Status reflects actionable risk, not inventory/informational
+                    // findings: a server with only non-scoring findings is "OK".
+                    let highest_risk_severity = server_findings
+                        .iter()
+                        .filter(|f| f.category == FindingCategory::Risk)
+                        .map(|f| f.severity)
+                        .max();
 
-                    let status_marker = match highest_severity {
+                    let status_marker = match highest_risk_severity {
                         Some(Severity::High) => {
                             theme.danger.apply_to("HIGH".to_string()).to_string()
                         }
@@ -330,11 +336,15 @@ fn render_findings(
     findings.sort_by_key(|f| (std::cmp::Reverse(f.severity), &f.id));
 
     for finding in findings {
-        let badge = match finding.severity {
-            Severity::High => theme.danger.apply_to(ui::pad("HIGH", 7)).to_string(),
-            Severity::Medium => theme.warning.apply_to(ui::pad("MEDIUM", 7)).to_string(),
-            Severity::Low => theme.info.apply_to(ui::pad("LOW", 7)).to_string(),
-            Severity::Info => theme.muted.apply_to(ui::pad("INFO", 7)).to_string(),
+        let badge = match finding.category {
+            FindingCategory::Inventory => theme.muted.apply_to(ui::pad("OBS", 7)).to_string(),
+            FindingCategory::Informational => theme.muted.apply_to(ui::pad("INFO", 7)).to_string(),
+            FindingCategory::Risk => match finding.severity {
+                Severity::High => theme.danger.apply_to(ui::pad("HIGH", 7)).to_string(),
+                Severity::Medium => theme.warning.apply_to(ui::pad("MEDIUM", 7)).to_string(),
+                Severity::Low => theme.info.apply_to(ui::pad("LOW", 7)).to_string(),
+                Severity::Info => theme.muted.apply_to(ui::pad("INFO", 7)).to_string(),
+            },
         };
 
         let prefix = format!("    {badge} ");
@@ -378,7 +388,7 @@ fn render_findings(
                     &format!(
                         "fingerprint={}  schema={}  policy_status={}  baseline={}",
                         finding.fingerprint,
-                        "ef-scan-report/v0.1.2",
+                        "ef-scan-report/v0.1.3",
                         finding.policy_status.label(),
                         finding.baseline_status.label(),
                     ),
@@ -408,12 +418,12 @@ fn render_consolidated_recommendations(
         return;
     }
 
-    // Group findings by id. EF-MCP-000 ("MCP server configured") is supporting
-    // context — the server already appears in the section above — not an
-    // actionable remediation, so it never becomes a numbered recommendation.
+    // Group findings by id. Inventory/informational findings are supporting
+    // context — already shown in the sections above — not actionable
+    // remediations, so only scored-risk findings become numbered recommendations.
     let mut by_id: BTreeMap<&str, Vec<&Finding>> = BTreeMap::new();
     for finding in &report.findings {
-        if finding.id == "EF-MCP-000" {
+        if finding.category != FindingCategory::Risk {
             continue;
         }
         by_id.entry(&finding.id).or_default().push(finding);

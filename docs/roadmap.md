@@ -756,6 +756,31 @@
   narrow-terminal wrapping and ANSI suppression fixes
 - No scan logic, scoring, finding, schema, or machine-format change
 
+## v1.7.4 - posture score risk separation
+
+- Posture score/grade now reflect only actionable, scored-risk findings: an
+  explicit `category` (`inventory`, `informational`, `risk`) on every
+  `Finding`, independent of `severity`, gates the score
+- `EF-MCP-000` ("MCP server configured") and `EF-MCP-004` ("MCP environment
+  variables exposed") move to `severity: info`, `category: inventory` and no
+  longer reduce the score — configuring more MCP servers or having ordinary
+  environment variables never lowers posture on its own
+- `EF-SEC-001` (secret-shaped environment variable name) is unchanged:
+  `severity: medium`, `category: risk`, still reduces the score exactly as
+  before
+- Every heuristic finding's `evidence` now names the specific server field
+  matched (`server=`, `command=`, `args[N]=`, `url=`, `env=`) instead of a
+  bare value, without ever exposing a secret value
+- Default and verbose human output add distinct "Inventory observations" and
+  "Informational findings" sections alongside the existing "Priority
+  findings" (scored risk) and "Protection coverage" sections; verbose per-
+  finding badges add a new `OBS` marker for inventory findings
+- `ef-scan-report` bumps `v0.1.2` → `v0.1.3` (additive `category` field;
+  documented severity/evidence changes for the finding IDs above);
+  `ef-baseline` bumps `v0.1.3` → `v0.1.4` (baseline files embed full
+  `Finding` objects). Baseline files written before v1.7.4 fail closed with
+  an explicit regenerate-with-`--write-baseline` error
+
 ## v0.2.x ideas
 
 - Expand tested config schemas and platform paths

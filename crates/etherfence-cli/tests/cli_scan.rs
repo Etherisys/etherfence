@@ -55,9 +55,9 @@ fn scan_fixture_json_has_stable_top_level_schema() {
     );
     let json: Value = serde_json::from_slice(&output.stdout).expect("valid JSON output");
 
-    assert_eq!(json["schema_version"], "ef-scan-report/v0.1.2");
+    assert_eq!(json["schema_version"], "ef-scan-report/v0.1.3");
     assert_eq!(json["tool"], "etherfence");
-    assert_eq!(json["version"], "1.7.3");
+    assert_eq!(json["version"], "1.7.4");
     assert_eq!(json["status"], "stable-local-scan");
     assert!(json.get("scanned_root").is_some());
     assert!(json["inventory"].is_array());
@@ -96,13 +96,13 @@ fn scan_fixture_json_has_stable_top_level_schema() {
         "fingerprint",
         "baseline_status",
         "policy_status",
+        "category",
     ] {
         assert!(first.get(key).is_some(), "missing finding key {key}");
     }
 
-    let ids: Vec<&str> = json["findings"]
-        .as_array()
-        .unwrap()
+    let findings = json["findings"].as_array().unwrap();
+    let ids: Vec<&str> = findings
         .iter()
         .filter_map(|finding| finding["id"].as_str())
         .collect();
@@ -112,6 +112,26 @@ fn scan_fixture_json_has_stable_top_level_schema() {
     assert!(ids.contains(&"EF-MCP-004"));
     assert!(ids.contains(&"EF-SEC-001"));
     assert!(ids.contains(&"EF-TIRITH-002"));
+
+    // EF-MCP-000/004 are pure inventory facts: informational severity, never
+    // scored. EF-SEC-001 is preserved exactly as a scored, actionable finding.
+    for finding in findings {
+        match finding["id"].as_str().unwrap() {
+            "EF-MCP-000" | "EF-MCP-004" => {
+                assert_eq!(finding["severity"], "info");
+                assert_eq!(finding["category"], "inventory");
+            }
+            "EF-SEC-001" => {
+                assert_eq!(finding["severity"], "medium");
+                assert_eq!(finding["category"], "risk");
+            }
+            "EF-TIRITH-001" | "EF-TIRITH-002" => {
+                assert_eq!(finding["severity"], "info");
+                assert_eq!(finding["category"], "informational");
+            }
+            _ => {}
+        }
+    }
 }
 
 #[test]
@@ -159,10 +179,12 @@ fn scan_fixture_human_default_is_executive_summary() {
     assert!(stdout.contains("Posture"));
     assert!(stdout.contains("GRADE F"));
     assert!(stdout.contains("Scope"));
-    assert!(stdout.contains("Displayed active findings at severity threshold: info"));
+    assert!(stdout.contains("Displayed active scored-risk findings at severity threshold: info"));
     assert!(stdout.contains("Assessment"));
     assert!(stdout.contains("Overall status:"));
     assert!(stdout.contains("Clients"));
+    assert!(stdout.contains("Inventory observations"));
+    assert!(stdout.contains("Informational findings"));
     assert!(stdout.contains("Priority findings"));
     assert!(stdout.contains("Why this matters:"));
     assert!(stdout.contains("Next steps"));
@@ -280,12 +302,12 @@ fn scan_fixture_human_verbose_groups_by_severity_and_guidance() {
 
 #[test]
 fn scan_verbose_consolidated_excludes_context_and_orders_by_severity() {
-    // F-16: EF-MCP-000 ("MCP server configured") is context, not a numbered
-    // remediation, so it must not appear as a consolidated action (it uses the
-    // bracketed `[EF-MCP-000]` form only there).
+    // F-16 / v1.7.4: EF-MCP-000 ("MCP server configured") and EF-MCP-004
+    // ("MCP environment variables exposed") are non-scoring inventory
+    // observations, not actionable remediations, so neither may appear as a
+    // consolidated action (the bracketed `[ID]` form is only used there).
     // F-11: consolidated actions are ordered by severity then id — the High
-    // EF-MCP-001 is first, and the Medium EF-SEC-001 precedes the Low
-    // EF-MCP-004 (which pure alphabetical id ordering would have reversed).
+    // EF-MCP-001 is first, ahead of the Medium EF-SEC-001.
     let root = fixture_root("home");
     let output = run(&["scan", "--root", &root, "--verbose"]);
     assert!(output.status.success());
@@ -296,15 +318,66 @@ fn scan_verbose_consolidated_excludes_context_and_orders_by_severity() {
         "EF-MCP-000 must not be a consolidated recommendation"
     );
     assert!(
+        !stdout.contains("[EF-MCP-004]"),
+        "EF-MCP-004 must not be a consolidated recommendation (non-scoring inventory observation)"
+    );
+    assert!(
         stdout.contains("1. [EF-MCP-001]"),
         "High finding must be #1"
     );
+    let high = stdout.find("[EF-MCP-001]").expect("EF-MCP-001 present");
     let sec = stdout.find("[EF-SEC-001]").expect("EF-SEC-001 present");
-    let low = stdout.find("[EF-MCP-004]").expect("EF-MCP-004 present");
     assert!(
-        sec < low,
-        "Medium EF-SEC-001 must precede Low EF-MCP-004 (severity beats id)"
+        high < sec,
+        "High EF-MCP-001 must precede Medium EF-SEC-001 in consolidated actions"
     );
+}
+
+#[test]
+fn scan_verbose_shows_obs_badge_for_inventory_findings() {
+    // v1.7.4: EF-MCP-000/EF-MCP-004 are non-scoring inventory observations and
+    // must render with a distinct `OBS` badge, not a HIGH/MEDIUM/LOW/INFO
+    // severity badge, so they read as "observed" rather than "risky".
+    let root = fixture_root("home");
+    let output = run(&["scan", "--root", &root, "--verbose"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("OBS"),
+        "verbose output must show an OBS badge for inventory findings"
+    );
+}
+
+#[test]
+fn no_secret_value_ever_appears_in_any_output_format() {
+    // FR-006 / SC-004: the `home` fixture's MCP servers carry env vars with
+    // secret-shaped names whose configured values are "fixture-value" and
+    // "test-fixture-key-redacted". Those raw values must never appear in any
+    // scan output format — only the (non-secret) variable names may appear.
+    let root = fixture_root("home");
+    let secret_values = ["fixture-value", "test-fixture-key-redacted"];
+
+    for format in ["human", "markdown", "sarif", "json"] {
+        let output = run(&["scan", "--root", &root, "--format", format]);
+        assert!(output.status.success(), "format={format}");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        for secret in secret_values {
+            assert!(
+                !stdout.contains(secret),
+                "format={format} must never contain the raw secret value {secret:?}"
+            );
+        }
+    }
+
+    let verbose = run(&["scan", "--root", &root, "--verbose", "--debug"]);
+    assert!(verbose.status.success());
+    let verbose_stdout = String::from_utf8_lossy(&verbose.stdout);
+    for secret in secret_values {
+        assert!(
+            !verbose_stdout.contains(secret),
+            "verbose --debug output must never contain the raw secret value {secret:?}"
+        );
+    }
 }
 
 #[test]
@@ -319,7 +392,7 @@ fn scan_verbose_debug_shows_fingerprints_and_schema() {
         "debug shows fingerprints"
     );
     assert!(
-        stdout.contains("schema=ef-scan-report/v0.1.2"),
+        stdout.contains("schema=ef-scan-report/v0.1.3"),
         "debug shows schema id"
     );
 
@@ -397,7 +470,7 @@ fn severity_threshold_high_displays_only_high_findings() {
 #[test]
 fn posture_scope_is_visible_and_matches_the_effective_threshold_in_all_formats() {
     let root = fixture_root("home");
-    let expected_scope = "Displayed active findings at severity threshold: high";
+    let expected_scope = "Displayed active scored-risk findings at severity threshold: high";
 
     let default_human = run(&["scan", "--root", &root, "--severity-threshold", "high"]);
     assert!(default_human.status.success());
@@ -441,7 +514,7 @@ fn posture_scope_is_visible_and_matches_the_effective_threshold_in_all_formats()
     let report: Value = serde_json::from_slice(&json.stdout).expect("valid JSON output");
     assert_eq!(
         report["posture"]["scope"]["finding_selection"],
-        "displayed-active-findings"
+        "displayed-active-risk-category-findings"
     );
     assert_eq!(report["posture"]["scope"]["severity_threshold"], "high");
     assert_eq!(
@@ -512,7 +585,7 @@ fn write_baseline_creates_json_with_fingerprints() {
     assert!(output.status.success());
     let content = std::fs::read(&baseline).expect("baseline file exists");
     let json: Value = serde_json::from_slice(&content).expect("valid baseline json");
-    assert_eq!(json["schema_version"], "ef-baseline/v0.1.3");
+    assert_eq!(json["schema_version"], "ef-baseline/v0.1.4");
     assert_eq!(json["tool"], "etherfence");
     assert!(json["findings"].as_array().unwrap().len() > 10);
     assert!(json["findings"][0]["fingerprint"]
@@ -1166,7 +1239,7 @@ fn sarif_output_is_valid_and_maps_severity_levels() {
     );
     let driver = &json["runs"][0]["tool"]["driver"];
     assert_eq!(driver["name"], "etherfence");
-    assert_eq!(driver["version"], "1.7.3");
+    assert_eq!(driver["version"], "1.7.4");
 
     let rules = sarif_rules(&json);
     let rule_ids: Vec<&str> = rules

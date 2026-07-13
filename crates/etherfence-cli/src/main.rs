@@ -6,8 +6,9 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use etherfence_core::{
     home_relative_root, read_bounded_text_file, read_bounded_text_file_no_follow,
-    BaselineComparison, BaselineFile, BaselineStatus, CoverageStatus, Finding, PolicyMetadata,
-    PostureSummary, ScanReport, Severity, Summary, MAX_BASELINE_FILE_BYTES, MAX_CONFIG_FILE_BYTES,
+    BaselineComparison, BaselineFile, BaselineStatus, CoverageStatus, Finding, FindingCategory,
+    PolicyMetadata, PostureSummary, ScanReport, Severity, Summary, MAX_BASELINE_FILE_BYTES,
+    MAX_CONFIG_FILE_BYTES,
 };
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -2388,7 +2389,7 @@ fn run_scan(options: ScanOptions) -> Result<()> {
     let summary = Summary::from_counts(inventory.len(), &display_findings);
     let posture = PostureSummary::from_findings(&display_findings, options.severity_threshold);
     let report = ScanReport {
-        schema_version: "ef-scan-report/v0.1.2".to_string(),
+        schema_version: "ef-scan-report/v0.1.3".to_string(),
         tool: "etherfence".to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
         status: "stable-local-scan".to_string(),
@@ -2564,6 +2565,74 @@ fn render_scan_summary(report: &ScanReport) -> String {
             theme.muted.apply_to(ui::count_servers(0)).to_string()
         };
         let _ = writeln!(out, "{marker} {}{servers_label}", ui::pad(client, 20));
+    }
+
+    // ── Inventory observations ──────────────────────────────────────
+    let inventory_findings: Vec<&Finding> = report
+        .findings
+        .iter()
+        .filter(|finding| finding.category == FindingCategory::Inventory)
+        .collect();
+    let _ = writeln!(out, "\n{}", theme.section("Inventory observations"));
+    if inventory_findings.is_empty() {
+        let _ = writeln!(out, "No inventory observations recorded.");
+    } else {
+        let servers_configured = inventory_findings
+            .iter()
+            .filter(|finding| finding.id == "EF-MCP-000")
+            .count();
+        let servers_with_env = inventory_findings
+            .iter()
+            .filter(|finding| finding.id == "EF-MCP-004")
+            .count();
+        let _ = writeln!(
+            out,
+            "{}",
+            theme.key_value_wrapped(
+                "MCP servers configured",
+                &format!("{servers_configured} (non-scoring)"),
+                width,
+            )
+        );
+        if servers_with_env > 0 {
+            let _ = writeln!(
+                out,
+                "{}",
+                theme.key_value_wrapped(
+                    "Servers with environment variables",
+                    &format!("{servers_with_env} (non-scoring; see --verbose for names)"),
+                    width,
+                )
+            );
+        }
+    }
+
+    // ── Informational findings ──────────────────────────────────────
+    let informational_findings: Vec<&Finding> = report
+        .findings
+        .iter()
+        .filter(|finding| finding.category == FindingCategory::Informational)
+        .collect();
+    let _ = writeln!(out, "\n{}", theme.section("Informational findings"));
+    if informational_findings.is_empty() {
+        let _ = writeln!(out, "None.");
+    } else {
+        for finding in &informational_findings {
+            let _ = writeln!(
+                out,
+                "{}",
+                ui::wrap_prefixed(
+                    "- ",
+                    "  ",
+                    &format!(
+                        "{} ({})",
+                        etherfence_report::human_layout::sanitize_untrusted_text(&finding.title),
+                        finding.id
+                    ),
+                    width,
+                )
+            );
+        }
     }
 
     // ── Protection coverage ────────────────────────────────────────
@@ -2867,7 +2936,7 @@ fn apply_baseline(
 /// rather than silently marking every current finding `New` and every baseline
 /// finding `Resolved` — which would make `--fail-on-new` fire (or, on a
 /// fingerprint overlap, fail to fire) misleadingly.
-const BASELINE_SCHEMA_VERSION: &str = "ef-baseline/v0.1.3";
+const BASELINE_SCHEMA_VERSION: &str = "ef-baseline/v0.1.4";
 
 // `path` here is an explicit, trusted-operator CLI input (`--baseline`).
 // A swapped/symlinked baseline is a misleading input, so the read fails

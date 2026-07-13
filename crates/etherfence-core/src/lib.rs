@@ -440,6 +440,42 @@ impl PolicyStatus {
     }
 }
 
+/// Whether a finding is a scored, actionable risk or non-scoring context.
+/// Independent of `Severity`, which represents risk magnitude only:
+/// `category` alone determines whether a finding affects the posture score.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum FindingCategory {
+    /// A purely descriptive fact about what is configured (e.g. a server
+    /// exists). Never scores.
+    Inventory,
+    /// Contextual signal that is neither inventory nor actionable risk
+    /// (e.g. complementary tooling detected). Never scores.
+    Informational,
+    /// Actionable, severity-weighted risk. The only category that
+    /// contributes to the posture score.
+    #[default]
+    Risk,
+}
+
+impl FindingCategory {
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Inventory => "inventory",
+            Self::Informational => "informational",
+            Self::Risk => "risk",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Inventory => "Inventory",
+            Self::Informational => "Informational",
+            Self::Risk => "Scored risk",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Finding {
     pub id: String,
@@ -461,6 +497,8 @@ pub struct Finding {
     pub policy_id: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub evidence: Vec<String>,
+    #[serde(default)]
+    pub category: FindingCategory,
 }
 
 impl Finding {
@@ -553,7 +591,7 @@ pub struct PostureScope {
 impl PostureScope {
     pub fn displayed_active(severity_threshold: Severity) -> Self {
         Self {
-            finding_selection: "displayed-active-findings".to_string(),
+            finding_selection: "displayed-active-risk-category-findings".to_string(),
             severity_threshold,
             resolved_baseline_findings: "excluded".to_string(),
         }
@@ -561,7 +599,7 @@ impl PostureScope {
 
     pub fn human_label(&self) -> String {
         format!(
-            "Displayed active findings at severity threshold: {}",
+            "Displayed active scored-risk findings at severity threshold: {} (inventory and informational findings are shown separately and never scored)",
             self.severity_threshold.label().to_lowercase()
         )
     }
@@ -610,6 +648,7 @@ impl PostureSummary {
         let mut active: Vec<&Finding> = findings
             .iter()
             .filter(|finding| finding.baseline_status != BaselineStatus::Resolved)
+            .filter(|finding| finding.category == FindingCategory::Risk)
             .collect();
         let high = active
             .iter()
@@ -882,6 +921,7 @@ mod tests {
             policy_status: PolicyStatus::NotApplicable,
             policy_id: None,
             evidence,
+            category: FindingCategory::Risk,
         };
         finding.refresh_fingerprint();
         finding
@@ -1016,13 +1056,67 @@ mod tests {
     fn posture_scope_records_the_effective_display_threshold() {
         let posture = PostureSummary::from_findings(&[], Severity::High);
 
-        assert_eq!(posture.scope.finding_selection, "displayed-active-findings");
+        assert_eq!(
+            posture.scope.finding_selection,
+            "displayed-active-risk-category-findings"
+        );
         assert_eq!(posture.scope.severity_threshold, Severity::High);
         assert_eq!(posture.scope.resolved_baseline_findings, "excluded");
         assert_eq!(
             posture.scope.human_label(),
-            "Displayed active findings at severity threshold: high"
+            "Displayed active scored-risk findings at severity threshold: high (inventory and informational findings are shown separately and never scored)"
         );
+    }
+
+    #[test]
+    fn posture_ignores_inventory_and_informational_findings_regardless_of_count() {
+        let mut inventory_findings: Vec<Finding> = (0..5)
+            .map(|index| {
+                let mut finding = sample_finding(vec![format!("inventory-{index}")]);
+                finding.id = "EF-MCP-000".to_string();
+                finding.severity = Severity::Info;
+                finding.category = FindingCategory::Inventory;
+                finding.target = format!("server-{index}");
+                finding.refresh_fingerprint();
+                finding
+            })
+            .collect();
+        let mut informational = sample_finding(vec!["tirith".to_string()]);
+        informational.id = "EF-TIRITH-001".to_string();
+        informational.severity = Severity::Info;
+        informational.category = FindingCategory::Informational;
+        informational.refresh_fingerprint();
+        inventory_findings.push(informational);
+
+        let posture = PostureSummary::from_findings(&inventory_findings, Severity::Info);
+
+        assert_eq!(posture.score, 100);
+        assert_eq!(posture.grade, PostureGrade::A);
+        assert_eq!(posture.active_findings, 0);
+        assert!(posture.priority_risks.is_empty());
+        assert!(posture.recommended_actions.is_empty());
+    }
+
+    #[test]
+    fn posture_counts_only_risk_category_findings() {
+        let mut risk = sample_finding(vec!["risk".to_string()]);
+        risk.id = "EF-MCP-001".to_string();
+        risk.severity = Severity::High;
+        risk.category = FindingCategory::Risk;
+        risk.refresh_fingerprint();
+
+        let mut inventory = sample_finding(vec!["inventory".to_string()]);
+        inventory.id = "EF-MCP-000".to_string();
+        inventory.severity = Severity::Info;
+        inventory.category = FindingCategory::Inventory;
+        inventory.refresh_fingerprint();
+
+        let posture = PostureSummary::from_findings(&[risk, inventory], Severity::Info);
+
+        assert_eq!(posture.active_findings, 1);
+        assert_eq!(posture.high, 1);
+        assert_eq!(posture.info, 0);
+        assert_eq!(posture.score, 75);
     }
 
     #[test]

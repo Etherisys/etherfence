@@ -19,12 +19,66 @@ scanning, or network interception.
 
 ## [Unreleased]
 
-Post-v1.7.3 security & correctness review. No schema version, scoring, or
-scan-discovery change. One machine-format change: `root`/`scanned_root` fields
-now render as `~`-relative display strings for a home-rooted scan instead of
-the literal filesystem path (see "Home paths kept out of shared machine
-output" below and `docs/json-schema.md`) — every other field name, type, and
-value is unchanged.
+## [1.7.4] - 2026-07-13
+
+Separates inventory observations from actionable security risk in the
+posture score, plus the post-v1.7.3 security & correctness review below.
+**Schema version change**: `ef-scan-report` bumps `v0.1.2` → `v0.1.3` and
+`ef-baseline` bumps `v0.1.3` → `v0.1.4` (see "Changed" below); the post-v1.7.3
+review portion of this release is otherwise scan-discovery-neutral. One
+additional machine-format change from that review: `root`/`scanned_root`
+fields now render as `~`-relative display strings for a home-rooted scan
+instead of the literal filesystem path (see "Home paths kept out of shared
+machine output" below and `docs/json-schema.md`) — every other field name,
+type, and value from that review is unchanged.
+
+### Changed
+
+- **Posture score reflects actionable risk, not inventory size** — every
+  `Finding` now carries an explicit `category` (`inventory`, `informational`,
+  or `risk`), independent of `severity`, and only `category: "risk"` findings
+  contribute to `posture.score`/`grade`/`active_findings`/`high`/`medium`/
+  `low`/`info`. `EF-MCP-000` ("MCP server configured") and `EF-MCP-004`
+  ("MCP environment variables exposed") move from `severity: "low"` to
+  `severity: "info"`, `category: "inventory"` — configuring more MCP servers,
+  or having ordinary (non-secret-shaped) environment variables, no longer
+  reduces the score. `EF-SEC-001` (secret-shaped environment variable name)
+  is unchanged: `severity: "medium"`, `category: "risk"`, and still reduces
+  the score exactly as before. `EF-TIRITH-001`/`EF-TIRITH-002` are now
+  `category: "informational"`. All other finding IDs (`EF-CFG-001`,
+  `EF-MCP-001`/`002`/`003`, `EF-SEC-001`, all `EF-POL-*`) keep their existing
+  severity and are `category: "risk"`, unchanged scoring behavior.
+- **Evidence names the matched field, never a secret value** — heuristic
+  finding evidence (`EF-MCP-001`/`002`/`003`/`004`, `EF-SEC-001`) is
+  normalized to a `field=value` format (`server=`, `command=`, `args[N]=`,
+  `url=`, `env=`) so every finding shows exactly which server field and
+  matched value/pattern triggered it. Environment-variable evidence is always
+  the variable **name**, never its (already-redacted) value — this was true
+  before and remains true. `EF-MCP-000`'s evidence format is unchanged.
+- **Human output separates inventory, risk, informational, and coverage** —
+  default and verbose `scan` output add distinct "Inventory observations" and
+  "Informational findings" sections alongside the existing "Priority
+  findings" (scored risk) and "Protection coverage" sections. Verbose
+  per-finding badges add a new `OBS` marker for inventory findings (instead
+  of a severity badge), and the per-server status marker in verbose output
+  now reflects only risk-category findings, so a server with only inventory/
+  informational findings shows `OK` instead of a severity badge. Markdown and
+  the `etherfence-report` `to_human` renderer group findings by category
+  (inventory, informational, risk) before severity. "Consolidated recommended
+  actions" now excludes every non-risk-category finding (previously only
+  `EF-MCP-000` was excluded by ID; `EF-MCP-004` is now excluded too, for the
+  same reason).
+- **Schema version bumps** — `ef-scan-report/v0.1.2` → `v0.1.3` (additive
+  `category` field on every `Finding`; documented `severity`/`evidence`
+  changes for the finding IDs above). `ef-baseline/v0.1.3` → `v0.1.4`
+  (baseline files embed complete `Finding` objects, so the same shape change
+  applies). **A baseline file written before v1.7.4 is rejected** by the
+  existing schema-version check with an explicit "regenerate it with
+  `--write-baseline`" error — it is never silently compared against
+  mismatched fingerprints. The evidence-format change also means fingerprints
+  for `EF-MCP-001`/`002`/`003`/`004` and `EF-SEC-001` differ from pre-v1.7.4
+  scans even where the underlying matching logic is unchanged; regenerate any
+  local baseline after upgrading.
 
 ### Security
 

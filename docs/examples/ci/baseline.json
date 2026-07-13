@@ -1,12 +1,12 @@
 {
-  "schema_version": "ef-baseline/v0.1.3",
+  "schema_version": "ef-baseline/v0.1.4",
   "tool": "etherfence",
-  "version": "1.7.3",
+  "version": "1.7.4",
   "findings": [
     {
       "id": "EF-MCP-000",
       "title": "MCP server configured",
-      "severity": "low",
+      "severity": "info",
       "kind": "mcp-server-configured",
       "agent": "claude-code",
       "target": "filesystem",
@@ -21,7 +21,8 @@
       "evidence": [
         "server=filesystem",
         "command=npx"
-      ]
+      ],
+      "category": "inventory"
     },
     {
       "id": "EF-MCP-001",
@@ -35,19 +36,20 @@
       "impact": "A compromised or over-permissioned agent workflow could read or modify more local files than intended.",
       "recommendation": "Restrict MCP filesystem servers to explicit project directories such as /path/to/project, avoid home-directory or root-level grants, and separate sensitive repos where possible.",
       "references": [],
-      "fingerprint": "efp1-cf3c4e23c37eaab2",
+      "fingerprint": "efp1-16a72601f34cc933",
       "baseline_status": "not-applicable",
       "policy_status": "not_applicable",
       "evidence": [
-        "filesystem",
-        "@modelcontextprotocol/server-filesystem",
-        "/home/user/projects"
-      ]
+        "server=filesystem",
+        "args[0]=@modelcontextprotocol/server-filesystem",
+        "args[1]=/home/user/projects"
+      ],
+      "category": "risk"
     },
     {
       "id": "EF-MCP-004",
       "title": "MCP environment variables exposed",
-      "severity": "low",
+      "severity": "info",
       "kind": "exposed-mcp-environment",
       "agent": "claude-code",
       "target": "filesystem",
@@ -56,12 +58,13 @@
       "impact": "Environment variables increase the data available to the MCP process and may include operational context or credentials.",
       "recommendation": "Keep MCP environment values minimal, prefer scoped tokens, and avoid sharing variables that are not required by the server.",
       "references": [],
-      "fingerprint": "efp1-3601982b9076984c",
+      "fingerprint": "efp1-e69e9bd5d7e8bc3a",
       "baseline_status": "not-applicable",
       "policy_status": "not_applicable",
       "evidence": [
-        "ANTHROPIC_API_KEY"
-      ]
+        "env=ANTHROPIC_API_KEY"
+      ],
+      "category": "inventory"
     },
     {
       "id": "EF-SEC-001",
@@ -75,17 +78,18 @@
       "impact": "If the MCP server is over-broad, compromised, or logs its environment, these credentials could be exposed.",
       "recommendation": "Use least-privilege tokens, rotate credentials periodically, avoid long-lived personal tokens, and confirm the server does not log environment values.",
       "references": [],
-      "fingerprint": "efp1-c291d749c002deef",
+      "fingerprint": "efp1-d10418bfe9126f25",
       "baseline_status": "not-applicable",
       "policy_status": "not_applicable",
       "evidence": [
-        "ANTHROPIC_API_KEY"
-      ]
+        "env=ANTHROPIC_API_KEY"
+      ],
+      "category": "risk"
     },
     {
       "id": "EF-MCP-000",
       "title": "MCP server configured",
-      "severity": "low",
+      "severity": "info",
       "kind": "mcp-server-configured",
       "agent": "cursor",
       "target": "shell-tools",
@@ -100,7 +104,8 @@
       "evidence": [
         "server=shell-tools",
         "command=bash"
-      ]
+      ],
+      "category": "inventory"
     },
     {
       "id": "EF-MCP-002",
@@ -114,18 +119,19 @@
       "impact": "Command-capable tools can materially change the host if misused by a prompt injection, confused deputy flow, or untrusted server.",
       "recommendation": "Review whether shell capability is necessary. Prefer narrower MCP servers, require human approval for risky actions, and use complementary terminal controls such as Tirith.",
       "references": [],
-      "fingerprint": "efp1-397cdfe335a4efba",
+      "fingerprint": "efp1-2da968e20d72c678",
       "baseline_status": "not-applicable",
       "policy_status": "not_applicable",
       "evidence": [
-        "shell-tools",
-        "bash"
-      ]
+        "server=shell-tools",
+        "command=bash"
+      ],
+      "category": "risk"
     },
     {
       "id": "EF-MCP-004",
       "title": "MCP environment variables exposed",
-      "severity": "low",
+      "severity": "info",
       "kind": "exposed-mcp-environment",
       "agent": "cursor",
       "target": "shell-tools",
@@ -134,12 +140,13 @@
       "impact": "Environment variables increase the data available to the MCP process and may include operational context or credentials.",
       "recommendation": "Keep MCP environment values minimal, prefer scoped tokens, and avoid sharing variables that are not required by the server.",
       "references": [],
-      "fingerprint": "efp1-5add9c1f2816501b",
+      "fingerprint": "efp1-9544c59e64f80f29",
       "baseline_status": "not-applicable",
       "policy_status": "not_applicable",
       "evidence": [
-        "TOOL_TOKEN"
-      ]
+        "env=TOOL_TOKEN"
+      ],
+      "category": "inventory"
     },
     {
       "id": "EF-SEC-001",
@@ -153,17 +160,18 @@
       "impact": "If the MCP server is over-broad, compromised, or logs its environment, these credentials could be exposed.",
       "recommendation": "Use least-privilege tokens, rotate credentials periodically, avoid long-lived personal tokens, and confirm the server does not log environment values.",
       "references": [],
-      "fingerprint": "efp1-b818fd4f69cf3296",
+      "fingerprint": "efp1-2ff12a811348fbc4",
       "baseline_status": "not-applicable",
       "policy_status": "not_applicable",
       "evidence": [
-        "TOOL_TOKEN"
-      ]
+        "env=TOOL_TOKEN"
+      ],
+      "category": "risk"
     },
     {
       "id": "EF-MCP-000",
       "title": "MCP server configured",
-      "severity": "low",
+      "severity": "info",
       "kind": "mcp-server-configured",
       "agent": "vs-code",
       "target": "browser",
@@ -179,7 +187,8 @@
         "server=browser",
         "command=node",
         "url=https://example.invalid/mcp"
-      ]
+      ],
+      "category": "inventory"
     },
     {
       "id": "EF-MCP-003",
@@ -193,19 +202,20 @@
       "impact": "Network-capable tools may exfiltrate context or fetch untrusted content that can influence an agent.",
       "recommendation": "Limit network-capable MCP use to trusted workflows, avoid passing secrets into those servers, and monitor or review outbound-capable tooling.",
       "references": [],
-      "fingerprint": "efp1-11ed50434b16e8f5",
+      "fingerprint": "efp1-8e862334ef90261f",
       "baseline_status": "not-applicable",
       "policy_status": "not_applicable",
       "evidence": [
-        "browser",
-        "playwright-mcp",
-        "https://example.invalid/mcp"
-      ]
+        "server=browser",
+        "args[0]=playwright-mcp",
+        "url=https://example.invalid/mcp"
+      ],
+      "category": "risk"
     },
     {
       "id": "EF-MCP-000",
       "title": "MCP server configured",
-      "severity": "low",
+      "severity": "info",
       "kind": "mcp-server-configured",
       "agent": "windsurf",
       "target": "devops",
@@ -220,7 +230,8 @@
       "evidence": [
         "server=devops",
         "command=npx"
-      ]
+      ],
+      "category": "inventory"
     },
     {
       "id": "EF-MCP-001",
@@ -234,17 +245,18 @@
       "impact": "A compromised or over-permissioned agent workflow could read or modify more local files than intended.",
       "recommendation": "Restrict MCP filesystem servers to explicit project directories such as /path/to/project, avoid home-directory or root-level grants, and separate sensitive repos where possible.",
       "references": [],
-      "fingerprint": "efp1-001a5363d64b4d38",
+      "fingerprint": "efp1-cb18644a9aaf22e9",
       "baseline_status": "not-applicable",
       "policy_status": "not_applicable",
       "evidence": [
-        "/home/user/repo"
-      ]
+        "args[1]=/home/user/repo"
+      ],
+      "category": "risk"
     },
     {
       "id": "EF-MCP-000",
       "title": "MCP server configured",
-      "severity": "low",
+      "severity": "info",
       "kind": "mcp-server-configured",
       "agent": "windsurf",
       "target": "repo-context",
@@ -259,7 +271,8 @@
       "evidence": [
         "server=repo-context",
         "command=node"
-      ]
+      ],
+      "category": "inventory"
     },
     {
       "id": "EF-MCP-001",
@@ -273,17 +286,18 @@
       "impact": "A compromised or over-permissioned agent workflow could read or modify more local files than intended.",
       "recommendation": "Restrict MCP filesystem servers to explicit project directories such as /path/to/project, avoid home-directory or root-level grants, and separate sensitive repos where possible.",
       "references": [],
-      "fingerprint": "efp1-ba0609bc4b07bbe7",
+      "fingerprint": "efp1-ad3e6788fbc3285e",
       "baseline_status": "not-applicable",
       "policy_status": "not_applicable",
       "evidence": [
-        "/home/user/repo"
-      ]
+        "args[1]=/home/user/repo"
+      ],
+      "category": "risk"
     },
     {
       "id": "EF-MCP-000",
       "title": "MCP server configured",
-      "severity": "low",
+      "severity": "info",
       "kind": "mcp-server-configured",
       "agent": "gemini-cli",
       "target": "search",
@@ -298,7 +312,8 @@
       "evidence": [
         "server=search",
         "command=uvx"
-      ]
+      ],
+      "category": "inventory"
     },
     {
       "id": "EF-MCP-003",
@@ -312,18 +327,19 @@
       "impact": "Network-capable tools may exfiltrate context or fetch untrusted content that can influence an agent.",
       "recommendation": "Limit network-capable MCP use to trusted workflows, avoid passing secrets into those servers, and monitor or review outbound-capable tooling.",
       "references": [],
-      "fingerprint": "efp1-fa745ed2d65719f6",
+      "fingerprint": "efp1-30759775bb897624",
       "baseline_status": "not-applicable",
       "policy_status": "not_applicable",
       "evidence": [
-        "search",
-        "web-search-mcp"
-      ]
+        "server=search",
+        "args[0]=web-search-mcp"
+      ],
+      "category": "risk"
     },
     {
       "id": "EF-MCP-004",
       "title": "MCP environment variables exposed",
-      "severity": "low",
+      "severity": "info",
       "kind": "exposed-mcp-environment",
       "agent": "gemini-cli",
       "target": "search",
@@ -332,12 +348,13 @@
       "impact": "Environment variables increase the data available to the MCP process and may include operational context or credentials.",
       "recommendation": "Keep MCP environment values minimal, prefer scoped tokens, and avoid sharing variables that are not required by the server.",
       "references": [],
-      "fingerprint": "efp1-dfe5b5f787c67a9e",
+      "fingerprint": "efp1-5b59fef7b15d01f4",
       "baseline_status": "not-applicable",
       "policy_status": "not_applicable",
       "evidence": [
-        "SEARCH_API_TOKEN"
-      ]
+        "env=SEARCH_API_TOKEN"
+      ],
+      "category": "inventory"
     },
     {
       "id": "EF-SEC-001",
@@ -351,17 +368,18 @@
       "impact": "If the MCP server is over-broad, compromised, or logs its environment, these credentials could be exposed.",
       "recommendation": "Use least-privilege tokens, rotate credentials periodically, avoid long-lived personal tokens, and confirm the server does not log environment values.",
       "references": [],
-      "fingerprint": "efp1-91725c8a2ec4588f",
+      "fingerprint": "efp1-6f8e5a1b20d30c0d",
       "baseline_status": "not-applicable",
       "policy_status": "not_applicable",
       "evidence": [
-        "SEARCH_API_TOKEN"
-      ]
+        "env=SEARCH_API_TOKEN"
+      ],
+      "category": "risk"
     },
     {
       "id": "EF-MCP-000",
       "title": "MCP server configured",
-      "severity": "low",
+      "severity": "info",
       "kind": "mcp-server-configured",
       "agent": "codex-cli",
       "target": "filesystem",
@@ -376,7 +394,8 @@
       "evidence": [
         "server=filesystem",
         "command=npx"
-      ]
+      ],
+      "category": "inventory"
     },
     {
       "id": "EF-MCP-001",
@@ -390,19 +409,20 @@
       "impact": "A compromised or over-permissioned agent workflow could read or modify more local files than intended.",
       "recommendation": "Restrict MCP filesystem servers to explicit project directories such as /path/to/project, avoid home-directory or root-level grants, and separate sensitive repos where possible.",
       "references": [],
-      "fingerprint": "efp1-0478f7d03e367df9",
+      "fingerprint": "efp1-dd2ed14eed6fadd6",
       "baseline_status": "not-applicable",
       "policy_status": "not_applicable",
       "evidence": [
-        "filesystem",
-        "@modelcontextprotocol/server-filesystem",
-        "/home/user"
-      ]
+        "server=filesystem",
+        "args[0]=@modelcontextprotocol/server-filesystem",
+        "args[1]=/home/user"
+      ],
+      "category": "risk"
     },
     {
       "id": "EF-MCP-004",
       "title": "MCP environment variables exposed",
-      "severity": "low",
+      "severity": "info",
       "kind": "exposed-mcp-environment",
       "agent": "codex-cli",
       "target": "filesystem",
@@ -411,12 +431,13 @@
       "impact": "Environment variables increase the data available to the MCP process and may include operational context or credentials.",
       "recommendation": "Keep MCP environment values minimal, prefer scoped tokens, and avoid sharing variables that are not required by the server.",
       "references": [],
-      "fingerprint": "efp1-02c17f098850ab1e",
+      "fingerprint": "efp1-4a91be9a5ef47b90",
       "baseline_status": "not-applicable",
       "policy_status": "not_applicable",
       "evidence": [
-        "FILESYSTEM_TOKEN"
-      ]
+        "env=FILESYSTEM_TOKEN"
+      ],
+      "category": "inventory"
     },
     {
       "id": "EF-SEC-001",
@@ -430,12 +451,13 @@
       "impact": "If the MCP server is over-broad, compromised, or logs its environment, these credentials could be exposed.",
       "recommendation": "Use least-privilege tokens, rotate credentials periodically, avoid long-lived personal tokens, and confirm the server does not log environment values.",
       "references": [],
-      "fingerprint": "efp1-a865ca2c334ef67f",
+      "fingerprint": "efp1-a7a38fdc96f0f961",
       "baseline_status": "not-applicable",
       "policy_status": "not_applicable",
       "evidence": [
-        "FILESYSTEM_TOKEN"
-      ]
+        "env=FILESYSTEM_TOKEN"
+      ],
+      "category": "risk"
     },
     {
       "id": "EF-TIRITH-002",
@@ -454,12 +476,13 @@
       "policy_status": "not_applicable",
       "evidence": [
         "Tirith file present"
-      ]
+      ],
+      "category": "informational"
     },
     {
       "id": "EF-MCP-000",
       "title": "MCP server configured",
-      "severity": "low",
+      "severity": "info",
       "kind": "mcp-server-configured",
       "agent": "hermes",
       "target": "agentmail",
@@ -474,7 +497,8 @@
       "evidence": [
         "server=agentmail",
         "command=agentmail-mcp"
-      ]
+      ],
+      "category": "inventory"
     },
     {
       "id": "EF-MCP-001",
@@ -488,17 +512,18 @@
       "impact": "A compromised or over-permissioned agent workflow could read or modify more local files than intended.",
       "recommendation": "Restrict MCP filesystem servers to explicit project directories such as /path/to/project, avoid home-directory or root-level grants, and separate sensitive repos where possible.",
       "references": [],
-      "fingerprint": "efp1-6cef746e98244c8f",
+      "fingerprint": "efp1-d0840478ea5cd3f6",
       "baseline_status": "not-applicable",
       "policy_status": "not_applicable",
       "evidence": [
-        "/home/user/.agentmail/config.json"
-      ]
+        "args[1]=/home/user/.agentmail/config.json"
+      ],
+      "category": "risk"
     },
     {
       "id": "EF-MCP-004",
       "title": "MCP environment variables exposed",
-      "severity": "low",
+      "severity": "info",
       "kind": "exposed-mcp-environment",
       "agent": "hermes",
       "target": "agentmail",
@@ -507,12 +532,13 @@
       "impact": "Environment variables increase the data available to the MCP process and may include operational context or credentials.",
       "recommendation": "Keep MCP environment values minimal, prefer scoped tokens, and avoid sharing variables that are not required by the server.",
       "references": [],
-      "fingerprint": "efp1-51f9ecdb7c6ce665",
+      "fingerprint": "efp1-935bf73b4b038603",
       "baseline_status": "not-applicable",
       "policy_status": "not_applicable",
       "evidence": [
-        "AGENTMAIL_API_KEY"
-      ]
+        "env=AGENTMAIL_API_KEY"
+      ],
+      "category": "inventory"
     },
     {
       "id": "EF-SEC-001",
@@ -526,17 +552,18 @@
       "impact": "If the MCP server is over-broad, compromised, or logs its environment, these credentials could be exposed.",
       "recommendation": "Use least-privilege tokens, rotate credentials periodically, avoid long-lived personal tokens, and confirm the server does not log environment values.",
       "references": [],
-      "fingerprint": "efp1-1c8f6bb576e30fba",
+      "fingerprint": "efp1-6f6d98db3b529b48",
       "baseline_status": "not-applicable",
       "policy_status": "not_applicable",
       "evidence": [
-        "AGENTMAIL_API_KEY"
-      ]
+        "env=AGENTMAIL_API_KEY"
+      ],
+      "category": "risk"
     },
     {
       "id": "EF-MCP-000",
       "title": "MCP server configured",
-      "severity": "low",
+      "severity": "info",
       "kind": "mcp-server-configured",
       "agent": "hermes",
       "target": "stitch",
@@ -551,12 +578,13 @@
       "evidence": [
         "server=stitch",
         "command=npx"
-      ]
+      ],
+      "category": "inventory"
     },
     {
       "id": "EF-MCP-004",
       "title": "MCP environment variables exposed",
-      "severity": "low",
+      "severity": "info",
       "kind": "exposed-mcp-environment",
       "agent": "hermes",
       "target": "stitch",
@@ -565,12 +593,13 @@
       "impact": "Environment variables increase the data available to the MCP process and may include operational context or credentials.",
       "recommendation": "Keep MCP environment values minimal, prefer scoped tokens, and avoid sharing variables that are not required by the server.",
       "references": [],
-      "fingerprint": "efp1-ac68d55189ead8ff",
+      "fingerprint": "efp1-514b231f42a37901",
       "baseline_status": "not-applicable",
       "policy_status": "not_applicable",
       "evidence": [
-        "STITCH_API_KEY"
-      ]
+        "env=STITCH_API_KEY"
+      ],
+      "category": "inventory"
     },
     {
       "id": "EF-SEC-001",
@@ -584,12 +613,13 @@
       "impact": "If the MCP server is over-broad, compromised, or logs its environment, these credentials could be exposed.",
       "recommendation": "Use least-privilege tokens, rotate credentials periodically, avoid long-lived personal tokens, and confirm the server does not log environment values.",
       "references": [],
-      "fingerprint": "efp1-e8e183475555c91a",
+      "fingerprint": "efp1-e2040896a042eca4",
       "baseline_status": "not-applicable",
       "policy_status": "not_applicable",
       "evidence": [
-        "STITCH_API_KEY"
-      ]
+        "env=STITCH_API_KEY"
+      ],
+      "category": "risk"
     }
   ]
 }

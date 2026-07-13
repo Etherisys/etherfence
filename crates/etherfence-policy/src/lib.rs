@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
 use etherfence_core::{
-    read_bounded_text_file, AgentKind, BaselineStatus, CoverageStatus, Finding, FindingKind,
-    InventoryItem, McpServer, PolicyStatus, ProtectionCoverage, ServerCoverage, Severity,
-    MAX_CONFIG_FILE_BYTES,
+    read_bounded_text_file, AgentKind, BaselineStatus, CoverageStatus, Finding, FindingCategory,
+    FindingKind, InventoryItem, McpServer, PolicyStatus, ProtectionCoverage, ServerCoverage,
+    Severity, MAX_CONFIG_FILE_BYTES,
 };
 use regex::Regex;
 use serde::Deserialize;
@@ -364,6 +364,7 @@ fn policy_finding(
         policy_status: PolicyStatus::Violation,
         policy_id: Some(template.policy_id.to_string()),
         evidence,
+        category: FindingCategory::Risk,
     };
     finding.refresh_fingerprint();
     finding
@@ -387,6 +388,7 @@ fn tirith_required_finding(policy_name: &str) -> Finding {
         policy_status: PolicyStatus::Violation,
         policy_id: Some("tirith-required".to_string()),
         evidence: vec![format!("policy={policy_name}"), "require_tirith=true".to_string()],
+        category: FindingCategory::Risk,
     };
     finding.refresh_fingerprint();
     finding
