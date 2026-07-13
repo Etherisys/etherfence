@@ -264,10 +264,13 @@ fn finding(
 fn server_evidence(server: &McpServer) -> Vec<String> {
     let mut evidence = vec![format!("server={}", server.name)];
     if let Some(command) = &server.command {
-        evidence.push(format!("command={command}"));
+        evidence.push(format!(
+            "command={}",
+            safe_evidence_value("command", command)
+        ));
     }
     if let Some(url) = &server.url {
-        evidence.push(format!("url={url}"));
+        evidence.push(format!("url={}", safe_evidence_value("url", url)));
     }
     evidence
 }
@@ -289,7 +292,7 @@ fn broad_filesystem_evidence(server: &McpServer) -> Option<Vec<String>> {
                 || lower.contains("read_file")
                 || lower.contains("write_file")
         })
-        .map(|(label, value)| format!("{label}={value}"))
+        .map(|(label, value)| format!("{label}={}", safe_evidence_value(&label, &value)))
         .collect();
     (!matches.is_empty()).then_some(matches)
 }
@@ -336,13 +339,17 @@ fn matching_values(server: &McpServer, needles: &[&str]) -> Option<Vec<String>> 
             let lower = value.to_ascii_lowercase();
             needles.iter().any(|needle| lower.contains(needle))
         })
-        .map(|(label, value)| format!("{label}={value}"))
+        .map(|(label, value)| format!("{label}={}", safe_evidence_value(&label, &value)))
         .collect();
     (!matches.is_empty()).then_some(matches)
 }
 
 /// Server fields as `(field label, value)` pairs, so any evidence built from
 /// these can name the exact field that matched (never just a bare value).
+/// These are the RAW configured values, used only for heuristic keyword
+/// matching (unchanged detection sensitivity) — never placed directly into
+/// evidence. Use `safe_evidence_value` to sanitize a value before it is ever
+/// formatted into an evidence string.
 fn labeled_values(server: &McpServer) -> Vec<(String, String)> {
     let mut values = vec![("server".to_string(), server.name.clone())];
     if let Some(command) = &server.command {
@@ -355,6 +362,74 @@ fn labeled_values(server: &McpServer) -> Vec<(String, String)> {
         values.push(("url".to_string(), url.clone()));
     }
     values
+}
+
+/// Sanitizes a matched value before it is placed into finding evidence.
+///
+/// - Any value that is or looks like a URL (the `url` field, or an
+///   `http(s)://`-prefixed value found in `command`/`args`) has its userinfo
+///   (`user:pass@`), query string, and fragment stripped — these are the most
+///   likely places an MCP server URL embeds a credential (e.g. an API key
+///   query parameter).
+/// - Any value shaped like `key=value` or `key:value` whose `key` looks
+///   secret-shaped (per [`secret_looking_name`]) has its value replaced with
+///   `<redacted>` — this covers common CLI flag conventions such as
+///   `--token=abc123`.
+///
+/// This is a best-effort, bounded heuristic, not a general secret scanner:
+/// it does not detect a credential passed as a bare positional argument or
+/// as a separate `--token value` pair of argv elements. Operators should
+/// prefer environment variables (whose values EtherFence never captures at
+/// all) over embedding credentials directly in MCP server commands, args, or
+/// URLs.
+fn safe_evidence_value(label: &str, value: &str) -> String {
+    let lower = value.to_ascii_lowercase();
+    let value = if label == "url" || lower.starts_with("http://") || lower.starts_with("https://") {
+        sanitize_url_for_evidence(value)
+    } else {
+        value.to_string()
+    };
+    redact_secret_looking_segment(&value)
+}
+
+/// Strips URL userinfo, query string, and fragment, keeping only the scheme,
+/// host, and path — the parts of a URL that are safe to show as evidence.
+/// Applied to any matched value that looks like a URL, not only the
+/// dedicated `url` server field, since a credential-carrying URL can equally
+/// appear as a positional `args[N]` value.
+fn sanitize_url_for_evidence(url: &str) -> String {
+    let without_fragment = url.split('#').next().unwrap_or(url);
+    let without_query = without_fragment
+        .split('?')
+        .next()
+        .unwrap_or(without_fragment);
+    match without_query.find("://") {
+        Some(scheme_end) => {
+            let (scheme, rest) = without_query.split_at(scheme_end + 3);
+            let first_slash = rest.find('/').unwrap_or(rest.len());
+            match rest[..first_slash].rfind('@') {
+                Some(at_index) => format!("{scheme}{}", &rest[at_index + 1..]),
+                None => format!("{scheme}{rest}"),
+            }
+        }
+        None => without_query.to_string(),
+    }
+}
+
+/// Replaces the value half of a `key=value`/`key:value`-shaped segment with
+/// `<redacted>` when `key` looks secret-shaped (checked with the first `=`,
+/// then the first `:`, found in the original value).
+fn redact_secret_looking_segment(value: &str) -> String {
+    for separator in ['=', ':'] {
+        if let Some(index) = value.find(separator) {
+            let (key, rest) = value.split_at(index);
+            let value_part = &rest[1..];
+            if !value_part.is_empty() && secret_looking_name(key) {
+                return format!("{key}{separator}<redacted>");
+            }
+        }
+    }
+    value.to_string()
 }
 
 fn secret_looking_name(name: &str) -> bool {
@@ -377,6 +452,88 @@ fn secret_looking_name(name: &str) -> bool {
 mod tests {
     use super::*;
     use etherfence_core::{EnvVar, McpServer};
+
+    #[test]
+    fn url_evidence_strips_userinfo_query_and_fragment() {
+        let item = InventoryItem {
+            agent: AgentKind::VsCode,
+            config_path: "~/.vscode/mcp.json".to_string(),
+            mcp_servers: vec![McpServer {
+                name: "search".to_string(),
+                command: None,
+                args: Vec::new(),
+                env: Vec::new(),
+                url: Some(
+                    "https://user:s3cr3t@api.example/mcp?api_key=actual-secret&x=1#frag"
+                        .to_string(),
+                ),
+            }],
+            evidence: Vec::new(),
+        };
+        let findings = analyze(&[item]);
+        for finding in &findings {
+            for entry in &finding.evidence {
+                assert!(!entry.contains("s3cr3t"), "leaked userinfo in {entry:?}");
+                assert!(
+                    !entry.contains("actual-secret"),
+                    "leaked query secret in {entry:?}"
+                );
+                assert!(!entry.contains("frag"), "leaked fragment in {entry:?}");
+            }
+        }
+        let configured = findings
+            .iter()
+            .find(|f| f.id == "EF-MCP-000")
+            .expect("mcp-configured finding");
+        assert!(
+            configured
+                .evidence
+                .iter()
+                .any(|e| e == "url=https://api.example/mcp"),
+            "evidence should keep scheme/host/path only: {:?}",
+            configured.evidence
+        );
+    }
+
+    #[test]
+    fn args_evidence_redacts_secret_shaped_key_value_segments() {
+        let item = InventoryItem {
+            agent: AgentKind::ClaudeCode,
+            config_path: "~/.claude.json".to_string(),
+            mcp_servers: vec![McpServer {
+                name: "runner".to_string(),
+                command: Some("runner-mcp".to_string()),
+                // "exec" makes this args[0] match the risky-command heuristic
+                // (so it is actually included in evidence), while its
+                // `=`-separated key ("--exec-token") looks secret-shaped.
+                args: vec!["--exec-token=actual-secret-value".to_string()],
+                env: Vec::new(),
+                url: None,
+            }],
+            evidence: Vec::new(),
+        };
+        let findings = analyze(&[item]);
+        for finding in &findings {
+            for entry in &finding.evidence {
+                assert!(
+                    !entry.contains("actual-secret-value"),
+                    "leaked secret-shaped arg value in {entry:?}"
+                );
+            }
+        }
+        let shell = findings
+            .iter()
+            .find(|f| f.id == "EF-MCP-002")
+            .expect("risky-command finding matches the exec-shaped arg");
+        assert!(
+            shell
+                .evidence
+                .iter()
+                .any(|e| e == "args[0]=--exec-token=<redacted>"),
+            "secret-shaped arg key must be redacted, not dropped: {:?}",
+            shell.evidence
+        );
+    }
 
     #[test]
     fn flags_secret_env_and_filesystem_hint_with_guidance() {

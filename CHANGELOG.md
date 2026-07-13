@@ -48,26 +48,53 @@ type, and value from that review is unchanged.
   `category: "informational"`. All other finding IDs (`EF-CFG-001`,
   `EF-MCP-001`/`002`/`003`, `EF-SEC-001`, all `EF-POL-*`) keep their existing
   severity and are `category: "risk"`, unchanged scoring behavior.
-- **Evidence names the matched field, never a secret value** — heuristic
-  finding evidence (`EF-MCP-001`/`002`/`003`/`004`, `EF-SEC-001`) is
-  normalized to a `field=value` format (`server=`, `command=`, `args[N]=`,
-  `url=`, `env=`) so every finding shows exactly which server field and
-  matched value/pattern triggered it. Environment-variable evidence is always
-  the variable **name**, never its (already-redacted) value — this was true
-  before and remains true. `EF-MCP-000`'s evidence format is unchanged.
-- **Human output separates inventory, risk, informational, and coverage** —
-  default and verbose `scan` output add distinct "Inventory observations" and
-  "Informational findings" sections alongside the existing "Priority
-  findings" (scored risk) and "Protection coverage" sections. Verbose
-  per-finding badges add a new `OBS` marker for inventory findings (instead
-  of a severity badge), and the per-server status marker in verbose output
-  now reflects only risk-category findings, so a server with only inventory/
-  informational findings shows `OK` instead of a severity badge. Markdown and
-  the `etherfence-report` `to_human` renderer group findings by category
-  (inventory, informational, risk) before severity. "Consolidated recommended
-  actions" now excludes every non-risk-category finding (previously only
-  `EF-MCP-000` was excluded by ID; `EF-MCP-004` is now excluded too, for the
-  same reason).
+- **Evidence names the matched field, with bounded credential redaction** —
+  heuristic finding evidence for `EF-MCP-001`/`002`/`003`/`004`/`EF-SEC-001`
+  (`EF-MCP-000` already did this) is normalized to a `field=value` format
+  (`server=`, `command=`, `args[N]=`, `url=`, `env=`) so every finding shows
+  exactly which server field and matched value/pattern triggered it.
+  `EF-CFG-001` and `EF-TIRITH-*` evidence are unchanged (not `field=value`).
+  Environment-variable evidence is always the variable **name**, never its
+  (already-redacted) value — unchanged. New in this release: any matched
+  value that is or looks like a URL has its userinfo/query string/fragment
+  stripped before appearing in evidence, and a `key=value`/`key:value`
+  segment whose key looks secret-shaped (e.g. `--token=...`) has its value
+  replaced with `<redacted>`. This is a bounded heuristic, not a general
+  secret scanner — a credential passed as a bare positional argument, or as
+  a separate `--token value` argv pair, is not detected and appears as-is,
+  matching the same raw value already shown unredacted in the report's
+  `inventory` array. See `docs/json-schema.md`'s "Evidence redaction scope"
+  for the full, precise statement.
+- **Human output separates inventory, risk, informational, and coverage —
+  with real distinct sections, not just badges** — default `scan` output adds
+  distinct "Inventory observations" and "Informational findings" sections
+  alongside the existing "Priority findings" (scored risk) and "Protection
+  coverage" sections. Verbose output now does the same: "Clients & servers"
+  is restricted to scored-risk findings only, and two new sections list the
+  complete inventory/informational finding sets (grouped by agent, with full
+  rationale/recommendation), followed by "Protection coverage" (now rendered
+  in verbose too, via a renderer shared with the concise view so the two can
+  never drift) — a finding appears in exactly one of these sections, never
+  duplicated. Per-finding badges add a new `OBS` marker for inventory
+  findings, and the per-server status marker now reflects only risk-category
+  findings, so a server with only inventory/informational findings shows
+  `OK` again. "Inventory observations" server/env-var counts are derived
+  directly from inventory, not from findings, so they are unaffected by
+  `--severity-threshold` and never contradict the "MCP servers N configured"
+  header count. Markdown and the `etherfence-report` `to_human` renderer
+  group findings by category (inventory, informational, risk) before
+  severity. "Consolidated recommended actions" now excludes every
+  non-risk-category finding (previously only `EF-MCP-000` was excluded by
+  ID; `EF-MCP-004` is now excluded too, for the same reason).
+- **`--fail-on`/`--fail-on-new` remain severity-only, not category-aware** —
+  both flags compare `Finding.severity` directly and never read the new
+  `category` field. Because `EF-MCP-000`/`EF-MCP-004` move from `low` to
+  `info` severity, `--fail-on low`/`--fail-on-new low` may now pass in cases
+  a pre-v1.7.4 scan would have failed (previously tripped by those two IDs
+  alone); `--fail-on medium`/`--fail-on high` — the thresholds a real risk
+  gate should use — are unaffected, since neither ID was ever `medium` or
+  `high`. Covered by a regression test against a fixture whose only finding
+  is `EF-MCP-000`.
 - **Schema version bumps** — `ef-scan-report/v0.1.2` → `v0.1.3` (additive
   `category` field on every `Finding`; documented `severity`/`evidence`
   changes for the finding IDs above). `ef-baseline/v0.1.3` → `v0.1.4`

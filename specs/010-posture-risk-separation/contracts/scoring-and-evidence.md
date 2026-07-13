@@ -29,7 +29,7 @@ This table is the fixture-backed contract (Principle V): any test asserting a fi
 
 ## Evidence format
 
-Every evidence entry (`Finding.evidence: Vec<String>`) is a `field=value` string:
+Evidence entries for MCP heuristic finding kinds (`EF-MCP-000/001/002/003/004`, `EF-SEC-001`) are `field=value` strings:
 
 | Field label | Meaning |
 |---|---|
@@ -39,8 +39,13 @@ Every evidence entry (`Finding.evidence: Vec<String>`) is a `field=value` string
 | `url=<value>` | The server's `url` field matched. |
 | `env=<name>` | An environment variable **name** matched (never its value). |
 
-Constraints:
-- Evidence never contains a secret/credential *value* — only names and matched patterns/paths. Environment variable values remain redacted to `<set>`/`<empty>` before they ever reach a `Finding` (unchanged, enforced in `etherfence-inventory`).
+`EF-CFG-001` (parse-error evidence) and `EF-TIRITH-001`/`EF-TIRITH-002` are **not** normalized to this shape — they retain their own pre-existing evidence formats, unchanged by this feature.
+
+Redaction constraints (bounded, not a general secret scanner — see `docs/json-schema.md`'s "Evidence redaction scope" for the full statement):
+- Environment variable evidence is always the variable **name**, never its value; values remain redacted to `<set>`/`<empty>` before they ever reach a `Finding` (unchanged, enforced in `etherfence-inventory`).
+- Any value that is or looks like a URL has its userinfo, query string, and fragment stripped before it is placed in evidence.
+- A `key=value`/`key:value`-shaped segment in `command`/`args`/`url` evidence whose key looks secret-shaped has its value replaced with `<redacted>`.
+- Not covered: a credential passed as a bare positional argument, or as a separate `--token value` pair of argv elements, is shown as-is — matching the raw value already visible, unredacted, in the report's `inventory` array.
 - Evidence entries are sorted and deduplicated before fingerprinting (unchanged, `finding_fingerprint()`); evidence content changes for `EF-MCP-001/002/003/004` and `EF-SEC-001` change those findings' fingerprints relative to pre-v1.7.4 scans (see Compatibility below).
 - Evidence ordering within a single finding is deterministic for identical input (same server, same detector logic → same evidence vector, same order, every run).
 
@@ -50,3 +55,4 @@ Constraints:
 - `ef-baseline`: `v0.1.3` → `v0.1.4`. `BaselineFile.findings` embeds full `Finding` structs, so the same shape change applies. `etherfence scan --baseline <old-file>` fails closed with an explicit "unsupported schema_version... regenerate it with `--write-baseline`" error (existing mechanism, unchanged code path) rather than silently mismatching fingerprints.
 - JSON consumers that only read fields present before this change (score, grade, severity, evidence-as-strings) continue to work — `category` is additive and evidence stays `Vec<String>`, just with new label content.
 - SARIF gains one additive `properties.etherfenceCategory` string per result. SARIF `level` (`error`/`warning`/`note`) mapping is unchanged and remains purely severity-derived.
+- **`--fail-on`/`--fail-on-new` decision: unchanged, severity-only, not category-aware.** Both flags compare `Finding.severity` directly and never read `category`. Because `EF-MCP-000`/`EF-MCP-004` move from `low` to `info`, `--fail-on low`/`--fail-on-new low` may now pass in cases a pre-v1.7.4 scan would have failed. `--fail-on medium`/`--fail-on high` — the thresholds a real risk gate should use — are unaffected, since neither ID was ever `medium`/`high`. This is documented in `docs/json-schema.md` and covered by a regression test asserting the exact low/medium/high/info behavior on a fixture whose only finding is `EF-MCP-000`.

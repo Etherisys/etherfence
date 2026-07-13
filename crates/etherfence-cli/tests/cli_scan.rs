@@ -349,6 +349,89 @@ fn scan_verbose_shows_obs_badge_for_inventory_findings() {
 }
 
 #[test]
+fn scan_verbose_has_four_distinct_category_sections_in_order_with_no_duplication() {
+    // FR-009: verbose output must structurally separate inventory
+    // observations, scored risk findings, informational findings, and
+    // protection/policy coverage into their own sections — not merely
+    // differentiate them by badge within a single mixed list.
+    let root = fixture_root("home");
+    let output = run(&[
+        "scan",
+        "--root",
+        &root,
+        "--policy-profile",
+        "developer-laptop",
+        "--verbose",
+    ]);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    let clients_pos = stdout
+        .find("Clients & servers")
+        .expect("Clients & servers heading");
+    let inventory_pos = stdout
+        .find("Inventory observations")
+        .expect("Inventory observations heading");
+    let informational_pos = stdout
+        .find("Informational findings")
+        .expect("Informational findings heading");
+    let coverage_pos = stdout
+        .find("Protection coverage")
+        .expect("Protection coverage heading");
+    let consolidated_pos = stdout
+        .find("Consolidated recommended actions")
+        .expect("Consolidated recommended actions heading");
+
+    // Ordering: risk findings first, then inventory, then informational,
+    // then protection coverage, then the consolidated action list.
+    assert!(clients_pos < inventory_pos);
+    assert!(inventory_pos < informational_pos);
+    assert!(informational_pos < coverage_pos);
+    assert!(coverage_pos < consolidated_pos);
+
+    // Population: EF-MCP-000/EF-MCP-004 (inventory) live only in the
+    // Inventory observations section, never in Clients & servers.
+    let clients_section = &stdout[clients_pos..inventory_pos];
+    let inventory_section = &stdout[inventory_pos..informational_pos];
+    assert!(
+        !clients_section.contains("EF-MCP-000"),
+        "EF-MCP-000 must not appear in Clients & servers"
+    );
+    assert!(
+        !clients_section.contains("EF-MCP-004"),
+        "EF-MCP-004 must not appear in Clients & servers"
+    );
+    assert!(inventory_section.contains("EF-MCP-000"));
+    assert!(inventory_section.contains("EF-MCP-004"));
+
+    // EF-TIRITH-002 (informational) lives only in Informational findings.
+    let informational_section = &stdout[informational_pos..coverage_pos];
+    assert!(!clients_section.contains("EF-TIRITH-002"));
+    assert!(!inventory_section.contains("EF-TIRITH-002"));
+    assert!(informational_section.contains("EF-TIRITH-002"));
+
+    // A scored-risk finding (EF-MCP-001) lives only in Clients & servers,
+    // never duplicated into the inventory/informational sections.
+    assert!(clients_section.contains("EF-MCP-001"));
+    assert!(!inventory_section.contains("EF-MCP-001"));
+    assert!(!informational_section.contains("EF-MCP-001"));
+
+    // Non-duplication, globally: every finding ID/target pair appears in
+    // exactly one of the three finding-derived sections above.
+    for id in ["EF-MCP-000", "EF-MCP-004", "EF-TIRITH-002", "EF-MCP-001"] {
+        let occurrences = [clients_section, inventory_section, informational_section]
+            .iter()
+            .filter(|section| section.contains(id))
+            .count();
+        assert_eq!(occurrences, 1, "{id} must appear in exactly one section");
+    }
+}
+
+#[test]
 fn no_secret_value_ever_appears_in_any_output_format() {
     // FR-006 / SC-004: the `home` fixture's MCP servers carry env vars with
     // secret-shaped names whose configured values are "fixture-value" and
@@ -468,6 +551,46 @@ fn severity_threshold_high_displays_only_high_findings() {
 }
 
 #[test]
+fn inventory_observations_are_unaffected_by_severity_threshold() {
+    // Inventory facts (server counts) must never disappear or contradict
+    // the "MCP servers ... configured" header count just because
+    // --severity-threshold filters out the non-scoring EF-MCP-000/EF-MCP-004
+    // findings that would otherwise back a naive finding-derived count.
+    let root = fixture_root("home");
+
+    let default_output = run(&["scan", "--root", &root]);
+    assert!(default_output.status.success());
+    let default_stdout = String::from_utf8_lossy(&default_output.stdout);
+    let configured_line = default_stdout
+        .lines()
+        .find(|line| line.contains("MCP servers") && line.contains("configured"))
+        .expect("MCP servers configured header line");
+    let expected_count: usize = configured_line
+        .split_whitespace()
+        .find_map(|token| token.parse::<usize>().ok())
+        .expect("a server count in the header line");
+    assert!(expected_count > 0);
+
+    for threshold in ["low", "medium", "high"] {
+        let output = run(&["scan", "--root", &root, "--severity-threshold", threshold]);
+        assert!(output.status.success(), "threshold={threshold}");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains("Inventory observations"),
+            "threshold={threshold} must still show the Inventory observations section"
+        );
+        assert!(
+            stdout.contains(&format!("{expected_count} (non-scoring)")),
+            "threshold={threshold} inventory count must match the header count ({expected_count}), stdout:\n{stdout}"
+        );
+        assert!(
+            !stdout.contains("No inventory observations recorded"),
+            "threshold={threshold} must never claim zero inventory observations while servers are configured"
+        );
+    }
+}
+
+#[test]
 fn posture_scope_is_visible_and_matches_the_effective_threshold_in_all_formats() {
     let root = fixture_root("home");
     let expected_scope = "Displayed active scored-risk findings at severity threshold: high";
@@ -545,6 +668,75 @@ fn fail_on_high_returns_zero_when_no_high_findings_exist() {
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("0 high"));
+}
+
+#[test]
+fn fail_on_and_fail_on_new_remain_severity_only_not_category_aware() {
+    // v1.7.4 decision (documented in CHANGELOG/docs/README): --fail-on and
+    // --fail-on-new stay purely severity-based, unchanged code. Reclassifying
+    // EF-MCP-000 from low to info is therefore an intentional, documented
+    // compatibility change: `--fail-on low` no longer trips on a fixture whose
+    // only finding is the now-info-severity "MCP server configured" fact,
+    // whereas v1.7.3 (where it was low) would have failed here.
+    let root = fixture_root("safe-home");
+
+    // "safe-home" has exactly one active finding: EF-MCP-000 at `info`.
+    let fail_on_low = run(&["scan", "--root", &root, "--fail-on", "low"]);
+    assert!(
+        fail_on_low.status.success(),
+        "--fail-on low must now pass on an inventory-only (info-severity) fixture"
+    );
+
+    let fail_on_medium = run(&["scan", "--root", &root, "--fail-on", "medium"]);
+    assert!(fail_on_medium.status.success());
+
+    let fail_on_high = run(&["scan", "--root", &root, "--fail-on", "high"]);
+    assert!(fail_on_high.status.success());
+
+    // --fail-on info still trips on the inventory finding: threshold-based
+    // gating is unchanged, only the finding's severity value changed.
+    let fail_on_info = run(&["scan", "--root", &root, "--fail-on", "info"]);
+    assert_eq!(
+        fail_on_info.status.code(),
+        Some(2),
+        "--fail-on info must still trip on any active finding, inventory or not"
+    );
+
+    // --fail-on-new mirrors the same severity-only semantics against a
+    // baseline that doesn't yet know about this finding.
+    let baseline = temp_file("fail-on-new-severity-semantics");
+    let empty_baseline = r#"{"schema_version":"ef-baseline/v0.1.4","tool":"etherfence","version":"0","findings":[]}"#;
+    std::fs::write(&baseline, empty_baseline).expect("write empty baseline");
+    let baseline_s = baseline.to_string_lossy().to_string();
+
+    let fail_on_new_low = run(&[
+        "scan",
+        "--root",
+        &root,
+        "--baseline",
+        &baseline_s,
+        "--fail-on-new",
+        "low",
+    ]);
+    assert!(
+        fail_on_new_low.status.success(),
+        "--fail-on-new low must now pass for a new info-severity inventory finding"
+    );
+
+    let fail_on_new_info = run(&[
+        "scan",
+        "--root",
+        &root,
+        "--baseline",
+        &baseline_s,
+        "--fail-on-new",
+        "info",
+    ]);
+    assert_eq!(
+        fail_on_new_info.status.code(),
+        Some(2),
+        "--fail-on-new info must still trip on the new inventory finding"
+    );
 }
 
 #[test]

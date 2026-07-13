@@ -9,6 +9,7 @@ use etherfence_core::{
     PARSE_ERROR_EVIDENCE_PREFIX,
 };
 
+use crate::coverage;
 use crate::ui::{self, UiTheme};
 
 /// Render the complete themed verbose scan output.
@@ -20,8 +21,35 @@ pub(crate) fn render_scan_verbose(report: &ScanReport, debug: bool) -> String {
     // ── Overall posture ────────────────────────────────────────────
     render_posture_header(&mut out, &theme, report, width);
 
-    // ── Clients & servers ──────────────────────────────────────────
+    // ── Clients & servers (scored risk findings only) ───────────────
     render_clients_and_servers(&mut out, &theme, report, width, debug);
+
+    // ── Inventory observations ──────────────────────────────────────
+    render_category_section(
+        &mut out,
+        &theme,
+        report,
+        FindingCategory::Inventory,
+        "Inventory observations",
+        width,
+        debug,
+    );
+
+    // ── Informational findings ──────────────────────────────────────
+    render_category_section(
+        &mut out,
+        &theme,
+        report,
+        FindingCategory::Informational,
+        "Informational findings",
+        width,
+        debug,
+    );
+
+    // ── Protection coverage ──────────────────────────────────────────
+    if let Some(protection_coverage) = &report.protection_coverage {
+        coverage::render_protection_coverage(&mut out, &theme, protection_coverage);
+    }
 
     // ── Consolidated recommendations ───────────────────────────────
     render_consolidated_recommendations(&mut out, &theme, report, width);
@@ -198,9 +226,15 @@ fn render_clients_and_servers(
             .push(item);
     }
 
-    // Map findings: (agent_str, config_path) → Vec<&Finding>
+    // Map findings: (agent_str, config_path) → Vec<&Finding>. Restricted to
+    // scored-risk findings — inventory and informational findings have their
+    // own dedicated sections (see `render_category_section`) and must not be
+    // duplicated here.
     let mut findings_map: BTreeMap<(String, String), Vec<&Finding>> = BTreeMap::new();
     for finding in &report.findings {
+        if finding.category != FindingCategory::Risk {
+            continue;
+        }
         let key = (finding.agent.to_string(), finding.config_path.clone());
         findings_map.entry(key).or_default().push(finding);
     }
@@ -324,6 +358,46 @@ fn render_clients_and_servers(
     }
 }
 
+// ── Category sections (inventory / informational) ────────────────
+
+/// Renders every finding of `category`, grouped by agent, under its own
+/// section heading. Used for "Inventory observations" and "Informational
+/// findings" so these non-scoring categories are structurally separated
+/// from the scored-risk findings in "Clients & servers" above — not merely
+/// badge-differentiated within the same list.
+fn render_category_section(
+    out: &mut String,
+    theme: &UiTheme,
+    report: &ScanReport,
+    category: FindingCategory,
+    heading: &str,
+    width: usize,
+    debug: bool,
+) {
+    let _ = writeln!(out, "\n{}", theme.section(heading));
+
+    let mut by_agent: BTreeMap<String, Vec<&Finding>> = BTreeMap::new();
+    for finding in &report.findings {
+        if finding.category != category {
+            continue;
+        }
+        by_agent
+            .entry(finding.agent.to_string())
+            .or_default()
+            .push(finding);
+    }
+
+    if by_agent.is_empty() {
+        let _ = writeln!(out, "None.");
+        return;
+    }
+
+    for (agent, findings) in &by_agent {
+        let _ = writeln!(out, "\n{}", theme.heading.apply_to(agent));
+        render_findings(out, theme, findings, width, debug);
+    }
+}
+
 fn render_findings(
     out: &mut String,
     theme: &UiTheme,
@@ -357,6 +431,20 @@ fn render_findings(
         );
         let _ = writeln!(out, "{header}");
 
+        let _ = writeln!(
+            out,
+            "{}",
+            ui::wrap_prefixed(
+                "          Scope: ",
+                "                 ",
+                &format!(
+                    "{} / {}",
+                    finding.agent,
+                    etherfence_report::human_layout::sanitize_untrusted_text(&finding.target)
+                ),
+                width,
+            )
+        );
         let _ = writeln!(
             out,
             "{}",

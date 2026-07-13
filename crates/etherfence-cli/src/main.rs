@@ -1,4 +1,5 @@
 mod banner;
+mod coverage;
 mod ui;
 mod verbose;
 
@@ -6,9 +7,8 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use etherfence_core::{
     home_relative_root, read_bounded_text_file, read_bounded_text_file_no_follow,
-    BaselineComparison, BaselineFile, BaselineStatus, CoverageStatus, Finding, FindingCategory,
-    PolicyMetadata, PostureSummary, ScanReport, Severity, Summary, MAX_BASELINE_FILE_BYTES,
-    MAX_CONFIG_FILE_BYTES,
+    BaselineComparison, BaselineFile, BaselineStatus, Finding, FindingCategory, PolicyMetadata,
+    PostureSummary, ScanReport, Severity, Summary, MAX_BASELINE_FILE_BYTES, MAX_CONFIG_FILE_BYTES,
 };
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -2568,43 +2568,37 @@ fn render_scan_summary(report: &ScanReport) -> String {
     }
 
     // ── Inventory observations ──────────────────────────────────────
-    let inventory_findings: Vec<&Finding> = report
-        .findings
+    // Derived directly from inventory (never from `report.findings`), so
+    // this section is always accurate regardless of `--severity-threshold`
+    // — that flag only filters which risk findings are displayed/scored,
+    // it must never make plain inventory facts disappear or contradict the
+    // "MCP servers configured" count shown above.
+    let servers_with_env: usize = report
+        .inventory
         .iter()
-        .filter(|finding| finding.category == FindingCategory::Inventory)
-        .collect();
+        .flat_map(|item| &item.mcp_servers)
+        .filter(|server| !server.env.is_empty())
+        .count();
     let _ = writeln!(out, "\n{}", theme.section("Inventory observations"));
-    if inventory_findings.is_empty() {
-        let _ = writeln!(out, "No inventory observations recorded.");
-    } else {
-        let servers_configured = inventory_findings
-            .iter()
-            .filter(|finding| finding.id == "EF-MCP-000")
-            .count();
-        let servers_with_env = inventory_findings
-            .iter()
-            .filter(|finding| finding.id == "EF-MCP-004")
-            .count();
+    let _ = writeln!(
+        out,
+        "{}",
+        theme.key_value_wrapped(
+            "MCP servers configured",
+            &format!("{total_servers} (non-scoring)"),
+            width,
+        )
+    );
+    if servers_with_env > 0 {
         let _ = writeln!(
             out,
             "{}",
             theme.key_value_wrapped(
-                "MCP servers configured",
-                &format!("{servers_configured} (non-scoring)"),
+                "Servers with environment variables",
+                &format!("{servers_with_env} (non-scoring; see --verbose for names)"),
                 width,
             )
         );
-        if servers_with_env > 0 {
-            let _ = writeln!(
-                out,
-                "{}",
-                theme.key_value_wrapped(
-                    "Servers with environment variables",
-                    &format!("{servers_with_env} (non-scoring; see --verbose for names)"),
-                    width,
-                )
-            );
-        }
     }
 
     // ── Informational findings ──────────────────────────────────────
@@ -2637,78 +2631,7 @@ fn render_scan_summary(report: &ScanReport) -> String {
 
     // ── Protection coverage ────────────────────────────────────────
     if let Some(coverage) = &report.protection_coverage {
-        let _ = writeln!(out, "\n{}", theme.section("Protection coverage"));
-        let _ = writeln!(
-            out,
-            "{}",
-            theme.key_value("Total servers", &coverage.total_servers.to_string())
-        );
-        let status_line = format!(
-            "covered={}, not covered={}, no policy={}, empty allowlist={}",
-            coverage.covered,
-            coverage.not_covered,
-            coverage.no_policy_for_agent,
-            coverage.empty_allowlist
-        );
-        let _ = writeln!(out, "{}", theme.key_value("Status", &status_line));
-        if coverage.not_applicable > 0 {
-            let _ = writeln!(
-                out,
-                "{}",
-                theme.key_value("Not applicable", &coverage.not_applicable.to_string())
-            );
-        }
-
-        let mut current_agent = String::new();
-        for server in &coverage.servers {
-            if server.agent.display_name() != current_agent {
-                current_agent = server.agent.display_name().to_string();
-                let _ = writeln!(out, "\n{}:", theme.info.apply_to(&current_agent));
-            }
-            let (marker, _label): (String, &str) = match server.status {
-                CoverageStatus::Covered => (
-                    theme
-                        .success
-                        .apply_to(format!("{} covered", ui::checkmark()))
-                        .to_string(),
-                    "covered",
-                ),
-                CoverageStatus::NotCovered => (
-                    theme
-                        .danger
-                        .apply_to(format!("{} not covered", ui::cross_mark()))
-                        .to_string(),
-                    "not covered",
-                ),
-                CoverageStatus::NoPolicyForAgent => (
-                    theme
-                        .warning
-                        .apply_to("~ no policy".to_string())
-                        .to_string(),
-                    "no policy",
-                ),
-                CoverageStatus::EmptyAllowlist => (
-                    theme
-                        .muted
-                        .apply_to(format!("{} empty allowlist", ui::rule_char()))
-                        .to_string(),
-                    "empty allowlist",
-                ),
-                CoverageStatus::NotApplicable => (
-                    theme
-                        .muted
-                        .apply_to("  not applicable".to_string())
-                        .to_string(),
-                    "not applicable",
-                ),
-            };
-            let _ = writeln!(
-                out,
-                "  {marker}  {}  {}",
-                ui::pad(&server.server_name, 24),
-                theme.muted.apply_to(&server.config_path)
-            );
-        }
+        coverage::render_protection_coverage(&mut out, &theme, coverage);
     }
 
     let _ = writeln!(out, "\n{}", theme.section("Priority findings"));
