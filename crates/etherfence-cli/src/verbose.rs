@@ -115,8 +115,9 @@ fn render_posture_header(out: &mut String, theme: &UiTheme, report: &ScanReport,
             theme.key_value(
                 "Posture",
                 &format!(
-                    "{}/100 — {}",
+                    "{}/100 {} {}",
                     posture.score,
+                    ui::em_dash(),
                     grade_style.apply_to(format!("GRADE {}", posture.grade.label()))
                 )
             )
@@ -154,8 +155,12 @@ fn render_posture_header(out: &mut String, theme: &UiTheme, report: &ScanReport,
             theme.key_value(
                 "Policy",
                 &format!(
-                    "{} — checks={}, pass={}, violations={}",
-                    policy.policy_name, policy.checks_total, policy.pass, policy.violation
+                    "{} {} checks={}, pass={}, violations={}",
+                    policy.policy_name,
+                    ui::em_dash(),
+                    policy.checks_total,
+                    policy.pass,
+                    policy.violation
                 )
             )
         );
@@ -278,9 +283,10 @@ fn render_clients_and_servers(
             let _ = writeln!(
                 out,
                 "  {}",
-                theme
-                    .warning
-                    .apply_to("Configuration could not be parsed — server state unknown.")
+                theme.warning.apply_to(format!(
+                    "Configuration could not be parsed {} server state unknown.",
+                    ui::em_dash()
+                ))
             );
         } else {
             let _ = writeln!(
@@ -402,14 +408,33 @@ fn render_consolidated_recommendations(
         return;
     }
 
-    // Group findings by id
+    // Group findings by id. EF-MCP-000 ("MCP server configured") is supporting
+    // context — the server already appears in the section above — not an
+    // actionable remediation, so it never becomes a numbered recommendation.
     let mut by_id: BTreeMap<&str, Vec<&Finding>> = BTreeMap::new();
     for finding in &report.findings {
+        if finding.id == "EF-MCP-000" {
+            continue;
+        }
         by_id.entry(&finding.id).or_default().push(finding);
     }
 
+    if by_id.is_empty() {
+        let _ = writeln!(out, "No findings to act on.");
+        return;
+    }
+
+    // Order by severity (highest first), then finding id — deterministic and
+    // consistent with the summary's severity-ordered "Next steps".
+    let mut groups: Vec<(&&str, &Vec<&Finding>)> = by_id.iter().collect();
+    groups.sort_by(|a, b| {
+        let a_sev = a.1.iter().map(|f| f.severity).max();
+        let b_sev = b.1.iter().map(|f| f.severity).max();
+        b_sev.cmp(&a_sev).then_with(|| a.0.cmp(b.0))
+    });
+
     let mut index = 0;
-    for (finding_id, findings) in &by_id {
+    for (finding_id, findings) in groups {
         index += 1;
         let first = findings.first().unwrap();
         let _ = writeln!(
@@ -455,7 +480,7 @@ fn render_consolidated_recommendations(
             "",
             &theme
                 .muted
-                .apply_to("Run `etherfence setup` to secure detected MCP servers.")
+                .apply_to("Run `etherfence setup` to set up deny-by-default `mcp-proxy` policies for detected MCP servers.")
                 .to_string(),
             width,
         )

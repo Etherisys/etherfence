@@ -1297,18 +1297,47 @@ fn relative_or_absolute(root: &Path, path: &Path) -> String {
 }
 
 fn atomic_write(path: &Path, content: &[u8]) -> Result<()> {
+    use std::io::Write as _;
+
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
     }
-    let tmp = path.with_extension("tmp-etherfence");
-    fs::write(&tmp, content).with_context(|| format!("writing temp file {}", tmp.display()))?;
-    fs::rename(&tmp, path).with_context(|| {
+    // A per-process temp name avoids colliding with a temp left by a crashed
+    // run, while `create_new` (O_EXCL semantics, portable) refuses to open
+    // through a pre-planted symlink or any existing file. Without it, an
+    // attacker able to create files in the config's directory (e.g. a shared
+    // or cloned repo's `.vscode/`) could pre-plant `<target>.tmp-etherfence`
+    // as a symlink and redirect this write into an arbitrary victim file.
+    let tmp = path.with_extension(format!("tmp-etherfence-{}", std::process::id()));
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&tmp)
+        .with_context(|| {
+            format!(
+                "creating temp file {} (refusing to follow a pre-existing path)",
+                tmp.display()
+            )
+        })?;
+    let written = file
+        .write_all(content)
+        .and_then(|()| file.sync_all())
+        .with_context(|| format!("writing temp file {}", tmp.display()));
+    drop(file);
+    if let Err(error) = written {
+        let _ = fs::remove_file(&tmp);
+        return Err(error);
+    }
+    if let Err(error) = fs::rename(&tmp, path).with_context(|| {
         format!(
             "atomically replacing {} with {}",
             path.display(),
             tmp.display()
         )
-    })?;
+    }) {
+        let _ = fs::remove_file(&tmp);
+        return Err(error);
+    }
     Ok(())
 }
 
@@ -1487,6 +1516,35 @@ mod tests {
         assert!(
             hash.chars().all(|c| c.is_ascii_hexdigit()),
             "hash must be hex: {hash}"
+        );
+    }
+
+    #[test]
+    fn atomic_write_writes_then_replaces() {
+        let dir = temp_dir("atomic-ok");
+        let target = dir.join("config.json");
+        fs::write(&target, b"original").unwrap();
+        atomic_write(&target, b"new-content").unwrap();
+        assert_eq!(fs::read(&target).unwrap(), b"new-content");
+    }
+
+    #[test]
+    fn atomic_write_fails_closed_on_preplanted_temp() {
+        // Regression (F-03): a pre-planted temp (as an attacker's symlink or a
+        // plain file) must make the write fail closed and leave the target
+        // untouched, never redirect the write through the planted path.
+        let dir = temp_dir("atomic-plant");
+        let target = dir.join("config.json");
+        fs::write(&target, b"original").unwrap();
+        let tmp = target.with_extension(format!("tmp-etherfence-{}", std::process::id()));
+        fs::write(&tmp, b"planted").unwrap();
+
+        let result = atomic_write(&target, b"attacker-would-see-this");
+        assert!(result.is_err(), "must fail closed on a pre-existing temp");
+        assert_eq!(
+            fs::read(&target).unwrap(),
+            b"original",
+            "target must be untouched"
         );
     }
 

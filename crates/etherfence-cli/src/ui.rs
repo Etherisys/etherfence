@@ -232,6 +232,14 @@ pub(crate) fn middle_dot() -> &'static str {
     }
 }
 
+pub(crate) fn em_dash() -> &'static str {
+    if unicode_supported() {
+        "\u{2014}"
+    } else {
+        "--"
+    }
+}
+
 /// Box top border: `┌──...──┐` (or ASCII `+--...--+`).
 #[allow(dead_code)]
 pub(crate) fn box_top(width: usize) -> String {

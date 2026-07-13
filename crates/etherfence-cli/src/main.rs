@@ -5,9 +5,9 @@ mod verbose;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use etherfence_core::{
-    read_bounded_text_file, read_bounded_text_file_no_follow, BaselineComparison, BaselineFile,
-    BaselineStatus, CoverageStatus, Finding, PolicyMetadata, PostureSummary, ScanReport, Severity,
-    Summary, MAX_BASELINE_FILE_BYTES, MAX_CONFIG_FILE_BYTES,
+    home_relative_root, read_bounded_text_file, read_bounded_text_file_no_follow,
+    BaselineComparison, BaselineFile, BaselineStatus, CoverageStatus, Finding, PolicyMetadata,
+    PostureSummary, ScanReport, Severity, Summary, MAX_BASELINE_FILE_BYTES, MAX_CONFIG_FILE_BYTES,
 };
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -39,7 +39,7 @@ enum Command {
         verbose: bool,
         /// Include technical evidence (fingerprints, schema IDs, policy-status)
         /// in verbose human output. Requires --verbose.
-        #[arg(long)]
+        #[arg(long, requires = "verbose")]
         debug: bool,
         /// Only display findings at or above this severity.
         #[arg(long, value_enum, default_value_t = CliSeverity::Info)]
@@ -945,9 +945,10 @@ fn render_setup_detect(root: &Path, detections: &[etherfence_setup::SetupDetecti
             let _ = writeln!(out, "    capabilities: {}", labels.join(", "));
             let _ = writeln!(
                 out,
-                "    recommendation: {} (needs-review={}) — {}",
+                "    recommendation: {} (needs-review={}) {} {}",
                 recommendation_tier_label(server.recommendation.tier),
                 server.recommendation.needs_review,
+                ui::em_dash(),
                 server.recommendation.rationale
             );
             let trust = &server.trust_assessment;
@@ -993,7 +994,7 @@ fn render_setup_detect_json(
 ) -> Result<String> {
     let report = serde_json::json!({
         "etherfenceSchemaVersion": "ef-setup-detect/v0.2",
-        "root": root.display().to_string(),
+        "root": home_relative_root(root),
         "detections": detections,
     });
     Ok(format!("{}\n", serde_json::to_string_pretty(&report)?))
@@ -1037,7 +1038,7 @@ fn render_setup_catalog_json(
 ) -> Result<String> {
     let report = serde_json::json!({
         "etherfenceSchemaVersion": "ef-setup-catalog/v0.1",
-        "root": root.display().to_string(),
+        "root": home_relative_root(root),
         "clients": entries,
     });
     Ok(format!("{}\n", serde_json::to_string_pretty(&report)?))
@@ -1381,13 +1382,18 @@ fn run_setup_wizard() -> Result<()> {
                     eprintln!(
                         "  {} {}",
                         ui::pad(&server.name, 24),
-                        theme.muted.apply_to("already protected — no action needed")
+                        theme.muted.apply_to(format!(
+                            "already protected {} no action needed",
+                            ui::em_dash()
+                        ))
                     );
                 } else if server.transport != etherfence_setup::ServerTransport::Stdio {
                     eprintln!(
                         "  {} {}",
                         ui::pad(&server.name, 24),
-                        theme.muted.apply_to("remote server — cannot be wrapped")
+                        theme
+                            .muted
+                            .apply_to(format!("remote server {} cannot be wrapped", ui::em_dash()))
                     );
                 } else {
                     selectable.push(index);
@@ -2232,14 +2238,14 @@ fn run_scan(options: ScanOptions) -> Result<()> {
 
     let (scanned_root, inventory) = if let Some(root) = &options.root {
         (
-            root.display().to_string(),
+            home_relative_root(root),
             etherfence_inventory::discover(root),
         )
     } else {
         let roots = etherfence_inventory::default_scan_roots();
         let scanned_root = roots
             .iter()
-            .map(|root| root.display().to_string())
+            .map(|root| home_relative_root(root))
             .collect::<Vec<_>>()
             .join(",");
         (scanned_root, etherfence_inventory::discover_roots(&roots))
@@ -2395,8 +2401,9 @@ fn render_scan_summary(report: &ScanReport) -> String {
             theme.key_value(
                 "Posture",
                 &format!(
-                    "{}/100 — {}",
+                    "{}/100 {} {}",
                     posture.score,
+                    ui::em_dash(),
                     grade_style.apply_to(format!("GRADE {}", posture.grade.label()))
                 )
             )
@@ -2432,8 +2439,12 @@ fn render_scan_summary(report: &ScanReport) -> String {
             theme.key_value(
                 "Policy",
                 &format!(
-                    "{} — checks={}, pass={}, violations={}",
-                    policy.policy_name, policy.checks_total, policy.pass, policy.violation
+                    "{} {} checks={}, pass={}, violations={}",
+                    policy.policy_name,
+                    ui::em_dash(),
+                    policy.checks_total,
+                    policy.pass,
+                    policy.violation
                 )
             )
         );
@@ -2601,7 +2612,8 @@ fn render_scan_summary(report: &ScanReport) -> String {
                         "…       ",
                         "        ",
                         &format!(
-                            "{remaining} additional active finding(s) — run `etherfence scan --verbose` for the full list"
+                            "{remaining} additional active finding(s) {} run `etherfence scan --verbose` for the full list",
+                            ui::em_dash()
                         ),
                         width,
                     )
@@ -2646,7 +2658,7 @@ fn render_scan_summary(report: &ScanReport) -> String {
         ui::wrap_prefixed(
             "Run ",
             "    ",
-            "`etherfence setup` to secure detected MCP servers.",
+            "`etherfence setup` to set up deny-by-default `mcp-proxy` policies for detected MCP servers.",
             width,
         )
     );
@@ -2762,14 +2774,32 @@ fn apply_baseline(
     }
 }
 
-// `path` here is an explicit, trusted-operator CLI input (`--baseline`);
-// see the doc comment on `read_bounded_text_file` for the CLI-vs-future-API
-// path trust model this crate follows.
+/// The only baseline schema this build reads/writes. A baseline written under
+/// a different (older/foreign) fingerprint scheme is rejected fail-closed
+/// rather than silently marking every current finding `New` and every baseline
+/// finding `Resolved` — which would make `--fail-on-new` fire (or, on a
+/// fingerprint overlap, fail to fire) misleadingly.
+const BASELINE_SCHEMA_VERSION: &str = "ef-baseline/v0.1.3";
+
+// `path` here is an explicit, trusted-operator CLI input (`--baseline`).
+// A swapped/symlinked baseline is a misleading input, so the read fails
+// closed on symlinks (mirrors `read_setup_baseline`), matching the no-follow
+// discipline documented on `read_bounded_text_file_no_follow`.
 fn read_baseline(path: &Path) -> Result<BaselineFile> {
-    let content = read_bounded_text_file(path, MAX_BASELINE_FILE_BYTES)
+    let content = read_bounded_text_file_no_follow(path, MAX_BASELINE_FILE_BYTES)
         .with_context(|| format!("reading baseline file {}", path.display()))?;
-    serde_json::from_str(&content)
-        .with_context(|| format!("parsing baseline file {}", path.display()))
+    let baseline: BaselineFile = serde_json::from_str(&content)
+        .with_context(|| format!("parsing baseline file {}", path.display()))?;
+    if baseline.schema_version != BASELINE_SCHEMA_VERSION {
+        anyhow::bail!(
+            "baseline file {} has unsupported schema_version {:?} (expected {:?}); \
+             regenerate it with `--write-baseline`",
+            path.display(),
+            baseline.schema_version,
+            BASELINE_SCHEMA_VERSION
+        );
+    }
+    Ok(baseline)
 }
 
 fn write_baseline(path: &Path, findings: &[Finding]) -> Result<()> {
@@ -2778,7 +2808,7 @@ fn write_baseline(path: &Path, findings: &[Finding]) -> Result<()> {
             .with_context(|| format!("creating baseline directory {}", parent.display()))?;
     }
     let baseline = BaselineFile {
-        schema_version: "ef-baseline/v0.1.3".to_string(),
+        schema_version: BASELINE_SCHEMA_VERSION.to_string(),
         tool: "etherfence".to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
         created_at: None,

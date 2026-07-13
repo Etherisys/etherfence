@@ -17,6 +17,62 @@ field guards; `ef-mcp-policy/v0.1` policies are unaffected. EtherFence still
 has no daemon mode, shell hooks, command interception, terminal-command
 scanning, or network interception.
 
+## [Unreleased]
+
+Post-v1.7.3 security & correctness review. No schema, scoring, or scan-discovery
+change; machine formats are unchanged.
+
+### Security
+
+- **MCP proxy: bounded stdio frames** — both boundary pumps now read
+  newline-delimited JSON-RPC frames with an 8 MiB cap and fail closed on an
+  oversized frame, instead of `BufRead::lines()`, which grows without bound and
+  let an untrusted client or wrapped server OOM the proxy.
+- **Setup apply: symlink-safe temp writes** — `atomic_write` now creates its
+  temp with `create_new` (O_EXCL) under a per-process name, so a pre-planted
+  temp/symlink in the config directory can no longer redirect the write into an
+  arbitrary victim file.
+- **Redaction: parse-error evidence** — malformed config parse errors no longer
+  copy the offending source line (which can carry secrets) into finding
+  evidence, JSON/SARIF/Markdown output, or a written baseline; only the error
+  kind and location are kept, and quoted spans are redacted.
+- **`deny_roots` case-insensitive matching** — path deny rules now match
+  case-insensitively so a rule such as `.../.git` cannot be evaded by
+  `.../.Git/...` on a case-insensitive filesystem (deny over-matches, fail
+  closed); `allow_roots` stays case-sensitive.
+- **`scan --baseline` fails closed on symlinks and validates `schema_version`**
+  — the baseline read is now no-follow (mirroring the setup baseline read) and
+  rejects an unsupported baseline schema instead of silently mis-diffing.
+- **Home paths kept out of shared machine output** — a default (`$HOME`) scan or
+  setup run now emits `~`-relative roots in SARIF/JSON/Markdown and committed
+  baselines instead of the operator's real home path and username.
+- **Generated policy: tool-name injection** — the custom-allowlist policy
+  generator now rejects tool names containing quotes, backslashes, or control
+  characters instead of interpolating them into TOML and broadening the
+  allowlist.
+- **Unicode hygiene** — the invisible/format-character set now covers the
+  U+E0000–E007F tag block (hidden-instruction vector) and other invisibles for
+  guarded path values.
+
+### Fixed
+
+- **Corrupted colored terminal output** — `strip_ansi` desynchronised its byte
+  and char cursors, truncating every colored line that wrapped (the "Findings"
+  severity line and others) on interactive terminals; rewritten single-cursor,
+  and short styled values now keep their color.
+- **`scan --verbose` recommendations** — consolidated actions are now ordered by
+  severity then finding ID (matching the summary), and EF-MCP-000 ("MCP server
+  configured") is treated as context rather than a numbered remediation.
+- **Unicode/ASCII fallback completeness** — em dashes, the banner metadata
+  middle dot, and the standard block-art banner now fall back to ASCII when the
+  terminal cannot display Unicode.
+- **`--debug` requires `--verbose`** — the flag is now rejected when used alone
+  instead of being a silent no-op.
+- **Docs & packaging** — corrected the repository URL (`Etherisys/etherfence`),
+  softened read-only `scan`/`setup` wording away from enforcement language,
+  refreshed `docs/roadmap.md` (v1.6.x–v1.7.3, coverage token names, posture-
+  scoring attribution), and routed `github.ref` through `env` in `release.yml`.
+
 ## [1.7.3] - 2026-07-12
 
 ### Changed

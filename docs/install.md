@@ -19,7 +19,7 @@ There are three ways to get `etherfence`:
 
 Releases are cut manually (see [`docs/release-automation.md`](release-automation.md))
 and published on the repository's
-[GitHub Releases](https://github.com/Etherisys-id/etherfence/releases) page.
+[GitHub Releases](https://github.com/Etherisys/etherfence/releases) page.
 Each release attaches:
 
 - `etherfence-linux-x86_64.tar.gz`
@@ -77,7 +77,7 @@ somewhere already on it, to run `etherfence` from any shell.
 Requires a stable Rust toolchain ([rustup.rs](https://rustup.rs)).
 
 ```sh
-git clone https://github.com/Etherisys-id/etherfence.git
+git clone https://github.com/Etherisys/etherfence.git
 cd etherfence
 cargo build --release -p etherfence-cli
 ./target/release/etherfence --version

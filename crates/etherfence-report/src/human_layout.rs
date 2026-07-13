@@ -18,34 +18,30 @@ pub fn display_width(text: &str) -> usize {
         .sum()
 }
 
-/// Strip ANSI SGR escape sequences (CSI … m) so width measurement
+/// Strip ANSI CSI escape sequences (`ESC [ … <final>`) so width measurement
 /// ignores terminal styling bytes.
+///
+/// Single-cursor over `chars()`: a byte index desynchronises from the char
+/// iterator the moment a multi-byte or escape sequence is skipped, which
+/// previously corrupted and truncated every styled line that was wrapped.
 fn strip_ansi(text: &str) -> String {
     let mut result = String::with_capacity(text.len());
     let mut chars = text.chars().peekable();
-    let bytes = text.as_bytes();
-    let mut pos = 0usize;
 
-    while pos < bytes.len() {
-        if bytes[pos] == 0x1b && pos + 1 < bytes.len() && bytes[pos + 1] == b'[' {
-            // Find the end of the CSI sequence (0x40–0x7E)
-            let mut end = pos + 2;
-            while end < bytes.len() && !(0x40..=0x7E).contains(&bytes[end]) {
-                end += 1;
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' && chars.peek() == Some(&'[') {
+            // Consume the '[' then everything up to and including the CSI
+            // final byte (0x40–0x7E). A sequence truncated at end-of-string
+            // is consumed entirely (nothing left to render anyway).
+            chars.next();
+            while let Some(&next) = chars.peek() {
+                chars.next();
+                if ('\u{40}'..='\u{7e}').contains(&next) {
+                    break;
+                }
             }
-            if end < bytes.len() {
-                // include the final byte
-                end += 1;
-            } else {
-                end = pos + 1; // malformed, skip just the ESC
-            }
-            pos = end;
         } else {
-            // Count UTF-8 continuation bytes to advance correctly
-            let c = chars.next().unwrap_or('\0');
-            let len = c.len_utf8();
             result.push(c);
-            pos += len;
         }
     }
     result
@@ -65,6 +61,14 @@ pub fn wrap_prefixed(prefix: &str, continuation: &str, text: &str, width: usize)
         lines.push(prefix.trim_end().to_string());
         current_prefix = continuation;
         capacity = width.saturating_sub(display_width(current_prefix));
+    }
+
+    // Common case: the whole value fits on one line. Emit the ORIGINAL text
+    // so any ANSI styling is preserved (the word-wrapping path below rebuilds
+    // from ANSI-stripped words and necessarily drops styling).
+    if !text.is_empty() && !text.contains('\n') && display_width(text) <= capacity {
+        lines.push(format!("{current_prefix}{text}"));
+        return lines;
     }
 
     let stripped = strip_ansi(text);
@@ -131,5 +135,42 @@ mod tests {
     #[test]
     fn preserves_a_line_for_empty_content() {
         assert_eq!(wrap_prefixed("Scope: ", "       ", "", 24), vec!["Scope:"]);
+    }
+
+    #[test]
+    fn strip_ansi_does_not_truncate_after_escape() {
+        // Regression: byte/char cursor desync used to drop everything after
+        // the first CSI sequence and leak a raw escape.
+        assert_eq!(strip_ansi("\x1b[31mHIGH\x1b[0m tail"), "HIGH tail");
+        assert_eq!(strip_ansi("a\x1b[33mb\x1b[0mc"), "abc");
+        assert_eq!(display_width("\x1b[31mHIGH\x1b[0m tail"), "HIGH tail".len());
+    }
+
+    #[test]
+    fn strip_ansi_handles_multibyte_and_malformed() {
+        assert_eq!(strip_ansi("影\x1b[1m響\x1b[0m"), "影響");
+        // Malformed (ESC not followed by '[') is preserved as content.
+        assert_eq!(strip_ansi("x\x1by"), "x\u{1b}y");
+    }
+
+    #[test]
+    fn styled_value_that_fits_keeps_its_ansi() {
+        // A short styled value must not lose its color when it fits one line.
+        let styled = "0 high \x1b[33m2 medium\x1b[0m 5 low";
+        let lines = wrap_prefixed("Findings      ", "              ", styled, 80);
+        assert_eq!(lines, vec![format!("Findings      {styled}")]);
+    }
+
+    #[test]
+    fn styled_value_that_wraps_is_complete_even_if_unstyled() {
+        // When wrapping is required styling is dropped, but no text is lost
+        // (regression: the old strip_ansi truncated the tail). Width 40 is
+        // above the MIN_SUPPORTED_WIDTH floor so the requested width applies.
+        let styled =
+            "\x1b[31mextraordinarilylongasciitokenthatmustsplit\x1b[0m and another long token here";
+        let lines = wrap_prefixed("  R: ", "     ", styled, 40);
+        assert!(lines.iter().all(|line| display_width(line) <= 40));
+        let joined: String = lines.iter().map(|l| l.trim()).collect::<Vec<_>>().join(" ");
+        assert!(joined.contains("another long token here"));
     }
 }

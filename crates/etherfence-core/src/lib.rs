@@ -15,6 +15,40 @@ pub const MAX_CONFIG_FILE_BYTES: u64 = 5 * 1024 * 1024;
 /// findings over time so they are allowed to grow larger than config files.
 pub const MAX_BASELINE_FILE_BYTES: u64 = 25 * 1024 * 1024;
 
+/// Home-relative display for a root path emitted into machine output: `~` for
+/// the home directory itself, `~/rest` beneath it, unchanged otherwise.
+///
+/// A default (`$HOME`) scan or setup run would otherwise leak the operator's
+/// username into shareable machine output — SARIF uploaded to code-scanning
+/// dashboards, JSON, Markdown, and committed baselines — which is banned for
+/// shared/checked-in content. Paths not under a home directory are returned
+/// unchanged, so explicit `--root` inputs (including test fixtures) are
+/// unaffected. Home is read from `HOME`/`USERPROFILE` (same as inventory's
+/// `default_scan_roots`).
+pub fn home_relative_root(path: &Path) -> String {
+    let raw = path.display().to_string();
+    let normalized = raw.replace('\\', "/");
+    for var in ["HOME", "USERPROFILE"] {
+        let Some(home) = std::env::var_os(var) else {
+            continue;
+        };
+        if home.is_empty() {
+            continue;
+        }
+        let home = Path::new(&home).display().to_string().replace('\\', "/");
+        if home.is_empty() {
+            continue;
+        }
+        if normalized == home {
+            return "~".to_string();
+        }
+        if let Some(rest) = normalized.strip_prefix(&format!("{home}/")) {
+            return format!("~/{rest}");
+        }
+    }
+    raw
+}
+
 /// Reads a UTF-8 text file, rejecting it if it exceeds `max_bytes`.
 ///
 /// The limit is enforced against the actual bytes read, not against
@@ -795,6 +829,40 @@ fn fnv1a64(bytes: &[u8]) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn home_relative_root_normalizes_only_home_paths() {
+        let orig_home = std::env::var_os("HOME");
+        let orig_up = std::env::var_os("USERPROFILE");
+        std::env::set_var("HOME", "/home/tester");
+        std::env::remove_var("USERPROFILE");
+
+        assert_eq!(home_relative_root(Path::new("/home/tester")), "~");
+        assert_eq!(
+            home_relative_root(Path::new("/home/tester/.claude.json")),
+            "~/.claude.json"
+        );
+        // Not under home, and explicit relative fixture roots: unchanged.
+        assert_eq!(home_relative_root(Path::new("/etc/passwd")), "/etc/passwd");
+        assert_eq!(
+            home_relative_root(Path::new("tests/fixtures/home")),
+            "tests/fixtures/home"
+        );
+        // A sibling that merely shares a prefix must NOT be rewritten.
+        assert_eq!(
+            home_relative_root(Path::new("/home/tester-evil/x")),
+            "/home/tester-evil/x"
+        );
+
+        match orig_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+        match orig_up {
+            Some(v) => std::env::set_var("USERPROFILE", v),
+            None => std::env::remove_var("USERPROFILE"),
+        }
+    }
 
     fn sample_finding(evidence: Vec<String>) -> Finding {
         let mut finding = Finding {

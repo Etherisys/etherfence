@@ -415,10 +415,15 @@ fn parse_yaml_mcp_servers(value: &YamlValue) -> ParsedServers {
 }
 
 fn parse_error_evidence(err: &anyhow::Error) -> String {
-    let mut message = format!("{err:#}")
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
+    // Redaction (audit-redaction principle): parser errors can echo file
+    // content. `toml` renders the offending source line in a `| N | <content>
+    // |` gutter, and type errors can inline a quoted value. Keep only the
+    // error kind + location: drop everything from the first gutter bar or
+    // newline, and redact any remaining double-quoted spans.
+    let full = format!("{err:#}");
+    let header = full.split(['\n', '|']).next().unwrap_or("");
+    let redacted = redact_quoted_spans(header);
+    let mut message = redacted.split_whitespace().collect::<Vec<_>>().join(" ");
     const MAX_LEN: usize = 200;
     if message.len() > MAX_LEN {
         let mut end = MAX_LEN;
@@ -429,6 +434,26 @@ fn parse_error_evidence(err: &anyhow::Error) -> String {
         message.push_str("...");
     }
     format!("{PARSE_ERROR_EVIDENCE_PREFIX} {message}")
+}
+
+/// Replace `"…"` double-quoted spans with `"<redacted>"` so a parser error
+/// that echoes a quoted value (or credential) never lands in finding evidence,
+/// JSON/SARIF output, or a written baseline. An unterminated quote redacts to
+/// end-of-string (fail closed).
+fn redact_quoted_spans(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut in_quote = false;
+    for ch in text.chars() {
+        if ch == '"' {
+            if !in_quote {
+                out.push_str("\"<redacted>\"");
+            }
+            in_quote = !in_quote;
+        } else if !in_quote {
+            out.push(ch);
+        }
+    }
+    out
 }
 
 fn display_path(root: &Path, path: &Path) -> String {
@@ -769,6 +794,36 @@ mod tests {
             .find(|e| e.name == "SEARCH_TIMEOUT")
             .expect("numeric env value");
         assert_eq!(timeout.value_hint.as_deref(), Some("<set>"));
+    }
+
+    #[test]
+    fn parse_error_evidence_redacts_source_content() {
+        // Regression: a malformed TOML line must not leak its (secret-bearing)
+        // source into finding evidence / JSON / SARIF / baseline output.
+        let bad = "password = \"hunter2-SUPERSECRET\" this-is-malformed\n";
+        let err = bad
+            .parse::<TomlValue>()
+            .context("parsing TOML")
+            .expect_err("malformed toml");
+        let evidence = parse_error_evidence(&err);
+        assert!(evidence.starts_with(PARSE_ERROR_EVIDENCE_PREFIX));
+        assert!(evidence.contains("parsing TOML"), "kept kind: {evidence}");
+        assert!(
+            !evidence.contains("hunter2-SUPERSECRET"),
+            "leaked secret: {evidence}"
+        );
+        assert!(!evidence.contains("password"), "leaked content: {evidence}");
+    }
+
+    #[test]
+    fn redact_quoted_spans_removes_quoted_values() {
+        assert_eq!(
+            redact_quoted_spans("invalid type: string \"SECRET\" expected map"),
+            "invalid type: string \"<redacted>\" expected map"
+        );
+        assert_eq!(redact_quoted_spans("no quotes here"), "no quotes here");
+        // Unterminated quote redacts to end of string.
+        assert_eq!(redact_quoted_spans("oops \"tail"), "oops \"<redacted>\"");
     }
 
     #[test]

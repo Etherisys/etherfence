@@ -85,7 +85,7 @@ Mono). Verify the underlying behavior without VHS via `./demo/verify-demo.sh`.
 
 | Area | EtherFence today |
 | --- | --- |
-| AI-agent/MCP config posture on this machine | **Protects** — `scan` discovers config files and reports risk hints |
+| AI-agent/MCP config posture on this machine | **Reports** — `scan` discovers config files and reports risk hints (read-only, no enforcement) |
 | MCP stdio traffic to a server explicitly wrapped with `mcp-proxy` | **Protects** — method/tool/path allow-deny enforcement, fail-closed on policy errors |
 | MCP proxy policy authoring and review | **Protects** — `mcp-policy` validates, explains, and dry-runs policies locally |
 | MCP servers *not* wrapped by `mcp-proxy` | **Not protected** — traffic passes through however the server/client normally talk |
@@ -152,7 +152,7 @@ cargo build --release -p etherfence-cli
 etherfence setup
 ```
 
-The wizard scans your system for AI clients (Claude Code, Cursor, VS Code, Hermes, OpenCode, etc.), detects their MCP servers, shows trust assessments, lets you select which servers to protect, and generates deny-by-default starter policies with preview before applying.
+The wizard scans your system for AI clients (Claude Code, Cursor, VS Code, Hermes, OpenCode, etc.), detects their MCP servers, shows trust assessments, lets you select which servers to wrap with `mcp-proxy`, and generates deny-by-default starter policies with preview before applying.
 
 **For CI and scripting**, the explicit subcommands remain available:
 
@@ -249,7 +249,7 @@ Next steps
 ────────────────────────────────────────────────────────────
 1. [EF-MCP-001] Review the server's configured root and restrict it to the smallest required directory.
 Run `etherfence scan --verbose` for full evidence and fingerprints.
-Run `etherfence setup` to secure detected MCP servers.
+Run `etherfence setup` to set up deny-by-default `mcp-proxy` policies for detected MCP servers.
 ```
 
 The posture score intentionally covers only displayed active findings after the effective `--severity-threshold` (the default is `info`); its explicit scope line and JSON metadata are not an unfiltered host-wide security score. Resolved baseline findings remain report evidence but are excluded from the score. The result remains advisory and does not prove the host is secure. Human posture output wraps long risk, scope, impact, and recommendation text to the available terminal width; `NO_COLOR`, redirected output, and plain terminals retain the same deterministic plain text.

@@ -1,6 +1,6 @@
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 
@@ -842,9 +842,11 @@ where
             )
         });
 
-        let mut lines = client_in.lines();
-        for line in lines.by_ref() {
-            let line = line.map_err(|error| ProxyError::ClientRead(format!("{error:?}")))?;
+        let mut client_in = client_in;
+        let mut client_frame = Vec::new();
+        while let Some(line) = read_bounded_frame(&mut client_in, &mut client_frame)
+            .map_err(|error| ProxyError::ClientRead(format!("{error:?}")))?
+        {
             // Validate client lines before forwarding: a line that is not valid
             // JSON could mask a protocol error and is not something the server
             // would accept under JSON-RPC. Drop it instead of forwarding it.
@@ -927,9 +929,11 @@ fn pump_server_to_client<ClientOut: Write>(
     audit_log: &Arc<Mutex<Option<AuditLog>>>,
     server_in: &Arc<Mutex<Option<std::process::ChildStdin>>>,
 ) -> std::result::Result<(), ProxyError> {
-    let reader = BufReader::new(server_out);
-    for line in reader.lines() {
-        let line = line.map_err(|error| ProxyError::ServerRead(format!("{error:?}")))?;
+    let mut reader = BufReader::new(server_out);
+    let mut server_frame = Vec::new();
+    while let Some(line) = read_bounded_frame(&mut reader, &mut server_frame)
+        .map_err(|error| ProxyError::ServerRead(format!("{error:?}")))?
+    {
         let inspected = inspect_server_line(
             policy,
             server_name,
@@ -1004,6 +1008,47 @@ fn wait_for_child(child: &mut Child) -> std::result::Result<i32, ProxyError> {
     Ok(status.code().unwrap_or(1))
 }
 
+/// Maximum size of a single newline-delimited JSON-RPC frame the proxy will
+/// buffer from either side of the boundary. A frame larger than this fails
+/// closed (the affected pump aborts and the proxy shuts down) instead of
+/// letting an untrusted client or wrapped server drive the proxy — the one
+/// runtime-enforcement component — to out-of-memory. `BufRead::lines()` /
+/// `read_line` grow without bound, so they must not be used on this hot path.
+const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
+
+/// Read one newline-delimited frame into `buf`, bounded to `MAX_FRAME_BYTES`.
+///
+/// Returns `Ok(None)` at EOF, `Ok(Some(line))` for a frame terminated by a
+/// newline or by EOF, and an `InvalidData` error (fail closed) when a single
+/// frame exceeds the cap. Invalid UTF-8 is replaced lossily; such a frame will
+/// not parse as JSON and is dropped downstream rather than aborting the pump.
+fn read_bounded_frame<R: BufRead>(
+    reader: &mut R,
+    buf: &mut Vec<u8>,
+) -> std::io::Result<Option<String>> {
+    buf.clear();
+    let read = reader
+        .by_ref()
+        .take(MAX_FRAME_BYTES as u64 + 1)
+        .read_until(b'\n', buf)?;
+    if read == 0 {
+        return Ok(None);
+    }
+    if buf.len() > MAX_FRAME_BYTES {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "JSON-RPC frame exceeds maximum size",
+        ));
+    }
+    if buf.last() == Some(&b'\n') {
+        buf.pop();
+        if buf.last() == Some(&b'\r') {
+            buf.pop();
+        }
+    }
+    Ok(Some(String::from_utf8_lossy(buf).into_owned()))
+}
+
 /// Whether `line` parses as a JSON value. Used to drop invalid client lines
 /// before they reach the server. Invalid server lines are intentionally NOT
 /// dropped (see `inspect_server_line`): they are passed through so the client's
@@ -1016,6 +1061,44 @@ fn is_valid_json_line(line: &str) -> bool {
 mod tests {
     use super::*;
     use crate::policy::parse_mcp_policy;
+
+    #[test]
+    fn bounded_frame_reads_lines_and_stops_at_eof() {
+        let data = b"{\"a\":1}\n{\"b\":2}\n".to_vec();
+        let mut reader = std::io::BufReader::new(&data[..]);
+        let mut buf = Vec::new();
+        assert_eq!(
+            read_bounded_frame(&mut reader, &mut buf).unwrap(),
+            Some("{\"a\":1}".to_string())
+        );
+        assert_eq!(
+            read_bounded_frame(&mut reader, &mut buf).unwrap(),
+            Some("{\"b\":2}".to_string())
+        );
+        assert_eq!(read_bounded_frame(&mut reader, &mut buf).unwrap(), None);
+    }
+
+    #[test]
+    fn bounded_frame_trims_crlf() {
+        let data = b"hello\r\n".to_vec();
+        let mut reader = std::io::BufReader::new(&data[..]);
+        let mut buf = Vec::new();
+        assert_eq!(
+            read_bounded_frame(&mut reader, &mut buf).unwrap(),
+            Some("hello".to_string())
+        );
+    }
+
+    #[test]
+    fn bounded_frame_fails_closed_on_oversized_frame() {
+        // A single newline-less frame larger than the cap must error rather
+        // than allocate without bound (memory-exhaustion DoS on the boundary).
+        let data = vec![b'x'; MAX_FRAME_BYTES + 16];
+        let mut reader = std::io::BufReader::new(&data[..]);
+        let mut buf = Vec::new();
+        let err = read_bounded_frame(&mut reader, &mut buf).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    }
 
     fn policy() -> McpPolicyFile {
         parse_mcp_policy(

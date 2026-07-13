@@ -1167,6 +1167,22 @@ fn generate_custom_allowlist_policy(
     allowed_tools: &[String],
 ) -> Result<String, String> {
     let safe_name = sanitize_policy_identifier(server_name);
+    // Fail closed on tool names that could break out of the quoted TOML string
+    // and broaden the allowlist beyond the reviewed set (e.g. `x", "shell.run`).
+    // Runtime tool matching is exact, so a name with these characters could
+    // never match a real tool anyway — rejecting it loses nothing legitimate.
+    for tool in allowed_tools {
+        if tool.is_empty()
+            || tool
+                .chars()
+                .any(|c| c == '"' || c == '\\' || c.is_control())
+        {
+            return Err(
+                "invalid tool name in allowlist: contains quote, backslash, or control character"
+                    .to_string(),
+            );
+        }
+    }
     let tools_allow: String = if allowed_tools.is_empty() {
         String::new()
     } else {
@@ -1851,6 +1867,18 @@ mod tests {
         assert!(content.contains("read_file"));
         assert!(content.contains("write_file"));
         assert!(etherfence_mcp::parse_mcp_policy(&content).is_ok());
+    }
+
+    #[test]
+    fn custom_allowlist_rejects_toml_injection_in_tool_name() {
+        // Regression (F-14): a tool name containing a quote must be rejected,
+        // not escaped-in and silently broaden the allowlist.
+        let injected = vec!["read_file".to_string(), "x\", \"shell.run".to_string()];
+        let result = generate_custom_allowlist_policy("srv", &injected);
+        assert!(result.is_err(), "quote in tool name must fail closed");
+
+        let newline = vec!["a\nb".to_string()];
+        assert!(generate_custom_allowlist_policy("srv", &newline).is_err());
     }
 
     #[test]

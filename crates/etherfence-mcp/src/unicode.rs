@@ -69,7 +69,17 @@ fn is_bidi_control(ch: char) -> bool {
 fn is_zero_width_or_invisible_format(ch: char) -> bool {
     matches!(
         ch,
-        '\u{00AD}' | '\u{034F}' | '\u{180E}' | '\u{200B}'..='\u{200F}' | '\u{2060}' | '\u{FEFF}'
+        '\u{00AD}'                 // soft hyphen
+            | '\u{034F}'           // combining grapheme joiner
+            | '\u{115F}'..='\u{1160}' // Hangul choseong/jungseong fillers
+            | '\u{180E}'           // Mongolian vowel separator
+            | '\u{200B}'..='\u{200F}' // zero-width space … RLM
+            | '\u{2060}'..='\u{2064}' // word joiner + invisible math operators
+            | '\u{206A}'..='\u{206F}' // deprecated format chars (2066-2069 = bidi)
+            | '\u{3164}'           // Hangul filler
+            | '\u{FEFF}'           // zero-width no-break space / BOM
+            | '\u{FFF9}'..='\u{FFFB}' // interlinear annotation anchors
+            | '\u{E0000}'..='\u{E007F}' // Unicode tag block (hidden-instruction vector)
     )
 }
 
@@ -102,6 +112,24 @@ mod tests {
         assert_eq!(
             inspect_tool_name("filesystem.re\u{0430}d"),
             Some(UnicodeRisk::NonAsciiTool)
+        );
+    }
+
+    #[test]
+    fn detects_tag_block_and_extra_invisibles_in_path_values() {
+        // Unicode tag block (U+E0000–E007F) is the canonical hidden-instruction
+        // vector; path values are the one surface that permits non-ASCII.
+        assert_eq!(
+            inspect_path_value("/home/user/\u{E0041}project"),
+            Some(UnicodeRisk::ZeroWidth)
+        );
+        assert_eq!(
+            inspect_path_value("/data/\u{2063}secret"),
+            Some(UnicodeRisk::ZeroWidth)
+        );
+        assert_eq!(
+            inspect_path_value("/data/\u{FFF9}x"),
+            Some(UnicodeRisk::ZeroWidth)
         );
     }
 

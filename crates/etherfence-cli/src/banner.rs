@@ -33,6 +33,7 @@ struct TerminalEnvironment {
     term: Option<String>,
     columns: Option<u16>,
     ansi_supported: bool,
+    unicode: bool,
 }
 
 impl TerminalEnvironment {
@@ -45,6 +46,7 @@ impl TerminalEnvironment {
             term: env::var("TERM").ok(),
             columns: terminal_width().or_else(columns_env),
             ansi_supported: ansi_supported_by_stdout(),
+            unicode: super::ui::unicode_supported(),
         }
     }
 
@@ -98,6 +100,12 @@ fn should_show(mode: OutputMode, env: &TerminalEnvironment) -> bool {
 }
 
 fn banner_style(env: &TerminalEnvironment) -> BannerStyle {
+    // The standard banner is built from Unicode box-drawing glyphs; without
+    // Unicode support it would render as mojibake, so fall back to the ASCII
+    // "ETHERFENCE" compact form (whose footer glyphs also degrade to ASCII).
+    if !env.unicode {
+        return BannerStyle::Compact;
+    }
     match env.columns {
         Some(width) if width < STANDARD_MIN_WIDTH => BannerStyle::Compact,
         Some(_) => BannerStyle::Standard,
@@ -140,12 +148,13 @@ fn render_banner_footer(out: &mut String, env: &TerminalEnvironment, mode_label:
 
     // Build the metadata — split to two lines when the single-line form
     // would overflow the terminal width.
+    let dot = super::ui::middle_dot();
     let single_line = match mode_label {
-        Some(label) => format!("{tagline}           v{version} \u{00b7} {label}"),
+        Some(label) => format!("{tagline}           v{version} {dot} {label}"),
         None => format!("{tagline}           v{version}"),
     };
     let version_line = match mode_label {
-        Some(label) => format!("v{version} \u{00b7} {label}"),
+        Some(label) => format!("v{version} {dot} {label}"),
         None => format!("v{version}"),
     };
 
@@ -261,6 +270,7 @@ mod tests {
             term: Some("xterm-256color".to_string()),
             columns,
             ansi_supported: true,
+            unicode: true,
         }
     }
 
@@ -318,6 +328,15 @@ mod tests {
     #[test]
     fn compact_banner_selected_when_width_is_unknown() {
         assert_eq!(banner_style(&env(true, None)), BannerStyle::Compact);
+    }
+
+    #[test]
+    fn compact_banner_selected_when_unicode_unsupported() {
+        // Regression (F-12): the standard block-art banner must not render on
+        // a wide terminal that cannot display Unicode (would be mojibake).
+        let mut terminal = env(true, Some(120));
+        terminal.unicode = false;
+        assert_eq!(banner_style(&terminal), BannerStyle::Compact);
     }
 
     // ── Footer width tests ──────────────────────────────────────────

@@ -279,6 +279,80 @@ fn scan_fixture_human_verbose_groups_by_severity_and_guidance() {
 }
 
 #[test]
+fn scan_verbose_consolidated_excludes_context_and_orders_by_severity() {
+    // F-16: EF-MCP-000 ("MCP server configured") is context, not a numbered
+    // remediation, so it must not appear as a consolidated action (it uses the
+    // bracketed `[EF-MCP-000]` form only there).
+    // F-11: consolidated actions are ordered by severity then id — the High
+    // EF-MCP-001 is first, and the Medium EF-SEC-001 precedes the Low
+    // EF-MCP-004 (which pure alphabetical id ordering would have reversed).
+    let root = fixture_root("home");
+    let output = run(&["scan", "--root", &root, "--verbose"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        !stdout.contains("[EF-MCP-000]"),
+        "EF-MCP-000 must not be a consolidated recommendation"
+    );
+    assert!(
+        stdout.contains("1. [EF-MCP-001]"),
+        "High finding must be #1"
+    );
+    let sec = stdout.find("[EF-SEC-001]").expect("EF-SEC-001 present");
+    let low = stdout.find("[EF-MCP-004]").expect("EF-MCP-004 present");
+    assert!(
+        sec < low,
+        "Medium EF-SEC-001 must precede Low EF-MCP-004 (severity beats id)"
+    );
+}
+
+#[test]
+fn scan_verbose_debug_shows_fingerprints_and_schema() {
+    // F-20: positive coverage for the v1.7.3 `--debug` flag.
+    let root = fixture_root("home");
+    let output = run(&["scan", "--root", &root, "--verbose", "--debug"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("fingerprint=efp1-"),
+        "debug shows fingerprints"
+    );
+    assert!(
+        stdout.contains("schema=ef-scan-report/v0.1.2"),
+        "debug shows schema id"
+    );
+
+    // Without --debug the same metadata is absent.
+    let plain = run(&["scan", "--root", &root, "--verbose"]);
+    assert!(!String::from_utf8_lossy(&plain.stdout).contains("fingerprint=efp1-"));
+}
+
+#[test]
+fn scan_debug_requires_verbose() {
+    // F-19: `--debug` without `--verbose` must fail (clap `requires`), not be a
+    // silent no-op.
+    let root = fixture_root("home");
+    let output = run(&["scan", "--root", &root, "--debug"]);
+    assert!(!output.status.success(), "--debug alone must be rejected");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("--verbose"));
+}
+
+#[test]
+fn scan_verbose_distinguishes_unparsable_from_zero_server_configs() {
+    // F-20 / v1.7.3 claim 2: an unparsable config reads "server state unknown",
+    // distinct from a confirmed zero-server "No MCP servers configured".
+    let root = fixture_root("malformed-home");
+    let output = run(&["scan", "--root", &root, "--verbose"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Configuration could not be parsed"),
+        "unparsable config must be surfaced as parse failure"
+    );
+}
+
+#[test]
 fn scan_fixture_human_status_and_note_are_v1_compatible() {
     let root = fixture_root("home");
     let output = run(&["scan", "--root", &root, "--verbose"]);

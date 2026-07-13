@@ -784,7 +784,7 @@ fn evaluate_path_value(
     };
     if deny_roots
         .iter()
-        .any(|root| path_has_root(&candidate, root))
+        .any(|root| path_has_root_deny(&candidate, root))
     {
         return path_decision(
             Decision::Deny,
@@ -891,6 +891,15 @@ fn path_has_root(candidate: &str, root: &str) -> bool {
         || candidate
             .strip_prefix(root)
             .is_some_and(|rest| rest.starts_with('/'))
+}
+
+/// Containment test used for `deny_roots`. Case-insensitive so a deny rule
+/// cannot be evaded by case-varying a path component (`.Git` vs `.git`) on a
+/// case-insensitive filesystem (macOS, Windows). A deny that over-matches is
+/// fail-closed; `allow_roots` deliberately keeps the case-sensitive
+/// `path_has_root` so it can only under-match (also fail-closed).
+fn path_has_root_deny(candidate: &str, root: &str) -> bool {
+    path_has_root(&candidate.to_ascii_lowercase(), &root.to_ascii_lowercase())
 }
 
 fn first_configured_key(guard: &ArgumentGuard) -> String {
@@ -1813,6 +1822,36 @@ path_rule = "win_project"
             &policy,
             "filesystem.read",
             Some(&json!({"path": "C:/Users/Alice/project/Secrets/token.txt"})),
+        )
+        .expect("path guard");
+        assert_eq!(decision.decision, Decision::Deny);
+        assert_eq!(decision.classification, "inside_denied_root");
+    }
+
+    #[test]
+    fn posix_deny_root_blocks_case_variant_candidate() {
+        // Regression (F-08): on a case-insensitive filesystem a POSIX deny_root
+        // must not be evadable by case-varying a component (.git vs .Git).
+        let content = r#"
+schema_version = "ef-mcp-policy/v0.1"
+name = "posix-case-deny"
+
+[tools]
+allow = ["filesystem.read"]
+
+[path_rules.project]
+allow_roots = ["/home/user/project"]
+deny_roots = ["/home/user/project/.git"]
+
+[tools."filesystem.read".arguments]
+path_keys = ["path"]
+path_rule = "project"
+"#;
+        let policy = parse_mcp_policy(content).expect("policy");
+        let decision = decide_tool_argument_paths(
+            &policy,
+            "filesystem.read",
+            Some(&json!({"path": "/home/user/project/.Git/config"})),
         )
         .expect("path guard");
         assert_eq!(decision.decision, Decision::Deny);
