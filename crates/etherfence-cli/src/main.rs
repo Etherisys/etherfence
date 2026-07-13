@@ -414,9 +414,15 @@ fn command_banner_mode(command: &Command) -> (banner::OutputMode, Option<String>
             };
             (mode, label)
         }
-        // `policy list`/`policy show` emit machine-consumable lists and
-        // raw TOML for piping into files.
-        Command::Policy { .. } => (banner::OutputMode::Machine, None),
+        // `policy list` prints a human-readable table; `policy show` emits
+        // raw TOML for piping into files and must stay banner-free.
+        Command::Policy { command } => {
+            let mode = match command {
+                PolicyCommand::List => banner::OutputMode::Human,
+                PolicyCommand::Show { .. } => banner::OutputMode::Machine,
+            };
+            (mode, None)
+        }
         // The proxy speaks MCP JSON-RPC over stdio; nothing may pollute it.
         Command::McpProxy { .. } => (banner::OutputMode::Protocol, None),
         Command::McpPolicy { command } => {
@@ -456,9 +462,24 @@ fn command_banner_mode(command: &Command) -> (banner::OutputMode, Option<String>
 }
 
 fn main() -> Result<()> {
-    let cli = Cli::parse();
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(err) => {
+            // Clap itself decides which stream a given error/help/version
+            // kind goes to (`use_stderr()`); the splash must land on that
+            // same stream, ahead of Clap's own output, or not at all when
+            // that stream isn't an eligible interactive terminal.
+            let stream = if err.use_stderr() {
+                banner::Stream::Stderr
+            } else {
+                banner::Stream::Stdout
+            };
+            banner::print_startup_banner(stream, banner::OutputMode::Human, None);
+            err.exit();
+        }
+    };
     let (banner_mode, banner_label) = command_banner_mode(&cli.command);
-    banner::print_startup_banner(banner_mode, banner_label.as_deref());
+    banner::print_startup_banner(banner::Stream::Stdout, banner_mode, banner_label.as_deref());
     match cli.command {
         Command::Scan {
             format,

@@ -81,6 +81,17 @@ value is unchanged.
 
 ### Fixed
 
+- **Startup splash consistency across help, version, and error paths** —
+  `etherfence`, `etherfence help`/`--help`, `etherfence policy`/`policy
+  --help`, and `etherfence mcp-proxy`/`mcp-proxy --help` previously skipped
+  the splash because Clap exited the process (for help, version, missing
+  subcommand, or invalid-argument output) before it ever ran. The splash now
+  prints before that output on an eligible interactive terminal, routed to
+  whichever stream Clap itself uses for it (stdout for help/version, stderr
+  for usage/argument errors); `policy list` now also shows the splash as
+  human terminal output. Splash design, wording, all command behavior, exit
+  codes, machine-format output, `policy show`'s raw TOML, and `mcp-proxy`'s
+  protocol stdout are all unchanged.
 - **Corrupted colored terminal output** — `strip_ansi` desynchronised its byte
   and char cursors, truncating every colored line that wrapped (the "Findings"
   severity line and others) on interactive terminals; rewritten single-cursor,
