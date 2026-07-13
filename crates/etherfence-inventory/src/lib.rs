@@ -265,7 +265,7 @@ fn discover_candidates(root: &Path) -> Vec<InventoryItem> {
                 agent: candidate.agent,
                 config_path: display_path(root, &path),
                 mcp_servers: Vec::new(),
-                evidence: vec![parse_error_evidence(&err)],
+                evidence: vec![parse_error_evidence(&err, root, &path)],
             }),
         }
     }
@@ -414,13 +414,23 @@ fn parse_yaml_mcp_servers(value: &YamlValue) -> ParsedServers {
     parsed
 }
 
-fn parse_error_evidence(err: &anyhow::Error) -> String {
+fn parse_error_evidence(err: &anyhow::Error, root: &Path, path: &Path) -> String {
     // Redaction (audit-redaction principle): parser errors can echo file
     // content. `toml` renders the offending source line in a `| N | <content>
     // |` gutter, and type errors can inline a quoted value. Keep only the
     // error kind + location: drop everything from the first gutter bar or
     // newline, and redact any remaining double-quoted spans.
     let full = format!("{err:#}");
+    // The error chain can carry the absolute config path twice: once from
+    // this call site's own `.with_context("reading {path}")` frame, and
+    // again from `read_bounded_text_file`'s own io::Error messages (e.g.
+    // "file {path} is not valid UTF-8"). Neither is a quoted span, so
+    // `redact_quoted_spans` below cannot catch it — replace every literal
+    // occurrence of the absolute path with the same home-relative display
+    // path already used for `InventoryItem::config_path`, so an unreadable
+    // config never leaks `$HOME`/the operator's username into finding
+    // evidence (and from there JSON/SARIF/Markdown/baseline output).
+    let full = full.replace(&path.display().to_string(), &display_path(root, path));
     let header = full.split(['\n', '|']).next().unwrap_or("");
     let redacted = redact_quoted_spans(header);
     let mut message = redacted.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -805,7 +815,9 @@ mod tests {
             .parse::<TomlValue>()
             .context("parsing TOML")
             .expect_err("malformed toml");
-        let evidence = parse_error_evidence(&err);
+        let root = Path::new("/home/fixture-user");
+        let path = root.join(".codex/config.toml");
+        let evidence = parse_error_evidence(&err, root, &path);
         assert!(evidence.starts_with(PARSE_ERROR_EVIDENCE_PREFIX));
         assert!(evidence.contains("parsing TOML"), "kept kind: {evidence}");
         assert!(
@@ -813,6 +825,61 @@ mod tests {
             "leaked secret: {evidence}"
         );
         assert!(!evidence.contains("password"), "leaked content: {evidence}");
+    }
+
+    #[test]
+    fn parse_error_evidence_never_leaks_absolute_home_path() {
+        // Regression: an unreadable config's evidence must not leak the
+        // operator's absolute home directory (or username within it) into
+        // finding evidence, which reaches JSON/SARIF/Markdown/baseline
+        // output. The old redaction only stripped quoted spans and gutter
+        // lines, which never matched a bare absolute path embedded by
+        // `read_bounded_text_file`'s own error message or the "reading
+        // {path}" context frame.
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "etherfence-inventory-synthetic-home-{}-{nanos}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).expect("create synthetic home");
+        let config_path = root.join(".claude.json");
+        // Invalid UTF-8: a lone continuation byte, which is never valid at
+        // the start of a UTF-8 sequence.
+        std::fs::write(&config_path, [b'{', 0x80, b'}']).expect("write invalid-utf8 config");
+
+        let items = discover(&root);
+        let claude = items
+            .iter()
+            .find(|item| {
+                item.agent == AgentKind::ClaudeCode && item.config_path == "~/.claude.json"
+            })
+            .expect("claude config item");
+        assert_eq!(claude.evidence.len(), 1);
+        let evidence = &claude.evidence[0];
+        assert!(evidence.starts_with(PARSE_ERROR_EVIDENCE_PREFIX));
+
+        let root_str = root.display().to_string();
+        assert!(
+            !evidence.contains(&root_str),
+            "evidence leaked the absolute synthetic home path: {evidence}"
+        );
+        let username_marker = root
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("synthetic home dir name");
+        assert!(
+            !evidence.contains(username_marker),
+            "evidence leaked the synthetic home directory name: {evidence}"
+        );
+        assert!(
+            evidence.contains("~/.claude.json") || !evidence.contains(std::path::MAIN_SEPARATOR),
+            "evidence should use the safe home-relative form if it names the file: {evidence}"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

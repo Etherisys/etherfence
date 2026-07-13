@@ -19,7 +19,7 @@ pub fn to_sarif(report: &ScanReport) -> Result<String> {
                 "driver": {
                     "name": report.tool,
                     "version": report.version,
-                    "informationUri": "https://github.com/Etherisys-id/etherfence",
+                    "informationUri": "https://github.com/Etherisys/etherfence",
                     "rules": sarif_rules(&report.findings),
                 }
             },

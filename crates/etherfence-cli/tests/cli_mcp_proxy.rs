@@ -194,6 +194,122 @@ fn run_proxy_with_command_for_server(
     }
 }
 
+/// Wait for `child` to exit, panicking if it has not done so within
+/// `timeout`. Used by the oversized-frame lifecycle regression tests below:
+/// before the fix, either scenario left the proxy hanging forever, so a
+/// bounded wait is the only way to assert "does not hang" without risking an
+/// actually-infinite test run.
+fn wait_status_with_timeout(
+    mut child: std::process::Child,
+    timeout: Duration,
+) -> std::process::ExitStatus {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let status = child.wait().expect("wait for etherfence mcp-proxy");
+        let _ = tx.send(status);
+    });
+    rx.recv_timeout(timeout).unwrap_or_else(|_| {
+        panic!(
+            "etherfence mcp-proxy did not exit within {timeout:?} — it likely hung instead of \
+             failing closed"
+        )
+    })
+}
+
+/// Regression test: an oversized (unbounded) client frame must not leave the
+/// proxy hung forever. The child here (`fake-mcp-server`, default mode)
+/// blocks reading its own stdin exactly like a normal, well-behaved MCP
+/// server would; before the lifecycle fix, the client loop's early `?`
+/// return on the oversized-frame error skipped closing the server's stdin,
+/// so the server-to-client pump stayed blocked reading from a child that was
+/// itself still waiting on input — a permanent hang.
+#[test]
+fn proxy_terminates_instead_of_hanging_on_oversized_client_frame() {
+    let policy = write_temp_policy("oversized-client", TEST_POLICY);
+    let audit_log = temp_path("oversized-client-audit", "jsonl");
+    let mut command = Command::new(env!("CARGO_BIN_EXE_etherfence"));
+    command
+        .arg("mcp-proxy")
+        .arg("--policy")
+        .arg(&policy)
+        .arg("--audit-log")
+        .arg(&audit_log)
+        .arg("--")
+        .arg(env!("CARGO_BIN_EXE_fake-mcp-server"));
+    let mut child = command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn etherfence mcp-proxy");
+    {
+        let mut stdin = child.stdin.take().expect("proxy stdin");
+        // Larger than the proxy's frame cap, with no trailing newline, so the
+        // reader hits the cap before ever seeing a frame delimiter.
+        let oversized = vec![b'x'; 8 * 1024 * 1024 + 1024];
+        stdin
+            .write_all(&oversized)
+            .expect("write oversized client frame");
+        stdin.flush().expect("flush oversized client frame");
+    }
+    let status = wait_status_with_timeout(child, Duration::from_secs(20));
+    assert!(
+        !status.success(),
+        "oversized client frame must fail closed, not succeed"
+    );
+
+    let _ = std::fs::remove_file(&policy);
+    let _ = std::fs::remove_file(&audit_log);
+}
+
+/// Companion regression test for the reverse direction: an oversized
+/// server-to-client frame must not leave the proxy hung with the main thread
+/// blocked reading further client input that may never arrive. The client's
+/// stdin is deliberately kept open (never closed, never written to again)
+/// for the whole test, exactly like a real client waiting on a response that
+/// will now never come — the proxy must shut itself down unprompted.
+#[test]
+fn proxy_terminates_instead_of_hanging_on_oversized_server_frame() {
+    let policy = write_temp_policy("oversized-server", TEST_POLICY);
+    let audit_log = temp_path("oversized-server-audit", "jsonl");
+    let mut command = Command::new(env!("CARGO_BIN_EXE_etherfence"));
+    command
+        .arg("mcp-proxy")
+        .arg("--policy")
+        .arg(&policy)
+        .arg("--audit-log")
+        .arg(&audit_log)
+        .env("FAKE_MCP_SERVER_MODE", "oversized-response")
+        .arg("--")
+        .arg(env!("CARGO_BIN_EXE_fake-mcp-server"));
+    let mut child = command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn etherfence mcp-proxy");
+    let mut stdin = child.stdin.take().expect("proxy stdin");
+    writeln!(
+        stdin,
+        r#"{{"jsonrpc":"2.0","id":1,"method":"initialize","params":{{}}}}"#
+    )
+    .expect("write initialize to proxy stdin");
+    stdin.flush().expect("flush proxy stdin");
+    // `stdin` intentionally stays open (not dropped) for the rest of the
+    // test: the bug this guards against only reproduces when the client
+    // never sends EOF, so the main thread's read is genuinely blocked and
+    // only the server pump's failure can end the process.
+    let status = wait_status_with_timeout(child, Duration::from_secs(20));
+    assert!(
+        !status.success(),
+        "oversized server frame must fail closed, not succeed"
+    );
+    drop(stdin);
+
+    let _ = std::fs::remove_file(&policy);
+    let _ = std::fs::remove_file(&audit_log);
+}
+
 fn stdout_json_lines(output: &std::process::Output) -> Vec<Value> {
     String::from_utf8_lossy(&output.stdout)
         .lines()

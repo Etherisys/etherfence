@@ -18,6 +18,29 @@ fn main() {
             // closed stdout and exit with the child's code.
             std::process::exit(0);
         }
+        "oversized-response" => {
+            // Read one line (so the client's first write succeeds), then
+            // respond with a single frame far larger than the proxy's frame
+            // cap and without a terminating newline, then keep reading
+            // stdin like a normal, still-running MCP server that never saw
+            // EOF. Used to prove the proxy detects an oversized
+            // server-to-client frame and shuts itself down instead of
+            // hanging while a client that never sends anything further
+            // would otherwise leave it blocked forever.
+            let stdin = std::io::stdin().lock();
+            let mut lines = stdin.lines();
+            if let Some(line) = lines.next() {
+                let _ = line.expect("read fake server stdin");
+            }
+            let mut stdout = std::io::stdout().lock();
+            let oversized = vec![b'x'; 8 * 1024 * 1024 + 1024];
+            let _ = stdout.write_all(&oversized);
+            let _ = stdout.flush();
+            for line in lines {
+                let _ = line;
+            }
+            std::process::exit(0);
+        }
         "read-one-then-drop" => {
             // Read a single line (so the client's first write succeeds), then
             // close stdout and exit without responding. Used to exercise the

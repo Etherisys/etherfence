@@ -1442,7 +1442,15 @@ fn run_setup_wizard() -> Result<()> {
                 eprintln!();
                 eprintln!("{}", theme.step(4, 7, "Resolve trust and pinning"));
                 eprintln!("Server");
-                eprintln!("  {} / {}", client.agent, theme.info.apply_to(&server.name));
+                eprintln!(
+                    "  {} / {}",
+                    client.agent,
+                    theme
+                        .info
+                        .apply_to(etherfence_report::human_layout::sanitize_terminal_text(
+                            &server.name
+                        ))
+                );
                 if let Some(command) = server.command.as_deref() {
                     eprintln!("Current invocation");
                     eprintln!(
@@ -1668,7 +1676,14 @@ fn run_setup_wizard() -> Result<()> {
             .iter()
             .filter(|s| s.config_path == *config_path)
         {
-            eprintln!("  {}", theme.info.apply_to(&server.server_name));
+            eprintln!(
+                "  {}",
+                theme
+                    .info
+                    .apply_to(etherfence_report::human_layout::sanitize_terminal_text(
+                        &server.server_name
+                    ))
+            );
             if let Some(pin) = plan
                 .pinning_changes
                 .iter()

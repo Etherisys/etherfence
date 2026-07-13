@@ -130,9 +130,15 @@ fn colored_count(style: &Style, count: usize, label: &str) -> String {
 
 /// Pads a plain string to `width` display columns. Styled strings must be
 /// padded before styling (ANSI codes would break the count).
+///
+/// `text` is sanitized first: callers routinely pad configuration-derived
+/// values (MCP server names, client display names) that are not trusted
+/// terminal input, and this is often the only step between that value and a
+/// direct `eprintln!`/`writeln!` — it must not pass through embedded control
+/// sequences.
 pub(crate) fn pad(text: &str, width: usize) -> String {
-    let mut out = String::from(text);
-    let len = text.chars().count();
+    let mut out = etherfence_report::human_layout::sanitize_terminal_text(text);
+    let len = out.chars().count();
     if len < width {
         for _ in len..width {
             out.push(' ');

@@ -1360,3 +1360,40 @@ fn policy_list_and_show_work_for_builtin_profiles() {
     assert!(stdout.contains("schema_version = \"ef-policy/v0.1\""));
     assert!(stdout.contains("name = \"developer-laptop\""));
 }
+
+#[test]
+fn scan_human_output_sanitizes_control_sequences_in_server_name() {
+    // Regression: an MCP server name is configuration-derived, not trusted
+    // terminal input. `tests/fixtures/hostile-terminal-home/.claude.json`
+    // defines a server whose name embeds an OSC 8 hyperlink (pointing at
+    // `evil.example`) and a CSI erase-screen sequence. The executive-summary
+    // human view (default format) must never forward those bytes to the
+    // terminal, whether the value happens to fit on one wrapped line or is
+    // printed directly via a coverage row.
+    let root = fixture_root("hostile-terminal-home");
+    let output = run(&[
+        "scan",
+        "--root",
+        &root,
+        "--policy-profile",
+        "developer-laptop",
+    ]);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains('\u{1b}'),
+        "no raw escape byte may appear in human output:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("evil.example"),
+        "the OSC 8 hyperlink target must not reach the terminal:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("safe-looking-name"),
+        "the sanitized, non-control portion of the name must still be visible:\n{stdout}"
+    );
+}

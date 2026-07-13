@@ -4,6 +4,13 @@
 //! strips those sequences first so styled text can be wrapped without
 //! alignment distortion. Callers may style after layout, or may pass styled
 //! text directly — both paths produce correct display widths.
+//!
+//! Some of the text laid out here originates in configuration EtherFence
+//! does not control (MCP server names, finding targets, …), so this module
+//! never trusts arbitrary terminal control content: [`sanitize_terminal_text`]
+//! keeps only plain SGR styling (`ESC [ <params> m`) — the one escape shape
+//! EtherFence's own theming ever emits — and drops every other C0/C1
+//! control byte, CSI, OSC, DCS, or other terminal-control sequence outright.
 
 use unicode_width::UnicodeWidthChar;
 
@@ -18,33 +25,121 @@ pub fn display_width(text: &str) -> usize {
         .sum()
 }
 
-/// Strip ANSI CSI escape sequences (`ESC [ … <final>`) so width measurement
-/// ignores terminal styling bytes.
+/// Remove every recognized terminal control sequence (CSI of any kind, OSC,
+/// DCS, and other string-introduced sequences) and every other C0/C1 control
+/// byte, keeping only plain SGR styling sequences EtherFence itself emits.
+///
+/// This is the only sanitizer this module ships: width measurement
+/// ([`strip_ansi`]) and safe-for-terminal output ([`sanitize_terminal_text`])
+/// are the same scan with different output — see `keep_sgr` below. Consumers
+/// must never emit un-sanitized configuration-derived text to a terminal, so
+/// there is deliberately no "keep everything" mode.
 ///
 /// Single-cursor over `chars()`: a byte index desynchronises from the char
 /// iterator the moment a multi-byte or escape sequence is skipped, which
 /// previously corrupted and truncated every styled line that was wrapped.
-fn strip_ansi(text: &str) -> String {
+fn scan_ansi(text: &str, keep_sgr: bool) -> String {
     let mut result = String::with_capacity(text.len());
     let mut chars = text.chars().peekable();
 
     while let Some(c) = chars.next() {
-        if c == '\u{1b}' && chars.peek() == Some(&'[') {
-            // Consume the '[' then everything up to and including the CSI
-            // final byte (0x40–0x7E). A sequence truncated at end-of-string
-            // is consumed entirely (nothing left to render anyway).
-            chars.next();
-            while let Some(&next) = chars.peek() {
+        if c != '\u{1b}' {
+            match c {
+                // Drop every C0 control byte and DEL except tab/newline,
+                // which are ordinary whitespace in report text, and every C1
+                // control byte (U+0080–U+009F, the 8-bit form of the same
+                // control families handled below for the 7-bit ESC form).
+                // Carriage return is dropped too: a bare CR is a classic
+                // status-line-overwrite spoofing trick and has no legitimate
+                // use in this single-line-oriented report text.
+                '\u{00}'..='\u{08}'
+                | '\u{0b}'..='\u{0d}'
+                | '\u{0e}'..='\u{1f}'
+                | '\u{7f}'
+                | '\u{80}'..='\u{9f}' => {}
+                _ => result.push(c),
+            }
+            continue;
+        }
+
+        match chars.peek() {
+            Some('[') => {
+                // CSI: ESC '[' <parameter/intermediate bytes> <final byte
+                // 0x40-0x7E>. Only a plain SGR shape (parameters limited to
+                // digits and ';', final byte 'm') is trusted and kept;
+                // cursor movement, erase, private modes, and every other CSI
+                // final byte are dropped along with the whole sequence.
                 chars.next();
-                if ('\u{40}'..='\u{7e}').contains(&next) {
-                    break;
+                let mut seq = String::from("\u{1b}[");
+                let mut plain_sgr = true;
+                let mut closed = false;
+                // Scan through to the actual CSI final byte regardless of
+                // what the parameter/intermediate bytes look like, so a
+                // non-SGR sequence (private-mode `?` parameters, cursor
+                // movement, erase, …) is fully consumed and dropped instead
+                // of leaking its tail as literal text the moment a
+                // non-digit byte disqualifies it from being plain SGR.
+                for next in chars.by_ref() {
+                    if ('\u{40}'..='\u{7e}').contains(&next) {
+                        if next == 'm' && plain_sgr {
+                            seq.push(next);
+                        } else {
+                            plain_sgr = false;
+                        }
+                        closed = true;
+                        break;
+                    }
+                    if next.is_ascii_digit() || next == ';' {
+                        seq.push(next);
+                    } else {
+                        plain_sgr = false;
+                    }
+                }
+                if keep_sgr && plain_sgr && closed {
+                    result.push_str(&seq);
                 }
             }
-        } else {
-            result.push(c);
+            Some(']') | Some('P') | Some('X') | Some('^') | Some('_') => {
+                // OSC / DCS / SOS / PM / APC: a "string" sequence terminated
+                // by BEL or ST (`ESC \`). Never trusted — an OSC 8 hyperlink
+                // or OSC 52 clipboard write, for example, must never reach
+                // the terminal from configuration-derived text — so this is
+                // always consumed and dropped regardless of `keep_sgr`.
+                chars.next();
+                loop {
+                    match chars.next() {
+                        None => break,
+                        Some('\u{07}') => break,
+                        Some('\u{1b}') => {
+                            if chars.peek() == Some(&'\\') {
+                                chars.next();
+                            }
+                            break;
+                        }
+                        Some(_) => {}
+                    }
+                }
+            }
+            _ => {
+                // A bare or unrecognized escape: drop just the ESC byte
+                // rather than emitting it as literal content. A stray ESC
+                // has no legitimate display purpose and can be the prefix of
+                // a sequence a stripping pass elsewhere failed to recognize.
+            }
         }
     }
     result
+}
+
+fn strip_ansi(text: &str) -> String {
+    scan_ansi(text, false)
+}
+
+/// Sanitize configuration-derived text before it reaches a terminal: strip
+/// every control sequence except plain SGR styling. See the module docs and
+/// [`scan_ansi`] for the trust model.
+pub fn sanitize_terminal_text(text: &str) -> String {
+    scan_ansi(text, true)
 }
 
 /// Wrap plain or styled text behind a first-line prefix and a stable continuation prefix.
@@ -63,11 +158,14 @@ pub fn wrap_prefixed(prefix: &str, continuation: &str, text: &str, width: usize)
         capacity = width.saturating_sub(display_width(current_prefix));
     }
 
-    // Common case: the whole value fits on one line. Emit the ORIGINAL text
-    // so any ANSI styling is preserved (the word-wrapping path below rebuilds
-    // from ANSI-stripped words and necessarily drops styling).
+    // Common case: the whole value fits on one line. Emit the SANITIZED text
+    // so any legitimate SGR styling is preserved (the word-wrapping path
+    // below rebuilds from ANSI-stripped words and necessarily drops all
+    // styling) while any other control content — including sequences a
+    // hostile configuration value embedded to manipulate the terminal — is
+    // removed rather than trusted.
     if !text.is_empty() && !text.contains('\n') && display_width(text) <= capacity {
-        lines.push(format!("{current_prefix}{text}"));
+        lines.push(format!("{current_prefix}{}", sanitize_terminal_text(text)));
         return lines;
     }
 
@@ -149,8 +247,10 @@ mod tests {
     #[test]
     fn strip_ansi_handles_multibyte_and_malformed() {
         assert_eq!(strip_ansi("影\x1b[1m響\x1b[0m"), "影響");
-        // Malformed (ESC not followed by '[') is preserved as content.
-        assert_eq!(strip_ansi("x\x1by"), "x\u{1b}y");
+        // A bare ESC not followed by a recognized introducer is dropped, not
+        // preserved as literal content: a stray ESC has no legitimate
+        // display purpose and must never reach a terminal untouched.
+        assert_eq!(strip_ansi("x\x1by"), "xy");
     }
 
     #[test]
@@ -172,5 +272,50 @@ mod tests {
         assert!(lines.iter().all(|line| display_width(line) <= 40));
         let joined: String = lines.iter().map(|l| l.trim()).collect::<Vec<_>>().join(" ");
         assert!(joined.contains("another long token here"));
+    }
+
+    #[test]
+    fn sanitize_terminal_text_keeps_only_plain_sgr() {
+        assert_eq!(
+            sanitize_terminal_text("\x1b[31mHIGH\x1b[0m"),
+            "\x1b[31mHIGH\x1b[0m"
+        );
+        // Cursor movement / erase / private-mode CSI sequences (not SGR) are
+        // dropped entirely, not passed through as literal text.
+        assert_eq!(sanitize_terminal_text("a\x1b[2Jb\x1b[?25lc"), "abc");
+        // OSC (e.g. a hyperlink or clipboard-write payload) is dropped along
+        // with its terminator, whether BEL- or ST-terminated.
+        assert_eq!(
+            sanitize_terminal_text(
+                "before\x1b]8;;http://evil.example\x07link text\x1b]8;;\x07after"
+            ),
+            "beforelink textafter"
+        );
+        assert_eq!(
+            sanitize_terminal_text("before\x1b]52;c;ZXZpbA==\x1b\\after"),
+            "beforeafter"
+        );
+        // Bare C0 controls and DEL are dropped; tab/newline survive as
+        // ordinary whitespace.
+        assert_eq!(sanitize_terminal_text("a\rb\x07c\x7fd\te\nf"), "abcd\te\nf");
+    }
+
+    #[test]
+    fn wrap_prefixed_fast_path_sanitizes_control_sequences() {
+        // Regression: a config-derived value that fits on one line used to
+        // be emitted byte-for-byte, including any embedded control
+        // sequences. A crafted server/finding name carrying an OSC 8
+        // hyperlink or a cursor-erase CSI sequence must not reach the
+        // terminal unsanitized just because it happened to fit.
+        let hostile = "safe-looking-name\x1b]8;;http://evil.example\x07click me\x1b]8;;\x07\x1b[2J";
+        let lines = wrap_prefixed("Server: ", "        ", hostile, 80);
+        assert_eq!(lines, vec!["Server: safe-looking-nameclick me"]);
+        for line in &lines {
+            assert!(
+                !line.contains('\u{1b}'),
+                "no raw escape must survive: {line:?}"
+            );
+            assert!(!line.contains("evil.example"));
+        }
     }
 }
