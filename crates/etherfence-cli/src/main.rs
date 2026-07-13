@@ -823,7 +823,7 @@ fn render_setup_baseline_check_human(
             out,
             "- {}:{} [{}] at {}",
             entry.agent,
-            entry.server_name,
+            etherfence_report::human_layout::sanitize_untrusted_text(&entry.server_name),
             comparison_status_label(entry.status),
             entry.config_source
         );
@@ -931,7 +931,7 @@ fn render_setup_detect(root: &Path, detections: &[etherfence_setup::SetupDetecti
             let _ = writeln!(
                 out,
                 "  - {} transport={} wrapped={}",
-                server.name,
+                etherfence_report::human_layout::sanitize_untrusted_text(&server.name),
                 transport_label(server.transport),
                 server.wrapped
             );
@@ -1087,7 +1087,7 @@ fn render_setup_plan(plan: &etherfence_setup::SetupPlan) -> String {
             out,
             "- {}:{} -> {} ({})",
             action.agent,
-            action.server_name,
+            etherfence_report::human_layout::sanitize_untrusted_text(&action.server_name),
             action_kind_label(action.action),
             action.reason
         );
@@ -1213,9 +1213,14 @@ fn run_setup_wizard() -> Result<()> {
     }
 
     fn invocation_line(command: &str, args: &[String]) -> String {
+        let command = etherfence_report::human_layout::sanitize_untrusted_text(command);
         if args.is_empty() {
-            command.to_string()
+            command
         } else {
+            let args: Vec<String> = args
+                .iter()
+                .map(|arg| etherfence_report::human_layout::sanitize_untrusted_text(arg))
+                .collect();
             format!("{command} {}", args.join(" "))
         }
     }
@@ -1589,7 +1594,10 @@ fn run_setup_wizard() -> Result<()> {
                 let posture_choice = interact_or_bail(
                     Select::new()
                         .items(posture_items)
-                        .with_prompt(format!("Policy posture for '{}'", server.name))
+                        .with_prompt(format!(
+                            "Policy posture for '{}'",
+                            etherfence_report::human_layout::sanitize_untrusted_text(&server.name)
+                        ))
                         .default(0)
                         .interact(),
                 )?;
@@ -1692,8 +1700,14 @@ fn run_setup_wizard() -> Result<()> {
                 eprintln!(
                     "    {} Pin package       {} \u{2192} {}",
                     theme.success.apply_to("\u{2713}"),
-                    pin.package_identity.as_deref().unwrap_or("<package>"),
-                    theme.success.apply_to(pin.pinned_args.join(" "))
+                    etherfence_report::human_layout::sanitize_untrusted_text(
+                        pin.package_identity.as_deref().unwrap_or("<package>")
+                    ),
+                    theme.success.apply_to(
+                        etherfence_report::human_layout::sanitize_untrusted_text(
+                            &pin.pinned_args.join(" ")
+                        )
+                    )
                 );
             }
             let policy_label = plan
@@ -1820,8 +1834,12 @@ fn run_setup_wizard() -> Result<()> {
         eprintln!(
             "{} Pinned {} to {}",
             theme.success.apply_to("\u{2713}"),
-            pin.package_identity.as_deref().unwrap_or(&pin.server_name),
-            pin.proposed_version.as_deref().unwrap_or("<version>")
+            etherfence_report::human_layout::sanitize_untrusted_text(
+                pin.package_identity.as_deref().unwrap_or(&pin.server_name)
+            ),
+            etherfence_report::human_layout::sanitize_untrusted_text(
+                pin.proposed_version.as_deref().unwrap_or("<version>")
+            )
         );
     }
     if !unchanged.is_empty() {
@@ -1988,7 +2006,11 @@ fn render_mcp_policy_explanation(explanation: &etherfence_mcp::PolicyExplanation
     } else {
         let _ = writeln!(out, "Server scopes:");
         for server in &explanation.servers {
-            let _ = writeln!(out, "  [{}]", server.name);
+            let _ = writeln!(
+                out,
+                "  [{}]",
+                etherfence_report::human_layout::sanitize_untrusted_text(&server.name)
+            );
             let _ = writeln!(out, "    tools.allow: {}", format_list(&server.tools.allow));
             let _ = writeln!(out, "    tools.deny: {}", format_list(&server.tools.deny));
             match &server.methods {
@@ -2025,7 +2047,11 @@ fn render_mcp_policy_explanation(explanation: &etherfence_mcp::PolicyExplanation
         let _ = writeln!(out, "Guarded keys:");
         for guard in &explanation.guards {
             let scope_label = match &guard.server_name {
-                Some(server) => format!("{} (server={server})", guard.scope.as_str()),
+                Some(server) => format!(
+                    "{} (server={})",
+                    guard.scope.as_str(),
+                    etherfence_report::human_layout::sanitize_untrusted_text(server)
+                ),
                 None => guard.scope.as_str().to_string(),
             };
             let keys: Vec<&str> = guard
@@ -2051,7 +2077,11 @@ fn render_mcp_policy_explanation(explanation: &etherfence_mcp::PolicyExplanation
         let _ = writeln!(out, "Argument/param field guards:");
         for guard in &explanation.argument_guards {
             let scope_label = match &guard.server_name {
-                Some(server) => format!("{} (server={server})", guard.scope.as_str()),
+                Some(server) => format!(
+                    "{} (server={})",
+                    guard.scope.as_str(),
+                    etherfence_report::human_layout::sanitize_untrusted_text(server)
+                ),
                 None => guard.scope.as_str().to_string(),
             };
             let _ = writeln!(out, "  {scope_label} {:?}", guard.key);

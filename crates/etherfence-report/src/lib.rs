@@ -261,7 +261,7 @@ pub fn to_markdown(report: &ScanReport) -> String {
             out.push_str(&format!(
                 "| {} | `{}` | `{}` | {} |\n",
                 server.agent,
-                server.server_name,
+                human_layout::sanitize_untrusted_text(&server.server_name),
                 server.config_path,
                 coverage_md_label(&server.status),
             ));
@@ -313,7 +313,10 @@ pub fn to_markdown(report: &ScanReport) -> String {
                 }
                 out.push_str(&format!("- Fingerprint: `{}`\n", finding.fingerprint));
                 out.push_str(&format!("- Agent: **{}**\n", finding.agent));
-                out.push_str(&format!("- Target: `{}`\n", finding.target));
+                out.push_str(&format!(
+                    "- Target: `{}`\n",
+                    human_layout::sanitize_untrusted_text(&finding.target)
+                ));
                 out.push_str(&format!("- Config: `{}`\n", finding.config_path));
                 out.push_str(&format!("- Rationale: {}\n", finding.rationale));
                 out.push_str(&format!("- Impact: {}\n", finding.impact));
@@ -411,7 +414,11 @@ fn append_markdown_posture(out: &mut String, report: &ScanReport) {
         for risk in &posture.priority_risks {
             out.push_str(&format!(
                 "- **{}** `{}` — {} / {}\n  - Why this matters: {}\n",
-                risk.title, risk.finding_id, risk.agent, risk.target, risk.why_this_matters
+                risk.title,
+                risk.finding_id,
+                risk.agent,
+                human_layout::sanitize_untrusted_text(&risk.target),
+                risk.why_this_matters
             ));
         }
         out.push_str("\n### Recommended Next Actions\n\n");
