@@ -16,6 +16,24 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 const BANNER_TAGLINE: &str = "AI Agent Security Posture & Runtime Control";
 
+/// The banner's version-footer line. Unlike `BANNER_TAGLINE`, Clap never
+/// emits this string on its own (its `--version`/`-V` output is
+/// `"etherfence {version}"`, with no leading `v` and no tagline), so it is
+/// safe to use as a splash-only marker even for commands whose Clap help
+/// text happens to repeat the tagline (see `BANNER_GLYPH_MARKER` below).
+/// Only used by the unix-only PTY tests below.
+#[cfg(unix)]
+const BANNER_VERSION_MARKER: &str = concat!("v", env!("CARGO_PKG_VERSION"));
+
+/// A fragment of the Unicode block-art wordmark rendered only by the
+/// `Standard` banner style (selected whenever the PTY tests' fixed
+/// 120-column width is in effect). Like `BANNER_VERSION_MARKER`, Clap never
+/// emits this on its own; used together with the version marker so the
+/// splash-only check does not rely on a single string. Only used by the
+/// unix-only PTY tests below.
+#[cfg(unix)]
+const BANNER_GLYPH_MARKER: &str = "███";
+
 fn temp_root(name: &str) -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -113,11 +131,20 @@ fn human_command_shows_banner_on_pty() {
 /// Table-driven regression coverage for the previously-reported commands
 /// that skipped the splash because `Cli::parse()` exited inside Clap
 /// before `print_startup_banner()` ever ran: bare invocation, `help`,
-/// `--help`, `policy` (missing subcommand), `policy --help`, `mcp-proxy`
-/// (missing required args), `mcp-proxy --help`, plus `policy list` (newly
-/// reclassified as human/splash-eligible). Every case must show the
-/// splash *before* its own recognizable content on an interactive,
-/// color-capable terminal.
+/// `--help`, `--version`, `policy` (missing subcommand), `policy --help`,
+/// `mcp-proxy` (missing required args), `mcp-proxy --help`, plus
+/// `policy list` (newly reclassified as human/splash-eligible). Every case
+/// must show the splash *before* its own recognizable content on an
+/// interactive, color-capable terminal.
+///
+/// Detection deliberately does **not** use `BANNER_TAGLINE`: Clap's own
+/// `about` text is that exact same string, so for `help`/`--help`/
+/// `policy --help`/`mcp-proxy --help` a regression that removed the splash
+/// entirely would still leave that text present (from Clap alone), before
+/// `"Usage:"`, and this test would pass anyway. Instead it requires two
+/// markers that only the rendered splash footer produces —
+/// `BANNER_VERSION_MARKER` and `BANNER_GLYPH_MARKER` — both present and
+/// both ordered before the command's own content.
 #[cfg(unix)]
 #[test]
 fn reported_commands_show_banner_before_content_on_pty() {
@@ -128,7 +155,9 @@ fn reported_commands_show_banner_before_content_on_pty() {
         content_marker: &'static str,
     }
 
-    const CASES: &[Case] = &[
+    let version_content_marker = concat!("etherfence ", env!("CARGO_PKG_VERSION"));
+
+    let cases: &[Case] = &[
         Case {
             name: "bare",
             args: &[],
@@ -146,6 +175,14 @@ fn reported_commands_show_banner_before_content_on_pty() {
             args: &["--help"],
             expect_success: true,
             content_marker: "Usage:",
+        },
+        Case {
+            name: "version-flag",
+            args: &["--version"],
+            expect_success: true,
+            // Clap's own version output ("etherfence 1.7.3", no leading
+            // `v`) — distinct from the banner's "v1.7.3" version marker.
+            content_marker: version_content_marker,
         },
         Case {
             name: "policy-bare",
@@ -180,13 +217,19 @@ fn reported_commands_show_banner_before_content_on_pty() {
         },
     ];
 
-    for case in CASES {
+    for case in cases {
         let root = temp_root(case.name);
         let output = run_in_pty(case.args, &root, case.expect_success);
 
-        let banner_pos = output.find(BANNER_TAGLINE).unwrap_or_else(|| {
+        let version_pos = output.find(BANNER_VERSION_MARKER).unwrap_or_else(|| {
             panic!(
-                "case {:?}: banner tagline must appear:\n{output}",
+                "case {:?}: banner version marker must appear:\n{output}",
+                case.name
+            )
+        });
+        let glyph_pos = output.find(BANNER_GLYPH_MARKER).unwrap_or_else(|| {
+            panic!(
+                "case {:?}: banner glyph marker must appear:\n{output}",
                 case.name
             )
         });
@@ -197,8 +240,8 @@ fn reported_commands_show_banner_before_content_on_pty() {
             )
         });
         assert!(
-            banner_pos < content_pos,
-            "case {:?}: banner must appear before content (banner@{banner_pos}, content@{content_pos}):\n{output}",
+            version_pos < content_pos && glyph_pos < content_pos,
+            "case {:?}: banner must appear before content (version@{version_pos}, glyph@{glyph_pos}, content@{content_pos}):\n{output}",
             case.name
         );
     }
@@ -339,6 +382,256 @@ fn env_suppression_still_applies_to_help_on_pty() {
             "case {name}: help text must still be present:\n{stdout}"
         );
     }
+}
+
+/// Which standard stream is attached to the real pseudo-terminal in a
+/// split-stream test ([`run_split_stream`]); the other stream is a plain
+/// OS pipe.
+#[cfg(unix)]
+#[derive(Clone, Copy)]
+enum PtyStream {
+    Stdout,
+    Stderr,
+}
+
+/// Split-stream regression: with only stdout attached to a real terminal
+/// and stderr piped, `--help` must show the splash on stdout, and the
+/// piped stderr must stay empty. Positive case for the help→stdout routing
+/// decision (FR-002/FR-003).
+#[cfg(unix)]
+#[test]
+fn help_shows_banner_on_stdout_pty_with_stderr_piped() {
+    let root = temp_root("split-help-stdout-pty");
+    let (pty_text, piped_stderr) = run_split_stream(&["--help"], &root, PtyStream::Stdout, true);
+    assert!(
+        pty_text.contains(BANNER_VERSION_MARKER) && pty_text.contains(BANNER_GLYPH_MARKER),
+        "banner must appear on the terminal-attached stdout:\n{pty_text}"
+    );
+    assert!(
+        pty_text.contains("Usage:"),
+        "help text must appear on the terminal-attached stdout:\n{pty_text}"
+    );
+    assert!(
+        piped_stderr.is_empty(),
+        "piped stderr must stay empty:\n{piped_stderr}"
+    );
+}
+
+/// Split-stream regression: with only stderr attached to a real terminal
+/// and stdout piped, a Clap usage error must show the splash on stderr,
+/// and the piped stdout must stay empty. Positive case for the
+/// error→stderr routing decision.
+#[cfg(unix)]
+#[test]
+fn parse_error_shows_banner_on_stderr_pty_with_stdout_piped() {
+    let root = temp_root("split-error-stderr-pty");
+    let (pty_text, piped_stdout) =
+        run_split_stream(&["mcp-proxy"], &root, PtyStream::Stderr, false);
+    assert!(
+        pty_text.contains(BANNER_VERSION_MARKER) && pty_text.contains(BANNER_GLYPH_MARKER),
+        "banner must appear on the terminal-attached stderr:\n{pty_text}"
+    );
+    assert!(
+        pty_text.contains("Usage:"),
+        "usage error must appear on the terminal-attached stderr:\n{pty_text}"
+    );
+    assert!(
+        piped_stdout.is_empty(),
+        "piped stdout must stay empty:\n{piped_stdout}"
+    );
+}
+
+/// Inverse of the positive help case: stdout (help's actual destination)
+/// is piped/non-interactive even though stderr happens to be a real
+/// terminal. The splash must not appear anywhere, proving eligibility
+/// follows the destination stream rather than "some stream is a
+/// terminal."
+#[cfg(unix)]
+#[test]
+fn help_suppresses_banner_when_stdout_piped_even_with_stderr_pty() {
+    let root = temp_root("split-help-stderr-pty");
+    let (pty_text, piped_stdout) = run_split_stream(&["--help"], &root, PtyStream::Stderr, true);
+    assert!(
+        pty_text.is_empty(),
+        "help output never targets stderr, terminal or not:\n{pty_text}"
+    );
+    assert!(
+        piped_stdout.contains("Usage:"),
+        "help text must still appear on piped stdout:\n{piped_stdout}"
+    );
+    assert!(
+        !piped_stdout.contains(BANNER_VERSION_MARKER)
+            && !piped_stdout.contains(BANNER_GLYPH_MARKER),
+        "banner must not appear on the piped, non-interactive stdout:\n{piped_stdout}"
+    );
+}
+
+/// Inverse of the positive error case: stderr (the error's actual
+/// destination) is piped/non-interactive even though stdout happens to be
+/// a real terminal. The splash must not appear anywhere — this is exactly
+/// the scenario a regression that reverted to unconditionally checking
+/// `io::stdout()` would get wrong: it would incorrectly show the splash on
+/// the terminal-attached stdout, which never receives this content at all.
+#[cfg(unix)]
+#[test]
+fn parse_error_suppresses_banner_when_stderr_piped_even_with_stdout_pty() {
+    let root = temp_root("split-error-stdout-pty");
+    let (pty_text, piped_stderr) =
+        run_split_stream(&["mcp-proxy"], &root, PtyStream::Stdout, false);
+    assert!(
+        pty_text.is_empty(),
+        "a Clap usage error never targets stdout, terminal or not:\n{pty_text}"
+    );
+    assert!(
+        piped_stderr.contains("Usage:"),
+        "usage error text must still appear on piped stderr:\n{piped_stderr}"
+    );
+    assert!(
+        !piped_stderr.contains(BANNER_VERSION_MARKER)
+            && !piped_stderr.contains(BANNER_GLYPH_MARKER),
+        "banner must not appear on the piped, non-interactive stderr:\n{piped_stderr}"
+    );
+}
+
+/// Runs the etherfence binary with exactly one of stdout/stderr attached
+/// to a real pseudo-terminal (`pty_stream`) and the other as a plain OS
+/// pipe. Returns `(pty_stream_text, piped_stream_text)`, with ANSI
+/// stripped from the pty side. Asserts the process exit status matches
+/// `expect_success`.
+///
+/// `portable-pty`'s `CommandBuilder` (used by [`run_in_pty`]) cannot attach
+/// only one of a child's stdout/stderr to a pty — it always wires all
+/// three standard fds to the same slave — so proving the splash follows
+/// the correct *destination* stream (not just "some stream is a
+/// terminal") needs this lower-level pair, combined with
+/// `std::process::Command`'s native per-stream `Stdio`.
+#[cfg(unix)]
+fn run_split_stream(
+    args: &[&str],
+    cwd: &std::path::Path,
+    pty_stream: PtyStream,
+    expect_success: bool,
+) -> (String, String) {
+    use std::fs::File;
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+
+    let (master, slave) = open_pty(120, 40);
+
+    let mut command = Command::new(env!("CARGO_BIN_EXE_etherfence"));
+    command.args(args);
+    command.current_dir(cwd);
+    command.env_remove("CI");
+    command.env_remove("NO_COLOR");
+    command.env_remove("CLICOLOR");
+    command.env("TERM", "xterm-256color");
+    command.env("COLUMNS", "120");
+    command.stdin(Stdio::null());
+
+    match pty_stream {
+        PtyStream::Stdout => {
+            command.stdout(Stdio::from(File::from(slave)));
+            command.stderr(Stdio::piped());
+        }
+        PtyStream::Stderr => {
+            command.stderr(Stdio::from(File::from(slave)));
+            command.stdout(Stdio::piped());
+        }
+    }
+
+    let mut child = command
+        .spawn()
+        .expect("spawn split-stream etherfence process");
+    // `command` (and the `Stdio`/`File` wrapping the slave fd it still
+    // owns internally) must be dropped before reading the pty master: the
+    // master only sees EOF once every open reference to the slave side is
+    // closed, and `Command::spawn` does not consume `self`, so the parent
+    // would otherwise keep its own copy of that fd open for as long as
+    // `command` is alive, hanging the read below forever.
+    drop(command);
+
+    // The pty master is read on its own thread: it only reaches EOF once
+    // the child (the sole holder of the pty slave side) exits, so reading
+    // it on the main thread first could deadlock if the piped stream
+    // produced more output than fits in the OS pipe buffer before the
+    // child exits. Output here is at most a few hundred bytes, far under
+    // any OS pipe buffer, but the thread keeps this correct unconditionally.
+    let mut master_file = File::from(master);
+    let pty_reader = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = master_file.read_to_end(&mut buf);
+        buf
+    });
+
+    let mut piped_bytes = Vec::new();
+    match pty_stream {
+        PtyStream::Stdout => child
+            .stderr
+            .take()
+            .expect("stderr is piped")
+            .read_to_end(&mut piped_bytes)
+            .expect("read piped stderr"),
+        PtyStream::Stderr => child
+            .stdout
+            .take()
+            .expect("stdout is piped")
+            .read_to_end(&mut piped_bytes)
+            .expect("read piped stdout"),
+    };
+
+    let status = child.wait().expect("wait for split-stream child");
+    let pty_bytes = pty_reader.join().expect("join pty reader thread");
+
+    assert_eq!(
+        status.success(),
+        expect_success,
+        "etherfence {args:?} (split-stream) exit status mismatch (expected success={expect_success})"
+    );
+
+    (
+        strip_ansi(&String::from_utf8_lossy(&pty_bytes)),
+        String::from_utf8_lossy(&piped_bytes).into_owned(),
+    )
+}
+
+/// Opens a real pseudo-terminal pair via `libc::openpty`, mirroring the
+/// approach `portable-pty`'s own unix backend uses internally (so this is
+/// already proven to link cleanly in this repo's CI, as a transitive
+/// dependency of the existing `portable-pty` dev-dependency).
+#[cfg(unix)]
+fn open_pty(cols: u16, rows: u16) -> (std::os::unix::io::OwnedFd, std::os::unix::io::OwnedFd) {
+    use std::os::unix::io::{FromRawFd, OwnedFd};
+
+    let mut master: libc::c_int = -1;
+    let mut slave: libc::c_int = -1;
+    let size = libc::winsize {
+        ws_row: rows,
+        ws_col: cols,
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    };
+
+    // SAFETY: `master`/`slave` are valid out-pointers for the duration of
+    // this call.
+    let result = unsafe {
+        libc::openpty(
+            &mut master,
+            &mut slave,
+            std::ptr::null_mut(),
+            std::ptr::null(),
+            &size,
+        )
+    };
+    assert_eq!(
+        result,
+        0,
+        "openpty failed: {}",
+        std::io::Error::last_os_error()
+    );
+
+    // SAFETY: both descriptors were just returned by `openpty` above,
+    // are open, and are not owned anywhere else yet.
+    unsafe { (OwnedFd::from_raw_fd(master), OwnedFd::from_raw_fd(slave)) }
 }
 
 /// Runs the etherfence binary inside a real pseudo-terminal with a

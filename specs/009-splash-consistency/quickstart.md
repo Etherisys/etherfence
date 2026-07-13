@@ -32,10 +32,20 @@ cargo test -p etherfence-cli --test cli_banner
 
 Covers, per [contracts/cli-splash-routing.md](./contracts/cli-splash-routing.md):
 
-- Splash presence + ordering for all commands in the table above, on a PTY.
-- Stream separation for non-PTY runs: help/version content only ever appears
-  on captured stdout with stderr empty; usage/argument-error content only
-  ever appears on captured stderr with stdout empty.
+- Splash presence + ordering for all commands in the table above, on a PTY
+  (using splash-only markers — the version line and block-art fragment —
+  for commands whose Clap help text shares the tagline string, per
+  research.md Decision 6).
+- Stream separation for fully-redirected non-PTY runs: help/version content
+  only ever appears on captured stdout with stderr empty; usage/argument-error
+  content only ever appears on captured stderr with stdout empty.
+- **Split-stream** routing (research.md Decision 5, item 3): with only stdout
+  attached to a real terminal and stderr piped, `--help` shows the splash on
+  stdout and stderr stays empty; with only stderr attached to a terminal and
+  stdout piped, a parse error shows the splash on stderr and stdout stays
+  empty; and, as the critical inverse checks, the splash appears nowhere when
+  its destination stream is the piped one, even though the other stream is a
+  real terminal.
 - Machine-format and raw-TOML outputs (JSON/Markdown/SARIF/setup-JSON,
   `policy show`, `mcp-policy init`) stay splash-free on a PTY.
 - Redirected output, `CI=1`, `NO_COLOR=1`, `CLICOLOR=0`, `TERM=dumb` all

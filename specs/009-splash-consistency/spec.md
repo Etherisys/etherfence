@@ -34,12 +34,14 @@ As a practitioner piping or redirecting `etherfence` output, I want the splash t
 
 **Why this priority**: Without correct stream routing, fixing User Story 1 naively (e.g. always printing to stdout) would corrupt scriptable output or split the splash from the error text it's meant to precede.
 
-**Independent Test**: Run `etherfence --help > out.txt 2> err.txt` on an interactive terminal and confirm the splash and help text both land in `out.txt`, with `err.txt` empty. Run `etherfence mcp-proxy > out.txt 2> err.txt` (missing required args) and confirm the splash and usage error both land in `err.txt`, with `out.txt` empty.
+**Independent Test**: This requires *split-stream* terminals — one standard stream attached to a real interactive terminal, the other piped/non-interactive — because fully redirecting both streams makes neither eligible for the splash at all (see User Story 3 and FR-006), which would not exercise stream selection. Concretely: (a) attach only stdout to a terminal and pipe stderr, run `etherfence --help`, and confirm the splash and help text both appear on the terminal-attached stdout while the piped stderr stays empty; (b) attach only stderr to a terminal and pipe stdout, run `etherfence mcp-proxy` (missing required args), and confirm the splash and usage error both appear on the terminal-attached stderr while the piped stdout stays empty; (c) as an inverse check, attach only stdout to a terminal (pipe stderr) and run the *error* case, or attach only stderr to a terminal (pipe stdout) and run the *help* case, and confirm the splash never appears at all — proving suppression follows the actual destination stream's interactivity, not merely "some stream is a terminal."
 
 **Acceptance Scenarios**:
 
-1. **Given** an interactive terminal, **When** the user runs a command that Clap resolves to help or version output, **Then** both the splash and the content are written to stdout.
-2. **Given** an interactive terminal, **When** the user runs a command that Clap rejects (missing subcommand, missing required argument, invalid argument), **Then** both the splash and the error content are written to stderr, and nothing related to the splash or error appears on stdout.
+1. **Given** a terminal attached to stdout only (stderr piped), **When** the user runs a command that Clap resolves to help or version output, **Then** both the splash and the content are written to stdout, and stderr stays empty.
+2. **Given** a terminal attached to stderr only (stdout piped), **When** the user runs a command that Clap rejects (missing subcommand, missing required argument, invalid argument), **Then** both the splash and the error content are written to stderr, and stdout stays empty.
+3. **Given** a terminal attached to stdout only (stderr piped), **When** the user runs a command that Clap rejects (its content destined for stderr), **Then** the splash does not appear anywhere, because its destination stream (stderr) is not the terminal-attached one.
+4. **Given** a terminal attached to stderr only (stdout piped), **When** the user runs a command that Clap resolves to help or version output (its content destined for stdout), **Then** the splash does not appear anywhere, because its destination stream (stdout) is not the terminal-attached one.
 
 ---
 
@@ -91,7 +93,7 @@ As an operator scripting against `etherfence` or wiring it into an MCP client as
 
 - **SC-001**: All seven previously-reported invocations (`etherfence`, `etherfence help`, `etherfence --help`, `etherfence policy`, `etherfence policy --help`, `etherfence mcp-proxy`, `etherfence mcp-proxy --help`) show the splash before their content when run on an interactive, color-capable terminal.
 - **SC-002**: 100% of existing machine-format, protocol, and suppression regression tests continue to pass unmodified in behavior (only reclassifying `policy list`).
-- **SC-003**: Splash and its following content are always observed on the same stream in redirection tests — zero cases of split-stream or wrong-stream output across the test matrix.
+- **SC-003**: In split-stream terminal tests (one of stdout/stderr attached to a real terminal, the other piped) covering both the help/version→stdout and error→stderr cases and their inverses, the splash appears only on its correct destination stream when that stream is the terminal-attached one, and never appears at all — on either stream — when its destination stream is the piped one, even if the other stream happens to be a terminal.
 - **SC-004**: `cargo fmt --check`, `cargo clippy --all-targets --all-features -- -D warnings`, and `cargo test` all pass on the change with no new warnings or failures.
 
 ## Assumptions

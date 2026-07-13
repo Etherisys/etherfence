@@ -244,6 +244,7 @@ dependencies = [
  "etherfence-policy",
  "etherfence-report",
  "etherfence-setup",
+ "libc",
  "portable-pty",
  "serde",
  "serde_json",

@@ -16,7 +16,7 @@
 
 **Storage**: N/A
 
-**Testing**: `cargo test` — `crates/etherfence-cli/tests/cli_banner.rs` (unix PTY integration tests via `portable-pty`, dev-dependency) plus `banner.rs` unit tests
+**Testing**: `cargo test` — `crates/etherfence-cli/tests/cli_banner.rs` (unix PTY integration tests via `portable-pty`, plus a custom split-stream PTY harness via `libc::openpty`, both unix-only dev-dependencies) plus `banner.rs` unit tests
 
 **Target Platform**: CLI binary, CI matrix ubuntu-latest + windows-latest (PTY tests are unix-only, matching existing `cli_banner.rs` convention)
 
