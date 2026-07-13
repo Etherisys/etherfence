@@ -19,7 +19,7 @@ pub fn to_sarif(report: &ScanReport) -> Result<String> {
                 "driver": {
                     "name": report.tool,
                     "version": report.version,
-                    "informationUri": "https://github.com/Etherisys-id/etherfence",
+                    "informationUri": "https://github.com/Etherisys/etherfence",
                     "rules": sarif_rules(&report.findings),
                 }
             },
@@ -261,7 +261,7 @@ pub fn to_markdown(report: &ScanReport) -> String {
             out.push_str(&format!(
                 "| {} | `{}` | `{}` | {} |\n",
                 server.agent,
-                server.server_name,
+                human_layout::sanitize_untrusted_text(&server.server_name),
                 server.config_path,
                 coverage_md_label(&server.status),
             ));
@@ -313,7 +313,10 @@ pub fn to_markdown(report: &ScanReport) -> String {
                 }
                 out.push_str(&format!("- Fingerprint: `{}`\n", finding.fingerprint));
                 out.push_str(&format!("- Agent: **{}**\n", finding.agent));
-                out.push_str(&format!("- Target: `{}`\n", finding.target));
+                out.push_str(&format!(
+                    "- Target: `{}`\n",
+                    human_layout::sanitize_untrusted_text(&finding.target)
+                ));
                 out.push_str(&format!("- Config: `{}`\n", finding.config_path));
                 out.push_str(&format!("- Rationale: {}\n", finding.rationale));
                 out.push_str(&format!("- Impact: {}\n", finding.impact));
@@ -359,7 +362,10 @@ fn append_human_posture(out: &mut String, report: &ScanReport, width: usize) {
                 "  ",
                 &format!(
                     "{} {} [{} / {}]",
-                    risk.finding_id, risk.title, risk.agent, risk.target
+                    risk.finding_id,
+                    risk.title,
+                    risk.agent,
+                    human_layout::sanitize_untrusted_text(&risk.target)
                 ),
                 width,
             );
@@ -408,7 +414,11 @@ fn append_markdown_posture(out: &mut String, report: &ScanReport) {
         for risk in &posture.priority_risks {
             out.push_str(&format!(
                 "- **{}** `{}` — {} / {}\n  - Why this matters: {}\n",
-                risk.title, risk.finding_id, risk.agent, risk.target, risk.why_this_matters
+                risk.title,
+                risk.finding_id,
+                risk.agent,
+                human_layout::sanitize_untrusted_text(&risk.target),
+                risk.why_this_matters
             ));
         }
         out.push_str("\n### Recommended Next Actions\n\n");
@@ -502,7 +512,11 @@ fn append_human_inventory(out: &mut String, report: &ScanReport, width: usize) {
                             })
                             .map(|sc| &sc.status);
                         let badge = status.map(coverage_badge).unwrap_or("[unknown]");
-                        format!("{} {}", server.name, badge)
+                        format!(
+                            "{} {}",
+                            human_layout::sanitize_untrusted_text(&server.name),
+                            badge
+                        )
                     })
                     .collect();
                 let servers_str = badges.join(", ");
@@ -551,7 +565,7 @@ fn append_human_findings(out: &mut String, report: &ScanReport, width: usize) {
                         "{} {}: {} [{} / {}] status={} policy_status={} fingerprint={}",
                         finding.id,
                         finding.title,
-                        finding.target,
+                        human_layout::sanitize_untrusted_text(&finding.target),
                         finding.agent,
                         finding.config_path,
                         finding.baseline_status.label(),

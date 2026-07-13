@@ -10,6 +10,10 @@ EtherFence v1.7.3 adds an optional `protection_coverage` field to the scan repor
 
 CLI filtering with `--severity-threshold` changes which findings are included in the emitted report and recomputes `summary` for the displayed findings, but it does not change field names or object layout. Policy findings are ordinary findings for filtering, `--fail-on`, baseline comparison, and `--fail-on-new`.
 
+## Root fields are home-relative display strings, not filesystem paths
+
+Post-v1.7.3 security review: every top-level `root`/`scanned_root` field documented below (`ef-scan-report`, `ef-setup-catalog/v0.1`, `ef-setup-detect/v0.2`, `ef-setup-baseline/v0.1`, `ef-setup-baseline-comparison/v0.1`) is rendered through a home-relative display conversion: `~` when the scanned root is exactly the operator's home directory, `~/rest` for a path beneath it, and the given root unchanged otherwise (for example, an explicit `--root` pointed outside the home directory, such as a CI checkout or a test fixture). This is a **display string for humans and shared/checked-in output**, not a literal, directly-openable filesystem path — consumers that need an openable path must resolve `~` against `$HOME`/`%USERPROFILE%` themselves, exactly as a shell would. The change (not present before the post-v1.7.3 security review) exists so a default (`$HOME`) scan or setup run does not leak the operator's real home directory and username into SARIF uploaded to code-scanning dashboards, JSON, Markdown, or a committed baseline. It does not change the field's name, type, or schema version — only what a home-rooted value looks like. The examples below use `"~"` to show the common default-scan case.
+
 ## Top-level report fields
 
 | Field | Type | Stability | Description |
@@ -18,7 +22,7 @@ CLI filtering with `--severity-threshold` changes which findings are included in
 | `tool` | string | stable | Tool name, currently `etherfence`. |
 | `version` | string | stable | EtherFence package version. |
 | `status` | string | stable | Scan command status, currently `stable-local-scan`. |
-| `scanned_root` | string | stable | Root used for conservative config discovery. |
+| `scanned_root` | string | stable field, home-relative display value (see above) | Root used for conservative config discovery, as a home-relative display string — not necessarily a directly-openable path. |
 | `inventory` | array | additive | Discovered agent config inventory. |
 | `findings` | array | additive | Displayed findings after severity threshold and optional baseline comparison. |
 | `summary` | object | stable | Counts for displayed findings and inventory items. |
@@ -166,7 +170,7 @@ exits `0`.
 | Field | Type | Description |
 | --- | --- | --- |
 | `etherfenceSchemaVersion` | string | `ef-setup-catalog/v0.1`. |
-| `root` | string | Root directory used for local presence detection. |
+| `root` | string | Home-relative display string for the root used for local presence detection (see "Root fields are home-relative display strings" above) — not necessarily a directly-openable path. |
 | `clients` | array | Always exactly 10 entries, in the fixed declared order below. Never re-sorted by tier, name, or presence. |
 
 Each `clients[]` entry:
@@ -183,7 +187,7 @@ Example:
 ```json
 {
   "etherfenceSchemaVersion": "ef-setup-catalog/v0.1",
-  "root": "/home/user",
+  "root": "~",
   "clients": [
     {
       "client": "claude-style-config",
@@ -225,7 +229,7 @@ byte-identical to pre-v1.3.0 output.
 | Field | Type | Description |
 | --- | --- | --- |
 | `etherfenceSchemaVersion` | string | `ef-setup-detect/v0.2`. |
-| `root` | string | Root directory used for detection. |
+| `root` | string | Home-relative display string for the root directory used for detection (see "Root fields are home-relative display strings" above) — not necessarily a directly-openable path. |
 | `detections` | array | One entry per detected client config. |
 
 Each `detections[]` entry:
@@ -281,7 +285,7 @@ Example:
 ```json
 {
   "etherfenceSchemaVersion": "ef-setup-detect/v0.2",
-  "root": "/home/user",
+  "root": "~",
   "detections": [
     {
       "agent": "Claude Code",
@@ -341,7 +345,7 @@ check`. See `docs/setup-onboarding.md` for the full safety boundary.
 | Field | Type | Description |
 | --- | --- | --- |
 | `schemaVersion` | string | `ef-setup-baseline/v0.1`. |
-| `root` | string | Root directory scanned to produce this baseline. |
+| `root` | string | Home-relative display string for the root directory scanned to produce this baseline (see "Root fields are home-relative display strings" above) — not necessarily a directly-openable path. |
 | `servers` | array | One entry per discovered MCP server, sorted by `(agentKind, configSource, serverName, transport)`. |
 
 Each `servers[]` entry:
@@ -372,7 +376,7 @@ json`; the same information is rendered as human text by default.
 | Field | Type | Description |
 | --- | --- | --- |
 | `schemaVersion` | string | `ef-setup-baseline-comparison/v0.1`. |
-| `root` | string | Root directory scanned for the current comparison. |
+| `root` | string | Home-relative display string for the root directory scanned for the current comparison (see "Root fields are home-relative display strings" above) — not necessarily a directly-openable path. |
 | `entries` | array | One entry per server identity found in the union of baseline and current state, sorted by `(agentKind, configSource, serverName, transport)`. |
 
 Each `entries[]` entry:

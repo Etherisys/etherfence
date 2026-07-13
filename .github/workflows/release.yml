@@ -31,10 +31,15 @@ jobs:
       sha: ${{ steps.version.outputs.sha }}
     steps:
       - name: fail closed unless dispatched from main
+        # Route github.ref through env rather than interpolating it into the
+        # shell source, matching the version-input hardening below (the repo's
+        # established GitHub Actions injection-safety pattern).
+        env:
+          GITHUB_REF_NAME_FULL: ${{ github.ref }}
         run: |
           set -euo pipefail
-          if [ "${{ github.ref }}" != "refs/heads/main" ]; then
-            echo "::error::Release workflow must be dispatched from main (got ${{ github.ref }})."
+          if [ "$GITHUB_REF_NAME_FULL" != "refs/heads/main" ]; then
+            echo "::error::Release workflow must be dispatched from main (got $GITHUB_REF_NAME_FULL)."
             exit 1
           fi
 

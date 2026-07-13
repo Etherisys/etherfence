@@ -161,6 +161,68 @@ fn selecting_one_of_two_servers_modifies_only_that_server() {
     assert!(backups.is_dir(), "backup dir must exist");
 }
 
+#[cfg(unix)]
+#[test]
+fn apply_preserves_config_mode_and_restricts_backup_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = temp_root("permission-hardening");
+    let config_path = write_claude_config(&root);
+    // Simulate an operator whose config already carries a restrictive mode
+    // (e.g. because it holds `env` credentials for other MCP servers).
+    fs::set_permissions(&config_path, fs::Permissions::from_mode(0o600))
+        .expect("chmod config to 0600");
+
+    let detections = detect(&root);
+    let id = claude_id(&root, "filesystem");
+    let selections = selections_for(std::slice::from_ref(&id));
+    let plan = build_wizard_plan(&detections, &selections, &root.display().to_string())
+        .expect("build plan");
+    apply_wizard_plan(&root, &plan).expect("apply plan");
+
+    let config_mode = fs::metadata(&config_path)
+        .expect("config metadata")
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(
+        config_mode, 0o600,
+        "replacing a 0600 config must not widen its mode"
+    );
+
+    let etherfence_dir = root.join(".etherfence");
+    let backups_dir = etherfence_dir.join("backups");
+    assert_eq!(
+        fs::metadata(&etherfence_dir).unwrap().permissions().mode() & 0o777,
+        0o700,
+        ".etherfence must be owner-only"
+    );
+    assert_eq!(
+        fs::metadata(&backups_dir).unwrap().permissions().mode() & 0o777,
+        0o700,
+        ".etherfence/backups must be owner-only"
+    );
+
+    let leaf_backup_dir = fs::read_dir(&backups_dir)
+        .expect("read backups dir")
+        .next()
+        .expect("one timestamped backup dir")
+        .expect("dir entry")
+        .path();
+    assert_eq!(
+        fs::metadata(&leaf_backup_dir).unwrap().permissions().mode() & 0o777,
+        0o700,
+        "timestamped backup dir must be owner-only"
+    );
+
+    let backup_file = leaf_backup_dir.join("original.json");
+    assert_eq!(
+        fs::metadata(&backup_file).unwrap().permissions().mode() & 0o777,
+        0o600,
+        "backup copy of the config must default to owner-only"
+    );
+}
+
 #[test]
 fn duplicate_server_name_in_second_config_stays_untouched() {
     // Same agent + same server name in two config files: selecting the

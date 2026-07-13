@@ -369,7 +369,7 @@ pub fn build_baseline(root: &Path, items: &[InventoryItem]) -> BaselineDocument 
     servers.sort_by(|a, b| sort_entry_key(a).cmp(&sort_entry_key(b)));
     BaselineDocument {
         schema_version: BASELINE_SCHEMA_VERSION.to_string(),
-        root: root.display().to_string(),
+        root: etherfence_core::home_relative_root(root),
         servers,
     }
 }
@@ -715,7 +715,7 @@ pub fn compare(
 
     ComparisonReport {
         schema_version: COMPARISON_SCHEMA_VERSION.to_string(),
-        root: root.display().to_string(),
+        root: etherfence_core::home_relative_root(root),
         entries,
     }
 }

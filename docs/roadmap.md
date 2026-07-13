@@ -642,13 +642,14 @@
 - `etherfence scan --policy` (and `--policy-profile`) now includes a
   "Protection Coverage" section in every output format (human summary,
   human verbose, JSON, Markdown, SARIF) showing which detected MCP
-  servers are protected by the active policy and which are not
-- New `CoverageStatus` per server: `protected`, `unprotected`,
+  servers are covered by the active policy and which are not
+- New `CoverageStatus` per server: `covered`, `not_covered`,
   `no_policy_for_agent`, `empty_allowlist`, or `not_applicable`
 - Report schema bump: `ef-scan-report/v0.1.1` → `ef-scan-report/v0.1.2`
   (additive optional `protection_coverage` field)
 - Scan output without `--policy` is byte-identical to v1.6.x
-- No posture scoring or weighted risk metric — that is v1.7.3
+- Posture scoring shipped separately in v1.7.0; this release adds only
+  coverage mapping
 - No `mcp-proxy`, `mcp-policy`, or `setup` behavior changes
 - No new crate, daemon, or network access
 
@@ -695,6 +696,65 @@
   remote MCP proxying, no daemon/control plane, no automatic policy
   widening, and no claim that a guarded/allowed call makes the wrapped MCP
   server safe overall
+
+<!-- NOTE: the v1.6.x/v1.7.x history below is chronological; the v1.7.2 and
+     v1.5.0 sections above predate it and are kept in place for stable anchors.
+     See CHANGELOG.md for the authoritative per-version detail. -->
+
+## v1.6.0 - guided setup wizard
+
+- `etherfence setup` (no subcommand) launches an interactive, TTY-only
+  guided wizard for local MCP onboarding; generated starter policies default
+  to deny-by-default
+- Real Hermes Agent, OpenCode, and Antigravity detection paths
+- Detection/planning/doctor stay read-only; apply prepares all changes
+  before any write
+
+## v1.6.1 - wizard selection, pinning, and terminal UI
+
+- Interactive per-server selection flow with trust gates: high-risk servers
+  cannot receive a permissive setup
+- Package pinning engine for unpinned/mutable-tag/range-based versions
+  (npm via `semver` full `major.minor.patch`; uvx/pipx via PEP 440 exact)
+- Selective wizard apply lands exactly the confirmed plan (the plan-bound
+  `WizardServerId` triple + entry-hash drift gate)
+- Semantic terminal UI theme layer; `etherfence scan` defaults to a readable
+  executive summary with full evidence behind `--verbose`
+
+## v1.6.2 - detection snapshot consistency
+
+- `attach_entry_snapshots` detection snapshot consistency and bounded-read
+  fixes; no schema or machine-format change
+
+## v1.7.0 - scan posture experience
+
+- `etherfence scan` presents a deterministic 0–100 posture score, A–F grade,
+  concise advisory assessment, and up to three priority risks with linked
+  recommended actions before detailed evidence
+- Verbose human and Markdown reports include the same posture/priority/action
+  summary before their severity-grouped evidence
+- Additive JSON `posture` under `ef-scan-report/v0.1.1`; existing fields,
+  schema id, SARIF, baselines, scan selection, and exit-code behavior
+  unchanged (this is where posture scoring shipped)
+
+## v1.7.1 - scan posture presentation stabilization
+
+- Presentation-only: default and verbose human reports wrap long titles,
+  targets, impact, and recommendations by Unicode display columns with stable
+  continuation indentation; `NO_COLOR`/redirected/non-TTY output stays
+  deterministic with no raw ANSI. Posture calculation, machine formats,
+  schemas, baselines, and MCP enforcement unchanged
+
+## v1.7.3 - terminal UI enhancement
+
+- Rendering-only release: banner metadata line (tagline, version, scan mode)
+  beneath the unchanged ASCII art; redesigned `scan --verbose` organized by
+  AI client → MCP server → findings with consolidated, deduplicated
+  recommended actions
+- New `--debug` flag (with `--verbose`) surfaces fingerprints/schema IDs;
+  Unicode symbols fall back to ASCII (TERM=dumb, NO_UNICODE, C locale);
+  narrow-terminal wrapping and ANSI suppression fixes
+- No scan logic, scoring, finding, schema, or machine-format change
 
 ## v0.2.x ideas
 

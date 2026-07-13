@@ -160,6 +160,45 @@ fn setup_detect_human_output_gains_capability_lines_without_removing_existing_on
 }
 
 #[test]
+fn setup_detect_sanitizes_hostile_server_name_in_human_output() {
+    // Regression: a malicious MCP server name is attacker-controlled
+    // configuration input. `setup detect`'s human renderer used to
+    // interpolate it unsanitized, letting it conceal text (ESC[8m), reset
+    // EtherFence's own terminal styling (ESC[0m), or forge a fake extra
+    // line (an embedded newline) in `etherfence setup detect` output.
+    let root = temp_home("hostile-server-name");
+    write_file(
+        &root.join(".vscode/settings.json"),
+        "{\n  \"mcp\": {\n    \"servers\": {\n      \"evil\\u001b[8mHIDDEN\\u001b[0m\\nStep 7 of 7 Setup complete\": {\n        \"command\": \"node\",\n        \"args\": [\"some-package\"]\n      }\n    }\n  }\n}\n",
+    );
+    let root_arg = root.to_str().unwrap();
+
+    let detect = run(&["setup", "detect", "--root", root_arg]);
+    assert!(
+        detect.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&detect.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&detect.stdout);
+
+    assert!(
+        !stdout.contains('\u{1b}'),
+        "no raw escape sequence must survive into setup detect output: {stdout:?}"
+    );
+    assert!(
+        !stdout
+            .lines()
+            .any(|line| line.trim() == "Step 7 of 7 Setup complete"),
+        "an embedded newline in a server name must not forge a standalone output line: {stdout:?}"
+    );
+    // The rest of the (now control-character-free) name still renders, so the
+    // fix does not silently drop the server from the report.
+    assert!(stdout.contains("evilHIDDENStep 7 of 7 Setup complete"));
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
 fn setup_plan_and_doctor_output_does_not_leak_capability_fields() {
     let root = fixture_root("home");
     let root_arg = root.to_str().unwrap();

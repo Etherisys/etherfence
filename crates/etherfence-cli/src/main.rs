@@ -5,9 +5,9 @@ mod verbose;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use etherfence_core::{
-    read_bounded_text_file, read_bounded_text_file_no_follow, BaselineComparison, BaselineFile,
-    BaselineStatus, CoverageStatus, Finding, PolicyMetadata, PostureSummary, ScanReport, Severity,
-    Summary, MAX_BASELINE_FILE_BYTES, MAX_CONFIG_FILE_BYTES,
+    home_relative_root, read_bounded_text_file, read_bounded_text_file_no_follow,
+    BaselineComparison, BaselineFile, BaselineStatus, CoverageStatus, Finding, PolicyMetadata,
+    PostureSummary, ScanReport, Severity, Summary, MAX_BASELINE_FILE_BYTES, MAX_CONFIG_FILE_BYTES,
 };
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -39,7 +39,7 @@ enum Command {
         verbose: bool,
         /// Include technical evidence (fingerprints, schema IDs, policy-status)
         /// in verbose human output. Requires --verbose.
-        #[arg(long)]
+        #[arg(long, requires = "verbose")]
         debug: bool,
         /// Only display findings at or above this severity.
         #[arg(long, value_enum, default_value_t = CliSeverity::Info)]
@@ -823,7 +823,7 @@ fn render_setup_baseline_check_human(
             out,
             "- {}:{} [{}] at {}",
             entry.agent,
-            entry.server_name,
+            etherfence_report::human_layout::sanitize_untrusted_text(&entry.server_name),
             comparison_status_label(entry.status),
             entry.config_source
         );
@@ -931,7 +931,7 @@ fn render_setup_detect(root: &Path, detections: &[etherfence_setup::SetupDetecti
             let _ = writeln!(
                 out,
                 "  - {} transport={} wrapped={}",
-                server.name,
+                etherfence_report::human_layout::sanitize_untrusted_text(&server.name),
                 transport_label(server.transport),
                 server.wrapped
             );
@@ -945,9 +945,10 @@ fn render_setup_detect(root: &Path, detections: &[etherfence_setup::SetupDetecti
             let _ = writeln!(out, "    capabilities: {}", labels.join(", "));
             let _ = writeln!(
                 out,
-                "    recommendation: {} (needs-review={}) — {}",
+                "    recommendation: {} (needs-review={}) {} {}",
                 recommendation_tier_label(server.recommendation.tier),
                 server.recommendation.needs_review,
+                ui::em_dash(),
                 server.recommendation.rationale
             );
             let trust = &server.trust_assessment;
@@ -993,7 +994,7 @@ fn render_setup_detect_json(
 ) -> Result<String> {
     let report = serde_json::json!({
         "etherfenceSchemaVersion": "ef-setup-detect/v0.2",
-        "root": root.display().to_string(),
+        "root": home_relative_root(root),
         "detections": detections,
     });
     Ok(format!("{}\n", serde_json::to_string_pretty(&report)?))
@@ -1037,7 +1038,7 @@ fn render_setup_catalog_json(
 ) -> Result<String> {
     let report = serde_json::json!({
         "etherfenceSchemaVersion": "ef-setup-catalog/v0.1",
-        "root": root.display().to_string(),
+        "root": home_relative_root(root),
         "clients": entries,
     });
     Ok(format!("{}\n", serde_json::to_string_pretty(&report)?))
@@ -1086,7 +1087,7 @@ fn render_setup_plan(plan: &etherfence_setup::SetupPlan) -> String {
             out,
             "- {}:{} -> {} ({})",
             action.agent,
-            action.server_name,
+            etherfence_report::human_layout::sanitize_untrusted_text(&action.server_name),
             action_kind_label(action.action),
             action.reason
         );
@@ -1212,9 +1213,14 @@ fn run_setup_wizard() -> Result<()> {
     }
 
     fn invocation_line(command: &str, args: &[String]) -> String {
+        let command = etherfence_report::human_layout::sanitize_untrusted_text(command);
         if args.is_empty() {
-            command.to_string()
+            command
         } else {
+            let args: Vec<String> = args
+                .iter()
+                .map(|arg| etherfence_report::human_layout::sanitize_untrusted_text(arg))
+                .collect();
             format!("{command} {}", args.join(" "))
         }
     }
@@ -1381,13 +1387,18 @@ fn run_setup_wizard() -> Result<()> {
                     eprintln!(
                         "  {} {}",
                         ui::pad(&server.name, 24),
-                        theme.muted.apply_to("already protected — no action needed")
+                        theme.muted.apply_to(format!(
+                            "already protected {} no action needed",
+                            ui::em_dash()
+                        ))
                     );
                 } else if server.transport != etherfence_setup::ServerTransport::Stdio {
                     eprintln!(
                         "  {} {}",
                         ui::pad(&server.name, 24),
-                        theme.muted.apply_to("remote server — cannot be wrapped")
+                        theme
+                            .muted
+                            .apply_to(format!("remote server {} cannot be wrapped", ui::em_dash()))
                     );
                 } else {
                     selectable.push(index);
@@ -1436,7 +1447,15 @@ fn run_setup_wizard() -> Result<()> {
                 eprintln!();
                 eprintln!("{}", theme.step(4, 7, "Resolve trust and pinning"));
                 eprintln!("Server");
-                eprintln!("  {} / {}", client.agent, theme.info.apply_to(&server.name));
+                eprintln!(
+                    "  {} / {}",
+                    client.agent,
+                    theme
+                        .info
+                        .apply_to(etherfence_report::human_layout::sanitize_untrusted_text(
+                            &server.name
+                        ))
+                );
                 if let Some(command) = server.command.as_deref() {
                     eprintln!("Current invocation");
                     eprintln!(
@@ -1575,7 +1594,10 @@ fn run_setup_wizard() -> Result<()> {
                 let posture_choice = interact_or_bail(
                     Select::new()
                         .items(posture_items)
-                        .with_prompt(format!("Policy posture for '{}'", server.name))
+                        .with_prompt(format!(
+                            "Policy posture for '{}'",
+                            etherfence_report::human_layout::sanitize_untrusted_text(&server.name)
+                        ))
                         .default(0)
                         .interact(),
                 )?;
@@ -1662,7 +1684,14 @@ fn run_setup_wizard() -> Result<()> {
             .iter()
             .filter(|s| s.config_path == *config_path)
         {
-            eprintln!("  {}", theme.info.apply_to(&server.server_name));
+            eprintln!(
+                "  {}",
+                theme
+                    .info
+                    .apply_to(etherfence_report::human_layout::sanitize_untrusted_text(
+                        &server.server_name
+                    ))
+            );
             if let Some(pin) = plan
                 .pinning_changes
                 .iter()
@@ -1671,8 +1700,14 @@ fn run_setup_wizard() -> Result<()> {
                 eprintln!(
                     "    {} Pin package       {} \u{2192} {}",
                     theme.success.apply_to("\u{2713}"),
-                    pin.package_identity.as_deref().unwrap_or("<package>"),
-                    theme.success.apply_to(pin.pinned_args.join(" "))
+                    etherfence_report::human_layout::sanitize_untrusted_text(
+                        pin.package_identity.as_deref().unwrap_or("<package>")
+                    ),
+                    theme.success.apply_to(
+                        etherfence_report::human_layout::sanitize_untrusted_text(
+                            &pin.pinned_args.join(" ")
+                        )
+                    )
                 );
             }
             let policy_label = plan
@@ -1715,7 +1750,11 @@ fn run_setup_wizard() -> Result<()> {
                     && s.server_name == server.name
             });
             if !selected {
-                unchanged.push(format!("{} / {}", detection.agent, server.name));
+                unchanged.push(format!(
+                    "{} / {}",
+                    detection.agent,
+                    etherfence_report::human_layout::sanitize_untrusted_text(&server.name)
+                ));
             }
         }
     }
@@ -1795,8 +1834,12 @@ fn run_setup_wizard() -> Result<()> {
         eprintln!(
             "{} Pinned {} to {}",
             theme.success.apply_to("\u{2713}"),
-            pin.package_identity.as_deref().unwrap_or(&pin.server_name),
-            pin.proposed_version.as_deref().unwrap_or("<version>")
+            etherfence_report::human_layout::sanitize_untrusted_text(
+                pin.package_identity.as_deref().unwrap_or(&pin.server_name)
+            ),
+            etherfence_report::human_layout::sanitize_untrusted_text(
+                pin.proposed_version.as_deref().unwrap_or("<version>")
+            )
         );
     }
     if !unchanged.is_empty() {
@@ -1963,7 +2006,11 @@ fn render_mcp_policy_explanation(explanation: &etherfence_mcp::PolicyExplanation
     } else {
         let _ = writeln!(out, "Server scopes:");
         for server in &explanation.servers {
-            let _ = writeln!(out, "  [{}]", server.name);
+            let _ = writeln!(
+                out,
+                "  [{}]",
+                etherfence_report::human_layout::sanitize_untrusted_text(&server.name)
+            );
             let _ = writeln!(out, "    tools.allow: {}", format_list(&server.tools.allow));
             let _ = writeln!(out, "    tools.deny: {}", format_list(&server.tools.deny));
             match &server.methods {
@@ -2000,7 +2047,11 @@ fn render_mcp_policy_explanation(explanation: &etherfence_mcp::PolicyExplanation
         let _ = writeln!(out, "Guarded keys:");
         for guard in &explanation.guards {
             let scope_label = match &guard.server_name {
-                Some(server) => format!("{} (server={server})", guard.scope.as_str()),
+                Some(server) => format!(
+                    "{} (server={})",
+                    guard.scope.as_str(),
+                    etherfence_report::human_layout::sanitize_untrusted_text(server)
+                ),
                 None => guard.scope.as_str().to_string(),
             };
             let keys: Vec<&str> = guard
@@ -2026,7 +2077,11 @@ fn render_mcp_policy_explanation(explanation: &etherfence_mcp::PolicyExplanation
         let _ = writeln!(out, "Argument/param field guards:");
         for guard in &explanation.argument_guards {
             let scope_label = match &guard.server_name {
-                Some(server) => format!("{} (server={server})", guard.scope.as_str()),
+                Some(server) => format!(
+                    "{} (server={})",
+                    guard.scope.as_str(),
+                    etherfence_report::human_layout::sanitize_untrusted_text(server)
+                ),
                 None => guard.scope.as_str().to_string(),
             };
             let _ = writeln!(out, "  {scope_label} {:?}", guard.key);
@@ -2167,6 +2222,19 @@ fn run_mcp_proxy(
             std::process::exit(etherfence_mcp::exit_code::INVALID_POLICY);
         }
     };
+    // `run_proxy` never calls `process::exit` itself (it is a library
+    // function). A fatal error in its background server-to-client pump can
+    // occur while this process's own foreground stdin read is blocked and
+    // unable to be interrupted, so `run_proxy` may not return promptly in
+    // that case. The CLI is the process, though, and needs a hard guarantee
+    // that such an error ends it immediately rather than waiting on a stuck
+    // foreground read: this callback runs from inside `run_proxy`'s
+    // background pump thread as soon as the error occurs and terminates the
+    // process itself, which is a decision only the CLI layer is allowed to
+    // make.
+    let on_fatal_error = |error: &etherfence_mcp::ProxyError| {
+        std::process::exit(error.code());
+    };
     let exit_code = match etherfence_mcp::run_proxy(
         std::io::stdin().lock(),
         std::io::stdout(),
@@ -2174,6 +2242,7 @@ fn run_mcp_proxy(
         &policy,
         server_name,
         audit_log,
+        Some(&on_fatal_error),
     ) {
         Ok(code) => code,
         Err(proxy_error) => {
@@ -2232,14 +2301,14 @@ fn run_scan(options: ScanOptions) -> Result<()> {
 
     let (scanned_root, inventory) = if let Some(root) = &options.root {
         (
-            root.display().to_string(),
+            home_relative_root(root),
             etherfence_inventory::discover(root),
         )
     } else {
         let roots = etherfence_inventory::default_scan_roots();
         let scanned_root = roots
             .iter()
-            .map(|root| root.display().to_string())
+            .map(|root| home_relative_root(root))
             .collect::<Vec<_>>()
             .join(",");
         (scanned_root, etherfence_inventory::discover_roots(&roots))
@@ -2395,8 +2464,9 @@ fn render_scan_summary(report: &ScanReport) -> String {
             theme.key_value(
                 "Posture",
                 &format!(
-                    "{}/100 — {}",
+                    "{}/100 {} {}",
                     posture.score,
+                    ui::em_dash(),
                     grade_style.apply_to(format!("GRADE {}", posture.grade.label()))
                 )
             )
@@ -2432,8 +2502,12 @@ fn render_scan_summary(report: &ScanReport) -> String {
             theme.key_value(
                 "Policy",
                 &format!(
-                    "{} — checks={}, pass={}, violations={}",
-                    policy.policy_name, policy.checks_total, policy.pass, policy.violation
+                    "{} {} checks={}, pass={}, violations={}",
+                    policy.policy_name,
+                    ui::em_dash(),
+                    policy.checks_total,
+                    policy.pass,
+                    policy.violation
                 )
             )
         );
@@ -2575,7 +2649,11 @@ fn render_scan_summary(report: &ScanReport) -> String {
                     ui::wrap_prefixed(
                         "        Scope: ",
                         "               ",
-                        &format!("{} / {}", risk.agent, risk.target),
+                        &format!(
+                            "{} / {}",
+                            risk.agent,
+                            etherfence_report::human_layout::sanitize_untrusted_text(&risk.target)
+                        ),
                         width,
                     )
                 );
@@ -2601,7 +2679,8 @@ fn render_scan_summary(report: &ScanReport) -> String {
                         "…       ",
                         "        ",
                         &format!(
-                            "{remaining} additional active finding(s) — run `etherfence scan --verbose` for the full list"
+                            "{remaining} additional active finding(s) {} run `etherfence scan --verbose` for the full list",
+                            ui::em_dash()
                         ),
                         width,
                     )
@@ -2646,7 +2725,7 @@ fn render_scan_summary(report: &ScanReport) -> String {
         ui::wrap_prefixed(
             "Run ",
             "    ",
-            "`etherfence setup` to secure detected MCP servers.",
+            "`etherfence setup` to set up deny-by-default `mcp-proxy` policies for detected MCP servers.",
             width,
         )
     );
@@ -2762,14 +2841,32 @@ fn apply_baseline(
     }
 }
 
-// `path` here is an explicit, trusted-operator CLI input (`--baseline`);
-// see the doc comment on `read_bounded_text_file` for the CLI-vs-future-API
-// path trust model this crate follows.
+/// The only baseline schema this build reads/writes. A baseline written under
+/// a different (older/foreign) fingerprint scheme is rejected fail-closed
+/// rather than silently marking every current finding `New` and every baseline
+/// finding `Resolved` — which would make `--fail-on-new` fire (or, on a
+/// fingerprint overlap, fail to fire) misleadingly.
+const BASELINE_SCHEMA_VERSION: &str = "ef-baseline/v0.1.3";
+
+// `path` here is an explicit, trusted-operator CLI input (`--baseline`).
+// A swapped/symlinked baseline is a misleading input, so the read fails
+// closed on symlinks (mirrors `read_setup_baseline`), matching the no-follow
+// discipline documented on `read_bounded_text_file_no_follow`.
 fn read_baseline(path: &Path) -> Result<BaselineFile> {
-    let content = read_bounded_text_file(path, MAX_BASELINE_FILE_BYTES)
+    let content = read_bounded_text_file_no_follow(path, MAX_BASELINE_FILE_BYTES)
         .with_context(|| format!("reading baseline file {}", path.display()))?;
-    serde_json::from_str(&content)
-        .with_context(|| format!("parsing baseline file {}", path.display()))
+    let baseline: BaselineFile = serde_json::from_str(&content)
+        .with_context(|| format!("parsing baseline file {}", path.display()))?;
+    if baseline.schema_version != BASELINE_SCHEMA_VERSION {
+        anyhow::bail!(
+            "baseline file {} has unsupported schema_version {:?} (expected {:?}); \
+             regenerate it with `--write-baseline`",
+            path.display(),
+            baseline.schema_version,
+            BASELINE_SCHEMA_VERSION
+        );
+    }
+    Ok(baseline)
 }
 
 fn write_baseline(path: &Path, findings: &[Finding]) -> Result<()> {
@@ -2778,7 +2875,7 @@ fn write_baseline(path: &Path, findings: &[Finding]) -> Result<()> {
             .with_context(|| format!("creating baseline directory {}", parent.display()))?;
     }
     let baseline = BaselineFile {
-        schema_version: "ef-baseline/v0.1.3".to_string(),
+        schema_version: BASELINE_SCHEMA_VERSION.to_string(),
         tool: "etherfence".to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
         created_at: None,

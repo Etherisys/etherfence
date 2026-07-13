@@ -1,6 +1,6 @@
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 
@@ -779,6 +779,14 @@ fn method_denied_error_response(request_id: &Value, method: &str, reason: &str) 
 /// Run the stdio boundary proxy until the client closes its input stream, the
 /// child server exits, or a fatal proxy error occurs.
 ///
+/// `etherfence-mcp` is a library: it never calls `std::process::exit`, even
+/// on a fatal error, because doing so would let a misbehaving MCP server
+/// (an oversized frame, invalid UTF-8, a client-output failure) terminate
+/// the *entire host process* embedding this crate — including processes
+/// that run multiple proxies, need to flush their own logs, or run
+/// destructors before exiting. Every fatal condition is instead reported
+/// through this function's `Result`.
+///
 /// Lifecycle guarantees:
 /// - The child server is spawned before any client traffic is inspected.
 /// - On a clean client EOF the proxy closes the server's stdin so the child can
@@ -787,6 +795,27 @@ fn method_denied_error_response(request_id: &Value, method: &str, reason: &str) 
 /// - If the child exits first (early exit, crash), the server pump stops, the
 ///   client's stdin is closed, and `Err(ProxyError::ChildExited(code))` is
 ///   returned so the caller can propagate the child's code.
+/// - A fatal error in the client→server pump (bad read, hard write failure)
+///   always kills the child before the client loop returns, so the
+///   server→client pump — which may be blocked reading from a child that is
+///   still waiting on stdin — is guaranteed to unblock instead of leaving the
+///   proxy's scoped-thread join hanging forever.
+/// - A fatal error in the server→client pump (an oversized/invalid server
+///   frame, a hard write failure) kills the child and this function returns
+///   `Err`. That pump runs on a background thread while the client→server
+///   pump may be blocked in a plain blocking read on the client's own input
+///   stream with no portable way to interrupt it from another thread, so
+///   `run_proxy` cannot always return promptly: it still waits for both
+///   pumps to finish, which for a non-interruptible foreground reader (real
+///   process stdin, in particular) may not happen until that reader also
+///   unblocks on its own. `on_fatal_error`, when supplied, is invoked from
+///   the background pump thread *as soon as* such an error occurs — before
+///   `run_proxy` itself can return — so a caller that owns the whole
+///   process (a CLI) and needs a hard guarantee of immediate termination
+///   can act (e.g. `std::process::exit`) from inside that callback instead
+///   of waiting on the `Result`. A library embedder that owns an
+///   interruptible client reader can instead simply react to the returned
+///   `ProxyError` and does not need to supply a callback.
 /// - Any I/O, spawn, or audit-open failure returns a `ProxyError` with a
 ///   documented exit code; the caller is responsible for reaping the child.
 /// - A broken pipe to the client (the client closed stdout) terminates the
@@ -798,6 +827,7 @@ pub fn run_proxy<ClientIn, ClientOut>(
     policy: &McpPolicyFile,
     server_name: &str,
     mut audit_log: Option<AuditLog>,
+    on_fatal_error: Option<&(dyn Fn(&ProxyError) + Sync)>,
 ) -> std::result::Result<i32, ProxyError>
 where
     ClientIn: BufRead,
@@ -828,6 +858,7 @@ where
     let pending_requests = Arc::new(Mutex::new(TrackedRequests::default()));
     let audit_log = Arc::new(Mutex::new(audit_log.take()));
     let server_in = Arc::new(Mutex::new(Some(server_in)));
+    let child = Arc::new(Mutex::new(child));
 
     let pump_result = std::thread::scope(|scope| -> std::result::Result<(), ProxyError> {
         let server_to_client = scope.spawn(|| {
@@ -839,12 +870,23 @@ where
                 &pending_requests,
                 &audit_log,
                 &server_in,
+                &child,
+                on_fatal_error,
             )
         });
 
-        let mut lines = client_in.lines();
-        for line in lines.by_ref() {
-            let line = line.map_err(|error| ProxyError::ClientRead(format!("{error:?}")))?;
+        let mut client_in = client_in;
+        let mut client_frame = Vec::new();
+        let mut client_result: std::result::Result<(), ProxyError> = Ok(());
+        'client: loop {
+            let line = match read_bounded_frame(&mut client_in, &mut client_frame) {
+                Ok(Some(line)) => line,
+                Ok(None) => break 'client,
+                Err(error) => {
+                    client_result = Err(ProxyError::ClientRead(format!("{error:?}")));
+                    break 'client;
+                }
+            };
             // Validate client lines before forwarding: a line that is not valid
             // JSON could mask a protocol error and is not something the server
             // would accept under JSON-RPC. Drop it instead of forwarding it.
@@ -871,28 +913,39 @@ where
                 }
             }
             match inspected.action {
-                ClientAction::Forward => {
-                    if !write_to_server(&server_in, &line)? {
+                ClientAction::Forward => match write_to_server(&server_in, &line) {
+                    Ok(true) => {}
+                    Ok(false) => {
                         // Server pipe closed while we were forwarding: stop the
                         // client loop cleanly and let the server pump finish.
-                        break;
+                        break 'client;
                     }
-                }
+                    Err(error) => {
+                        client_result = Err(error);
+                        break 'client;
+                    }
+                },
                 ClientAction::Deny { response } => {
                     if let Some(response) = response {
                         let mut out = client_out.lock().expect("client output lock");
                         match writeln!(out, "{response}") {
                             Ok(()) => {
-                                out.flush().map_err(|error| {
-                                    ProxyError::ClientWrite(format!("{error:?}"))
-                                })?;
+                                if let Err(error) = out.flush() {
+                                    drop(out);
+                                    client_result =
+                                        Err(ProxyError::ClientWrite(format!("{error:?}")));
+                                    break 'client;
+                                }
                             }
                             Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => {
                                 // Client closed its output: stop cleanly.
-                                break;
+                                drop(out);
+                                break 'client;
                             }
                             Err(error) => {
-                                return Err(ProxyError::ClientWrite(format!("{error:?}")))
+                                drop(out);
+                                client_result = Err(ProxyError::ClientWrite(format!("{error:?}")));
+                                break 'client;
                             }
                         }
                     }
@@ -900,24 +953,63 @@ where
             }
         }
 
-        // Client is done (EOF or broken pipe): close the server's stdin so the
-        // child receives EOF and can exit. The server pump only borrows this
-        // handle briefly when it must answer denied server→client requests, so
-        // setting it to None closes the write end and avoids keeping the child
-        // alive accidentally.
+        // The client loop is done, whether by clean EOF, a clean break (server
+        // pipe closed), or a fatal error. On a fatal error, do not trust the
+        // child to notice stdin EOF and exit on its own: kill it outright so a
+        // still-live server cannot leave the server-to-client pump blocked
+        // reading from it forever.
+        if client_result.is_err() {
+            let _ = child.lock().expect("child lock").kill();
+        }
+        // Close the server's stdin so a well-behaved child receives EOF and can
+        // exit. The server pump only borrows this handle briefly when it must
+        // answer denied server→client requests, so setting it to None closes
+        // the write end and avoids keeping the child alive accidentally.
         *server_in.lock().expect("server input lock") = None;
-        server_to_client
+        let server_result = server_to_client
             .join()
-            .expect("server-to-client pump thread")?;
-        Ok(())
+            .expect("server-to-client pump thread");
+        client_result?;
+        server_result
     });
 
     // Reap the child no matter what happened above.
-    let child_status = wait_for_child(&mut child);
+    let child_status = wait_for_child(&mut child.lock().expect("child lock"));
     pump_result?;
     child_status
 }
 
+/// Handle a fatal server→client pump failure without terminating the process.
+///
+/// This pump runs on a background thread while the client→server pump may be
+/// blocked in a plain blocking read on the client's own input stream (in
+/// production, the process's real stdin), which has no portable way to be
+/// interrupted from another thread. Killing the child here cannot unblock
+/// that read, so `run_proxy` itself may not return until the foreground
+/// reader also unblocks on its own — but this function never calls
+/// `std::process::exit` to force the issue, because `etherfence-mcp` is a
+/// library and doing so would terminate the whole embedding process instead
+/// of just this proxy. The child is killed and reaped here so it is never
+/// left running while `run_proxy` waits to return, and `on_fatal_error` (if
+/// supplied) is invoked immediately so a caller that owns the process — and
+/// so can safely decide to terminate it — does not have to wait either.
+fn handle_fatal_server_pump_error(
+    child: &Arc<Mutex<Child>>,
+    on_fatal_error: Option<&(dyn Fn(&ProxyError) + Sync)>,
+    error: ProxyError,
+) -> ProxyError {
+    if let Ok(mut child) = child.lock() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    eprintln!("etherfence mcp-proxy: {}", error.message());
+    if let Some(on_fatal_error) = on_fatal_error {
+        on_fatal_error(&error);
+    }
+    error
+}
+
+#[allow(clippy::too_many_arguments)]
 fn pump_server_to_client<ClientOut: Write>(
     server_out: std::process::ChildStdout,
     client_out: &Mutex<ClientOut>,
@@ -926,10 +1018,23 @@ fn pump_server_to_client<ClientOut: Write>(
     pending_requests: &Arc<Mutex<TrackedRequests>>,
     audit_log: &Arc<Mutex<Option<AuditLog>>>,
     server_in: &Arc<Mutex<Option<std::process::ChildStdin>>>,
+    child: &Arc<Mutex<Child>>,
+    on_fatal_error: Option<&(dyn Fn(&ProxyError) + Sync)>,
 ) -> std::result::Result<(), ProxyError> {
-    let reader = BufReader::new(server_out);
-    for line in reader.lines() {
-        let line = line.map_err(|error| ProxyError::ServerRead(format!("{error:?}")))?;
+    let mut reader = BufReader::new(server_out);
+    let mut server_frame = Vec::new();
+    loop {
+        let line = match read_bounded_frame(&mut reader, &mut server_frame) {
+            Ok(Some(line)) => line,
+            Ok(None) => return Ok(()),
+            Err(error) => {
+                return Err(handle_fatal_server_pump_error(
+                    child,
+                    on_fatal_error,
+                    ProxyError::ServerRead(format!("{error:?}")),
+                ))
+            }
+        };
         let inspected = inspect_server_line(
             policy,
             server_name,
@@ -961,22 +1066,37 @@ fn pump_server_to_client<ClientOut: Write>(
             ServerAction::Forward { line } => {
                 let mut out = client_out.lock().expect("client output lock");
                 match writeln!(out, "{line}") {
-                    Ok(()) => out
-                        .flush()
-                        .map_err(|error| ProxyError::ClientWrite(format!("{error:?}")))?,
+                    Ok(()) => {
+                        if let Err(error) = out.flush() {
+                            drop(out);
+                            return Err(handle_fatal_server_pump_error(
+                                child,
+                                on_fatal_error,
+                                ProxyError::ClientWrite(format!("{error:?}")),
+                            ));
+                        }
+                    }
                     // Client closed its output: stop the server pump cleanly.
                     Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => return Ok(()),
-                    Err(error) => return Err(ProxyError::ClientWrite(format!("{error:?}"))),
+                    Err(error) => {
+                        drop(out);
+                        return Err(handle_fatal_server_pump_error(
+                            child,
+                            on_fatal_error,
+                            ProxyError::ClientWrite(format!("{error:?}")),
+                        ));
+                    }
                 }
             }
             ServerAction::Deny { response_to_server } => {
                 if let Some(response) = response_to_server {
-                    let _ = write_to_server(server_in, &response)?;
+                    if let Err(error) = write_to_server(server_in, &response) {
+                        return Err(handle_fatal_server_pump_error(child, on_fatal_error, error));
+                    }
                 }
             }
         }
     }
-    Ok(())
 }
 
 fn write_to_server(
@@ -1004,6 +1124,61 @@ fn wait_for_child(child: &mut Child) -> std::result::Result<i32, ProxyError> {
     Ok(status.code().unwrap_or(1))
 }
 
+/// Maximum size of a single newline-delimited JSON-RPC frame the proxy will
+/// buffer from either side of the boundary. A frame larger than this fails
+/// closed (the affected pump aborts and the proxy shuts down) instead of
+/// letting an untrusted client or wrapped server drive the proxy — the one
+/// runtime-enforcement component — to out-of-memory. `BufRead::lines()` /
+/// `read_line` grow without bound, so they must not be used on this hot path.
+const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
+
+/// Read one newline-delimited frame into `buf`, bounded to `MAX_FRAME_BYTES`.
+///
+/// Returns `Ok(None)` at EOF, `Ok(Some(line))` for a frame terminated by a
+/// newline or by EOF, and an `InvalidData` error (fail closed) when a single
+/// frame exceeds the cap or is not strictly valid UTF-8.
+///
+/// UTF-8 validity is intentionally strict (`String::from_utf8`, not
+/// `String::from_utf8_lossy`): lossy replacement rewrites invalid bytes to
+/// U+FFFD in place, and an invalid byte inside an otherwise well-formed JSON
+/// string does not necessarily make the surrounding message invalid JSON —
+/// the rewritten message can still parse and would then be forwarded across
+/// the trust boundary with altered content. Rejecting the frame outright
+/// keeps the boundary from ever changing bytes it forwards.
+fn read_bounded_frame<R: BufRead>(
+    reader: &mut R,
+    buf: &mut Vec<u8>,
+) -> std::io::Result<Option<String>> {
+    buf.clear();
+    let read = reader
+        .by_ref()
+        .take(MAX_FRAME_BYTES as u64 + 1)
+        .read_until(b'\n', buf)?;
+    if read == 0 {
+        return Ok(None);
+    }
+    if buf.len() > MAX_FRAME_BYTES {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "JSON-RPC frame exceeds maximum size",
+        ));
+    }
+    if buf.last() == Some(&b'\n') {
+        buf.pop();
+        if buf.last() == Some(&b'\r') {
+            buf.pop();
+        }
+    }
+    String::from_utf8(std::mem::take(buf))
+        .map(Some)
+        .map_err(|error| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("JSON-RPC frame contains invalid UTF-8: {error}"),
+            )
+        })
+}
+
 /// Whether `line` parses as a JSON value. Used to drop invalid client lines
 /// before they reach the server. Invalid server lines are intentionally NOT
 /// dropped (see `inspect_server_line`): they are passed through so the client's
@@ -1016,6 +1191,61 @@ fn is_valid_json_line(line: &str) -> bool {
 mod tests {
     use super::*;
     use crate::policy::parse_mcp_policy;
+
+    #[test]
+    fn bounded_frame_reads_lines_and_stops_at_eof() {
+        let data = b"{\"a\":1}\n{\"b\":2}\n".to_vec();
+        let mut reader = std::io::BufReader::new(&data[..]);
+        let mut buf = Vec::new();
+        assert_eq!(
+            read_bounded_frame(&mut reader, &mut buf).unwrap(),
+            Some("{\"a\":1}".to_string())
+        );
+        assert_eq!(
+            read_bounded_frame(&mut reader, &mut buf).unwrap(),
+            Some("{\"b\":2}".to_string())
+        );
+        assert_eq!(read_bounded_frame(&mut reader, &mut buf).unwrap(), None);
+    }
+
+    #[test]
+    fn bounded_frame_trims_crlf() {
+        let data = b"hello\r\n".to_vec();
+        let mut reader = std::io::BufReader::new(&data[..]);
+        let mut buf = Vec::new();
+        assert_eq!(
+            read_bounded_frame(&mut reader, &mut buf).unwrap(),
+            Some("hello".to_string())
+        );
+    }
+
+    #[test]
+    fn bounded_frame_fails_closed_on_oversized_frame() {
+        // A single newline-less frame larger than the cap must error rather
+        // than allocate without bound (memory-exhaustion DoS on the boundary).
+        let data = vec![b'x'; MAX_FRAME_BYTES + 16];
+        let mut reader = std::io::BufReader::new(&data[..]);
+        let mut buf = Vec::new();
+        let err = read_bounded_frame(&mut reader, &mut buf).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn bounded_frame_fails_closed_on_invalid_utf8_inside_json_string() {
+        // A single invalid byte planted inside an otherwise well-formed JSON
+        // string. Lossy conversion would rewrite it to U+FFFD and the message
+        // would still parse as valid JSON, silently changing bytes crossing
+        // the trust boundary. Strict UTF-8 must reject the whole frame.
+        let mut data =
+            br#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"x"#.to_vec();
+        data.push(0xFF);
+        data.extend_from_slice(br#""}}"#);
+        data.push(b'\n');
+        let mut reader = std::io::BufReader::new(&data[..]);
+        let mut buf = Vec::new();
+        let err = read_bounded_frame(&mut reader, &mut buf).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    }
 
     fn policy() -> McpPolicyFile {
         parse_mcp_policy(

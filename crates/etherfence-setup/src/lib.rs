@@ -959,7 +959,7 @@ fn prepare_config(path: &Path, config: &SupportedConfig) -> Result<Option<Prepar
 }
 
 fn write_prepared_apply(root: &Path, change: &PreparedApply) -> Result<()> {
-    fs::create_dir_all(&change.backup_dir).with_context(|| {
+    create_dir_all_restricted(&change.backup_dir).with_context(|| {
         format!(
             "creating EtherFence backup dir {}",
             change.backup_dir.display()
@@ -1296,19 +1296,103 @@ fn relative_or_absolute(root: &Path, path: &Path) -> String {
         .unwrap_or_else(|_| path.display().to_string())
 }
 
-fn atomic_write(path: &Path, content: &[u8]) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
+/// Create `path` and any missing ancestors, restricting every directory this
+/// call actually creates to owner-only (`0700`) on Unix. Directories under
+/// `.etherfence/` hold setup backups (full copies of MCP configs, which may
+/// carry credentials in `env`) and generated policies, so a permissive
+/// process umask must not leave them group/world-readable. Windows ACLs are
+/// out of scope here (matches the rest of the setup-write hardening).
+fn create_dir_all_restricted(path: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut missing = Vec::new();
+        let mut current = path;
+        while !current.exists() {
+            missing.push(current);
+            match current.parent() {
+                Some(parent) => current = parent,
+                None => break,
+            }
+        }
+        fs::create_dir_all(path).with_context(|| format!("creating {}", path.display()))?;
+        for dir in missing {
+            fs::set_permissions(dir, fs::Permissions::from_mode(0o700))
+                .with_context(|| format!("restricting permissions on {}", dir.display()))?;
+        }
+        Ok(())
     }
-    let tmp = path.with_extension("tmp-etherfence");
-    fs::write(&tmp, content).with_context(|| format!("writing temp file {}", tmp.display()))?;
-    fs::rename(&tmp, path).with_context(|| {
+    #[cfg(not(unix))]
+    {
+        fs::create_dir_all(path).with_context(|| format!("creating {}", path.display()))
+    }
+}
+
+fn atomic_write(path: &Path, content: &[u8]) -> Result<()> {
+    use std::io::Write as _;
+
+    if let Some(parent) = path.parent() {
+        create_dir_all_restricted(parent)?;
+    }
+    // Preserve the mode of the file being replaced, if any, so an existing
+    // restrictive config (e.g. 0600) does not become more broadly readable
+    // through whatever mode `create_new` picks under the process umask. A
+    // brand-new file (no existing target — a backup copy or a freshly
+    // wrapped config) defaults to owner-only rather than trusting the umask,
+    // since these files may carry MCP credentials from `env`.
+    #[cfg(unix)]
+    let mode = {
+        use std::os::unix::fs::PermissionsExt;
+        fs::metadata(path)
+            .ok()
+            .map(|meta| meta.permissions().mode() & 0o777)
+            .unwrap_or(0o600)
+    };
+    // A per-process temp name avoids colliding with a temp left by a crashed
+    // run, while `create_new` (O_EXCL semantics, portable) refuses to open
+    // through a pre-planted symlink or any existing file. Without it, an
+    // attacker able to create files in the config's directory (e.g. a shared
+    // or cloned repo's `.vscode/`) could pre-plant `<target>.tmp-etherfence`
+    // as a symlink and redirect this write into an arbitrary victim file.
+    let tmp = path.with_extension(format!("tmp-etherfence-{}", std::process::id()));
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&tmp)
+        .with_context(|| {
+            format!(
+                "creating temp file {} (refusing to follow a pre-existing path)",
+                tmp.display()
+            )
+        })?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Err(error) = fs::set_permissions(&tmp, fs::Permissions::from_mode(mode)) {
+            let _ = fs::remove_file(&tmp);
+            return Err(error)
+                .with_context(|| format!("restricting permissions on {}", tmp.display()));
+        }
+    }
+    let written = file
+        .write_all(content)
+        .and_then(|()| file.sync_all())
+        .with_context(|| format!("writing temp file {}", tmp.display()));
+    drop(file);
+    if let Err(error) = written {
+        let _ = fs::remove_file(&tmp);
+        return Err(error);
+    }
+    if let Err(error) = fs::rename(&tmp, path).with_context(|| {
         format!(
             "atomically replacing {} with {}",
             path.display(),
             tmp.display()
         )
-    })?;
+    }) {
+        let _ = fs::remove_file(&tmp);
+        return Err(error);
+    }
     Ok(())
 }
 
@@ -1488,6 +1572,94 @@ mod tests {
             hash.chars().all(|c| c.is_ascii_hexdigit()),
             "hash must be hex: {hash}"
         );
+    }
+
+    #[test]
+    fn atomic_write_writes_then_replaces() {
+        let dir = temp_dir("atomic-ok");
+        let target = dir.join("config.json");
+        fs::write(&target, b"original").unwrap();
+        atomic_write(&target, b"new-content").unwrap();
+        assert_eq!(fs::read(&target).unwrap(), b"new-content");
+    }
+
+    #[test]
+    fn atomic_write_fails_closed_on_preplanted_temp() {
+        // Regression (F-03): a pre-planted temp (as an attacker's symlink or a
+        // plain file) must make the write fail closed and leave the target
+        // untouched, never redirect the write through the planted path.
+        let dir = temp_dir("atomic-plant");
+        let target = dir.join("config.json");
+        fs::write(&target, b"original").unwrap();
+        let tmp = target.with_extension(format!("tmp-etherfence-{}", std::process::id()));
+        fs::write(&tmp, b"planted").unwrap();
+
+        let result = atomic_write(&target, b"attacker-would-see-this");
+        assert!(result.is_err(), "must fail closed on a pre-existing temp");
+        assert_eq!(
+            fs::read(&target).unwrap(),
+            b"original",
+            "target must be untouched"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_write_preserves_existing_restrictive_mode() {
+        use std::os::unix::fs::PermissionsExt;
+        // Regression: replacing a 0600 config under a permissive umask must
+        // not silently widen it to whatever `create_new` picks (e.g. 0644).
+        let dir = temp_dir("atomic-mode-preserve");
+        let target = dir.join("config.json");
+        fs::write(&target, b"original").unwrap();
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o600)).unwrap();
+
+        atomic_write(&target, b"new-content").unwrap();
+
+        let mode = fs::metadata(&target).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "replacing a 0600 file must keep it 0600");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_write_defaults_new_file_to_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        // Regression: a brand-new secret-bearing file (a backup copy, a
+        // freshly wrapped config) must default to 0600 rather than trusting
+        // the process umask, which can be as permissive as 0644 or wider.
+        let dir = temp_dir("atomic-mode-default");
+        let target = dir.join("original.json");
+        assert!(!target.exists());
+
+        atomic_write(&target, b"backup-content").unwrap();
+
+        let mode = fs::metadata(&target).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "a brand-new file must default to owner-only");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn create_dir_all_restricted_creates_owner_only_directories() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = temp_dir("dir-mode-restrict");
+        let nested = root.join(".etherfence").join("backups").join("leaf-123");
+        assert!(!nested.exists());
+
+        create_dir_all_restricted(&nested).unwrap();
+
+        for dir in [
+            &nested,
+            &root.join(".etherfence").join("backups"),
+            &root.join(".etherfence"),
+        ] {
+            let mode = fs::metadata(dir).unwrap().permissions().mode() & 0o777;
+            assert_eq!(
+                mode,
+                0o700,
+                "{} must be created owner-only, not the umask default",
+                dir.display()
+            );
+        }
     }
 
     fn temp_dir(name: &str) -> PathBuf {
