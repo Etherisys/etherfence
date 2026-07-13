@@ -4,7 +4,9 @@ Status: pre-alpha. This document describes the current scan report and baseline 
 
 ## Scan report schema version
 
-Current report schema: `ef-scan-report/v0.1.2`
+Current report schema: `ef-scan-report/v0.1.3`
+
+EtherFence v1.7.4 adds a `category` field to every `Finding` (`inventory`, `informational`, or `risk` — see "Finding category and posture scoring" below) and changes the `severity` of `EF-MCP-000` and `EF-MCP-004` from `low` to `info`, because both are pure inventory facts ("a server is configured" / "a server has environment variables") rather than risk heuristics. It also normalizes `evidence` entries for `EF-MCP-001`/`EF-MCP-002`/`EF-MCP-003`/`EF-MCP-004`/`EF-SEC-001` to a `field=value` format (e.g. `command=bash`, `args[0]=...`, `env=API_KEY`) so every heuristic finding names the specific server field it matched — this changes those findings' `fingerprint` values relative to pre-v1.7.4 scans (see "Fingerprint stability" and "Baseline file schema" below for the required baseline migration). `category` is additive; the severity and evidence changes are documented, intentional semantic changes to existing finding IDs, not new fields — hence the schema version bump. `id`, `kind`, and all other Finding fields are unchanged in name/type.
 
 EtherFence v1.7.3 adds an optional `protection_coverage` field to the scan report. This is a backward-compatible additive change: consumers that do not know about `protection_coverage` will ignore the field. Existing field names, types, and semantics are unchanged. Policy schema/source metadata appears in scan output when `--policy` or `--policy-profile` is used.
 
@@ -60,15 +62,29 @@ When a scan policy is active, the report includes an optional `protection_covera
 
 | Field | Type | Description |
 | --- | --- | --- |
-| `scope` | object | Explicit additive selection context: `finding_selection` is `displayed-active-findings`, `severity_threshold` is the effective CLI threshold, and `resolved_baseline_findings` is `excluded`. The score is not an unfiltered host-wide security score. |
-| `score` | integer | Inclusive 0–100 score: `max(0, 100 - 25*high - 10*medium - 2*low)` over active displayed findings. Info findings do not reduce the score. |
+| `scope` | object | Explicit additive selection context: `finding_selection` is `displayed-active-risk-category-findings` (v1.7.4+; was `displayed-active-findings` before), `severity_threshold` is the effective CLI threshold, and `resolved_baseline_findings` is `excluded`. The score is not an unfiltered host-wide security score. |
+| `score` | integer | Inclusive 0–100 score: `max(0, 100 - 25*high - 10*medium - 2*low)` over active displayed findings **whose `category` is `risk`** (v1.7.4+). Inventory and informational findings never reduce the score, regardless of severity; `info`-severity findings never reduce the score regardless of category. |
 | `grade` | string | `a`, `b`, `c`, `d`, or `f`: 90–100, 75–89, 55–74, 30–54, and 0–29 respectively. |
 | `assessment` | string | Deterministic advisory interpretation of the score/grade. |
-| `active_findings`, `high`, `medium`, `low`, `info` | integer | Counts after excluding `baseline_status: "resolved"`. These counts use the same displayed-finding selection as the report. |
-| `priority_risks` | array | At most three active risks, sorted by severity descending, then finding ID, target, agent key, and fingerprint. Each has `finding_id`, `severity`, `title`, `agent`, `target`, `fingerprint`, and `why_this_matters` (the finding's existing impact text). |
+| `active_findings`, `high`, `medium`, `low`, `info` | integer | Counts of active (`baseline_status` not `"resolved"`), **`category: "risk"`** findings only (v1.7.4+). These are narrower than the top-level `summary.*` counts, which count every displayed finding regardless of category — see "Finding category and posture scoring" below. |
+| `priority_risks` | array | At most three active risk-category findings, sorted by severity descending, then finding ID, target, agent key, and fingerprint. Each has `finding_id`, `severity`, `title`, `agent`, `target`, `fingerprint`, and `why_this_matters` (the finding's existing impact text). |
 | `recommended_actions` | array | One existing recommendation per priority risk, in the same order, with `finding_id` and `recommendation`. |
 
-Resolved baseline entries remain in the existing report evidence but never lower `score` or consume a priority/action slot. `--severity-threshold` continues to define which findings are displayed; posture describes that output and does not affect detector behavior, baselines, `--fail-on`, `--fail-on-new`, or exit codes. SARIF and baseline-file schemas are unchanged.
+Resolved baseline entries remain in the existing report evidence but never lower `score` or consume a priority/action slot. `--severity-threshold` continues to define which findings are displayed; the `posture` object itself (the score/grade/scope summary) does not additionally affect detector behavior, baselines, `--fail-on`, `--fail-on-new`, or exit codes — `--fail-on`/`--fail-on-new` compare finding `severity` directly and never read `posture`/`category` at all. SARIF and baseline-file schemas are unchanged in shape (the baseline file's embedded `Finding` shape changes per the v1.7.4 `Finding` changes above — see "Baseline file schema").
+
+**`--fail-on`/`--fail-on-new` compatibility note (v1.7.4):** these flags remain purely `severity`-based, unchanged code — they do **not** consult `category`. Because `EF-MCP-000`/`EF-MCP-004` move from `severity: "low"` to `severity: "info"` in this release, `--fail-on low` and `--fail-on-new low` may now pass in cases where a pre-v1.7.4 scan of the same configuration would have failed (previously tripped by those two IDs alone). `--fail-on medium`/`--fail-on high` (the thresholds meaningful risk gates should use) are unaffected, since neither ID was ever `medium` or `high`. `--fail-on info`/`--fail-on-new info` are also unaffected in effect: they still trip on any active finding, inventory or not — only the specific `low` threshold's behavior changes for these two IDs.
+
+## Finding category and posture scoring (v1.7.4+)
+
+Every `Finding` carries a `category` independent of `severity`:
+
+| `category` | Meaning | Scores? |
+| --- | --- | --- |
+| `inventory` | A purely descriptive fact about what is configured (`EF-MCP-000`: a server is configured; `EF-MCP-004`: a server has one or more environment variables present). | Never. |
+| `informational` | Contextual signal that is neither inventory nor actionable risk (`EF-TIRITH-001`/`EF-TIRITH-002`: complementary Tirith coverage detected). | Never. |
+| `risk` | Actionable, severity-weighted risk (everything else: `EF-CFG-001`, `EF-MCP-001`/`002`/`003`, `EF-SEC-001`, all `EF-POL-*`). | Yes, per its `severity`. |
+
+`severity` continues to represent risk magnitude only (`info`/`low`/`medium`/`high`); `category` alone determines whether a finding contributes to `posture.score`. This is why `EF-MCP-000`/`EF-MCP-004` moved to `severity: "info"` in v1.7.4 (a pure inventory fact has no risk magnitude) while `EF-SEC-001` (secret-shaped environment variable name) is unchanged at `severity: "medium"`, `category: "risk"`, and continues to reduce the score exactly as before.
 
 ## Finding
 
@@ -89,7 +105,17 @@ Resolved baseline entries remain in the existing report evidence but never lower
 | `baseline_status` | string | `new`, `existing`, `resolved`, or `not_applicable`. |
 | `policy_status` | string | `pass`, `violation`, or `not_applicable`. Existing non-policy findings use `not_applicable`; policy-generated findings use `violation`. |
 | `policy_id` | string/null | Short machine policy check identifier for policy-generated findings. Omitted for non-policy findings. |
-| `evidence` | array | Supporting strings from configuration or policy evaluation. |
+| `evidence` | array | Supporting strings from configuration or policy evaluation. **MCP heuristic findings only** (`EF-MCP-001`/`002`/`003`/`004`, `EF-SEC-001`; `EF-MCP-000` already used this shape before v1.7.4) are normalized to `field=value` form (v1.7.4+) — e.g. `server=filesystem`, `command=npx`, `args[0]=...`, `url=...`, `env=API_KEY` — naming the specific server field that matched. `EF-CFG-001` (parse-error evidence) and `EF-TIRITH-001`/`EF-TIRITH-002` retain their own pre-existing, non-`field=value` evidence formats, unchanged by this release. See "Evidence redaction scope" below for exactly what is and is not stripped from evidence values. |
+| `category` | string | `inventory`, `informational`, or `risk` (v1.7.4+). Independent of `severity`; see "Finding category and posture scoring" above. Absent in reports/baselines generated before v1.7.4; defaults to `risk` when missing. |
+
+## Evidence redaction scope (v1.7.4+)
+
+Evidence redaction is bounded and specific, not a general secret scanner. What is and is not covered:
+
+- **Environment variable evidence** (`EF-MCP-004`, `EF-SEC-001`): always the variable **name** only. The variable's value is never captured into a `Finding` at all — it is redacted to `<set>`/`<empty>` at inventory time, before detection ever runs (unchanged since before v1.7.4).
+- **URL-shaped values** (the `url` server field, or any `command`/`args` value that looks like a URL): userinfo (`user:pass@`), the query string, and the fragment are stripped before the value is placed in evidence — these are the parts of a URL most likely to carry a credential (e.g. an API key query parameter). Only scheme, host, and path remain.
+- **`key=value`/`key:value`-shaped segments** in `command`/`args`/`url` evidence whose `key` looks secret-shaped (the same name heuristic used for `EF-SEC-001`, e.g. contains `TOKEN`, `SECRET`, `API_KEY`): the value half is replaced with `<redacted>` (e.g. `args[0]=--token=<redacted>`).
+- **What is NOT covered**: a credential passed as a bare positional argument (no `=`/`:` marker), or as a separate `--token value` pair of argv elements, is not detected or redacted — the raw configured value is shown as-is, exactly as it was before v1.7.4 and exactly as it already appears unredacted in the report's `inventory` array (which mirrors the operator's own configuration verbatim, by design, so operators can review exactly what is configured). Operators who need credential values excluded from scan output should pass them via environment variables, which EtherFence never captures at all, rather than embedding them directly in an MCP server's command, arguments, or URL.
 
 ## Policy file schema metadata
 
@@ -136,6 +162,8 @@ Fingerprints are deterministic over stable posture inputs: finding ID, agent, co
 
 Fingerprints are intended to support baseline/diff workflows across repeated scans of the same repository or workstation config. They may change if a config path, MCP server name, finding ID, finding kind, or evidence changes.
 
+**v1.7.4 evidence normalization changes fingerprints for some finding IDs.** `EF-MCP-001`, `EF-MCP-002`, `EF-MCP-003`, `EF-MCP-004`, and `EF-SEC-001` now emit `field=value`-labeled evidence (see "Finding" above) instead of bare unlabeled values — this changes those findings' `fingerprint` relative to pre-v1.7.4 scans, even though the underlying matching logic and finding IDs are unchanged. `EF-MCP-000` and `EF-TIRITH-*` evidence format is unchanged, so their fingerprints are unaffected by this specific change (though `EF-MCP-000` and `EF-MCP-004`'s `severity` value does change — fingerprints intentionally never include `severity`, so that change alone does not affect fingerprints). A baseline file written before v1.7.4 will be rejected by the schema-version check below (not silently mismatched) — regenerate it with `--write-baseline` after upgrading.
+
 ## Baseline comparison metadata
 
 When `--baseline <file>` is used, the report includes:
@@ -151,15 +179,17 @@ Resolved baseline findings are included in human and Markdown output, and in JSO
 
 ## Baseline file schema
 
-Baseline files are written with schema: `ef-baseline/v0.1.3`.
+Baseline files are written with schema: `ef-baseline/v0.1.4`.
 
 | Field | Type | Description |
 | --- | --- | --- |
-| `schema_version` | string | `ef-baseline/v0.1.3`. |
+| `schema_version` | string | `ef-baseline/v0.1.4`. |
 | `tool` | string | `etherfence`. |
 | `version` | string | EtherFence version that wrote the baseline. |
 | `created_at` | string/null | Optional timestamp; currently omitted/null for deterministic output. |
-| `findings` | array | Current scan findings with fingerprints. If `--policy` or `--policy-profile` is also used, policy findings are included. |
+| `findings` | array | Current scan findings (full `Finding` objects, including `category`) with fingerprints. If `--policy` or `--policy-profile` is also used, policy findings are included. |
+
+`ef-baseline` bumped from `v0.1.3` to `v0.1.4` in v1.7.4 because baseline files embed complete `Finding` objects, so the same `category`/`severity`/`evidence` changes described above apply here too. Loading a baseline file with an unsupported `schema_version` fails closed with an explicit error naming the expected version and instructing `--write-baseline` regeneration, rather than silently comparing against stale data.
 
 ## `etherfence setup catalog` schema (`ef-setup-catalog/v0.1`)
 

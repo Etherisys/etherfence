@@ -62,8 +62,11 @@ Each displayed finding becomes one SARIF result:
 - `partialFingerprints["etherfenceFingerprint/v1"]` carries the deterministic
   EtherFence fingerprint used by baseline/diff mode.
 - `properties` carries `agent`, `target`, `configPath`, `etherfenceSeverity`,
-  `baselineStatus`, `policyStatus`, `policyId` (policy findings only), and
-  `evidence`.
+  `etherfenceCategory` (`inventory`, `informational`, or `risk`; v1.7.4+ —
+  independent of severity, see `docs/json-schema.md`), `baselineStatus`,
+  `policyStatus`, `policyId` (policy findings only), and `evidence` (each
+  entry a `field=value` string, e.g. `command=bash`, `env=API_KEY`; v1.7.4+
+  format, never a secret value).
 
 ## Run properties
 

@@ -227,9 +227,9 @@ Security posture
 Scanned       /home/user
 AI clients    5 detected
 MCP servers   6 configured
-Findings      2 high · 5 medium · 9 low · 0 info
+Findings      2 high · 5 medium · 1 low · 6 info
 Posture       0/100 — GRADE F
-Scope         Displayed active findings at severity threshold: info
+Scope         Displayed active scored-risk findings at severity threshold: info (inventory and informational findings are shown separately and never scored)
 Assessment    Multiple significant posture risks need prompt review.
 
 Overall status:  NEEDS ATTENTION
@@ -238,6 +238,15 @@ Clients
 ────────────────────────────────────────────────────────────
 ✓ Claude Code         2 MCP servers
 ○ Codex CLI           no MCP servers
+
+Inventory observations
+────────────────────────────────────────────────────────────
+MCP servers configured                6 (non-scoring)
+Servers with environment variables    4 (non-scoring; see --verbose for names)
+
+Informational findings
+────────────────────────────────────────────────────────────
+None.
 
 Priority findings
 ────────────────────────────────────────────────────────────
@@ -252,7 +261,9 @@ Run `etherfence scan --verbose` for full evidence and fingerprints.
 Run `etherfence setup` to set up deny-by-default `mcp-proxy` policies for detected MCP servers.
 ```
 
-The posture score intentionally covers only displayed active findings after the effective `--severity-threshold` (the default is `info`); its explicit scope line and JSON metadata are not an unfiltered host-wide security score. Resolved baseline findings remain report evidence but are excluded from the score. The result remains advisory and does not prove the host is secure. Human posture output wraps long risk, scope, impact, and recommendation text to the available terminal width; `NO_COLOR`, redirected output, and plain terminals retain the same deterministic plain text.
+The posture score reflects only actionable, scored-risk findings (`category: "risk"`) — pure inventory facts (e.g. "a server is configured") and informational findings (e.g. complementary Tirith detection) are always shown but never reduce the score, regardless of how many are present. The score intentionally covers only displayed active risk findings after the effective `--severity-threshold` (the default is `info`); its explicit scope line and JSON metadata are not an unfiltered host-wide security score. The "Inventory observations" server counts are derived directly from inventory, not from findings, so they never change or disappear based on `--severity-threshold` — that flag only ever filters which *risk* findings are shown. Resolved baseline findings remain report evidence but are excluded from the score. The result remains advisory and does not prove the host is secure. Every heuristic finding's `evidence` names the specific server field it matched (e.g. `command=bash`, `args[0]=...`, `env=API_KEY`); environment-variable values are never captured at all, and URL userinfo/query/fragment plus secret-shaped `key=value` argument segments are stripped/redacted before appearing in evidence — but this is a bounded heuristic, not a general secret scanner (see `docs/json-schema.md`'s "Evidence redaction scope"). Human posture output wraps long risk, scope, impact, and recommendation text to the available terminal width; `NO_COLOR`, redirected output, and plain terminals retain the same deterministic plain text.
+
+**`--fail-on`/`--fail-on-new` remain purely severity-based**, not category-aware — they never consult the new `category` field. Since `EF-MCP-000`/`EF-MCP-004` moved from `low` to `info` severity, `--fail-on low`/`--fail-on-new low` may now pass in cases a pre-v1.7.4 scan would have failed; `--fail-on medium`/`--fail-on high` (the thresholds a real risk gate should use) are unaffected.
 
 `--verbose` adds the complete finding list with rationale, recommendation,
 and full fingerprints:

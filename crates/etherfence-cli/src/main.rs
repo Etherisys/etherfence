@@ -1,4 +1,5 @@
 mod banner;
+mod coverage;
 mod ui;
 mod verbose;
 
@@ -6,7 +7,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use etherfence_core::{
     home_relative_root, read_bounded_text_file, read_bounded_text_file_no_follow,
-    BaselineComparison, BaselineFile, BaselineStatus, CoverageStatus, Finding, PolicyMetadata,
+    BaselineComparison, BaselineFile, BaselineStatus, Finding, FindingCategory, PolicyMetadata,
     PostureSummary, ScanReport, Severity, Summary, MAX_BASELINE_FILE_BYTES, MAX_CONFIG_FILE_BYTES,
 };
 use std::collections::{HashMap, HashSet};
@@ -2388,7 +2389,7 @@ fn run_scan(options: ScanOptions) -> Result<()> {
     let summary = Summary::from_counts(inventory.len(), &display_findings);
     let posture = PostureSummary::from_findings(&display_findings, options.severity_threshold);
     let report = ScanReport {
-        schema_version: "ef-scan-report/v0.1.2".to_string(),
+        schema_version: "ef-scan-report/v0.1.3".to_string(),
         tool: "etherfence".to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
         status: "stable-local-scan".to_string(),
@@ -2566,80 +2567,71 @@ fn render_scan_summary(report: &ScanReport) -> String {
         let _ = writeln!(out, "{marker} {}{servers_label}", ui::pad(client, 20));
     }
 
-    // ── Protection coverage ────────────────────────────────────────
-    if let Some(coverage) = &report.protection_coverage {
-        let _ = writeln!(out, "\n{}", theme.section("Protection coverage"));
+    // ── Inventory observations ──────────────────────────────────────
+    // Derived directly from inventory (never from `report.findings`), so
+    // this section is always accurate regardless of `--severity-threshold`
+    // — that flag only filters which risk findings are displayed/scored,
+    // it must never make plain inventory facts disappear or contradict the
+    // "MCP servers configured" count shown above.
+    let servers_with_env: usize = report
+        .inventory
+        .iter()
+        .flat_map(|item| &item.mcp_servers)
+        .filter(|server| !server.env.is_empty())
+        .count();
+    let _ = writeln!(out, "\n{}", theme.section("Inventory observations"));
+    let _ = writeln!(
+        out,
+        "{}",
+        theme.key_value_wrapped(
+            "MCP servers configured",
+            &format!("{total_servers} (non-scoring)"),
+            width,
+        )
+    );
+    if servers_with_env > 0 {
         let _ = writeln!(
             out,
             "{}",
-            theme.key_value("Total servers", &coverage.total_servers.to_string())
+            theme.key_value_wrapped(
+                "Servers with environment variables",
+                &format!("{servers_with_env} (non-scoring; see --verbose for names)"),
+                width,
+            )
         );
-        let status_line = format!(
-            "covered={}, not covered={}, no policy={}, empty allowlist={}",
-            coverage.covered,
-            coverage.not_covered,
-            coverage.no_policy_for_agent,
-            coverage.empty_allowlist
-        );
-        let _ = writeln!(out, "{}", theme.key_value("Status", &status_line));
-        if coverage.not_applicable > 0 {
+    }
+
+    // ── Informational findings ──────────────────────────────────────
+    let informational_findings: Vec<&Finding> = report
+        .findings
+        .iter()
+        .filter(|finding| finding.category == FindingCategory::Informational)
+        .collect();
+    let _ = writeln!(out, "\n{}", theme.section("Informational findings"));
+    if informational_findings.is_empty() {
+        let _ = writeln!(out, "None.");
+    } else {
+        for finding in &informational_findings {
             let _ = writeln!(
                 out,
                 "{}",
-                theme.key_value("Not applicable", &coverage.not_applicable.to_string())
+                ui::wrap_prefixed(
+                    "- ",
+                    "  ",
+                    &format!(
+                        "{} ({})",
+                        etherfence_report::human_layout::sanitize_untrusted_text(&finding.title),
+                        finding.id
+                    ),
+                    width,
+                )
             );
         }
+    }
 
-        let mut current_agent = String::new();
-        for server in &coverage.servers {
-            if server.agent.display_name() != current_agent {
-                current_agent = server.agent.display_name().to_string();
-                let _ = writeln!(out, "\n{}:", theme.info.apply_to(&current_agent));
-            }
-            let (marker, _label): (String, &str) = match server.status {
-                CoverageStatus::Covered => (
-                    theme
-                        .success
-                        .apply_to(format!("{} covered", ui::checkmark()))
-                        .to_string(),
-                    "covered",
-                ),
-                CoverageStatus::NotCovered => (
-                    theme
-                        .danger
-                        .apply_to(format!("{} not covered", ui::cross_mark()))
-                        .to_string(),
-                    "not covered",
-                ),
-                CoverageStatus::NoPolicyForAgent => (
-                    theme
-                        .warning
-                        .apply_to("~ no policy".to_string())
-                        .to_string(),
-                    "no policy",
-                ),
-                CoverageStatus::EmptyAllowlist => (
-                    theme
-                        .muted
-                        .apply_to(format!("{} empty allowlist", ui::rule_char()))
-                        .to_string(),
-                    "empty allowlist",
-                ),
-                CoverageStatus::NotApplicable => (
-                    theme
-                        .muted
-                        .apply_to("  not applicable".to_string())
-                        .to_string(),
-                    "not applicable",
-                ),
-            };
-            let _ = writeln!(
-                out,
-                "  {marker}  {}  {}",
-                ui::pad(&server.server_name, 24),
-                theme.muted.apply_to(&server.config_path)
-            );
-        }
+    // ── Protection coverage ────────────────────────────────────────
+    if let Some(coverage) = &report.protection_coverage {
+        coverage::render_protection_coverage(&mut out, &theme, coverage);
     }
 
     let _ = writeln!(out, "\n{}", theme.section("Priority findings"));
@@ -2867,7 +2859,7 @@ fn apply_baseline(
 /// rather than silently marking every current finding `New` and every baseline
 /// finding `Resolved` — which would make `--fail-on-new` fire (or, on a
 /// fingerprint overlap, fail to fire) misleadingly.
-const BASELINE_SCHEMA_VERSION: &str = "ef-baseline/v0.1.3";
+const BASELINE_SCHEMA_VERSION: &str = "ef-baseline/v0.1.4";
 
 // `path` here is an explicit, trusted-operator CLI input (`--baseline`).
 // A swapped/symlinked baseline is a misleading input, so the read fails
