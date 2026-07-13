@@ -7,10 +7,28 @@
 //!
 //! Some of the text laid out here originates in configuration EtherFence
 //! does not control (MCP server names, finding targets, …), so this module
-//! never trusts arbitrary terminal control content: [`sanitize_terminal_text`]
-//! keeps only plain SGR styling (`ESC [ <params> m`) — the one escape shape
-//! EtherFence's own theming ever emits — and drops every other C0/C1
-//! control byte, CSI, OSC, DCS, or other terminal-control sequence outright.
+//! draws a hard line between two trust levels and ships a sanitizer for each:
+//!
+//! - [`sanitize_terminal_text`] keeps only plain SGR styling (`ESC [
+//!   <params> m`) — the one escape shape EtherFence's own theming ever emits
+//!   — plus tab/newline as ordinary whitespace, and drops every other C0/C1
+//!   control byte, CSI, OSC, DCS, or other terminal-control sequence
+//!   outright. It must be used **only** on strings EtherFence itself
+//!   generated (literal text, `Style::apply_to` output); the same bytes
+//!   arriving from configuration would let a hostile server name conceal
+//!   text (`ESC[8m`), reverse video, recolor, reset EtherFence's own
+//!   styling (`ESC[0m`), or inject fake extra lines via a raw newline.
+//! - [`sanitize_untrusted_text`] is for exactly that configuration-derived
+//!   input: it strips every escape sequence including plain SGR, and every
+//!   C0/C1 control byte including tab, newline, and carriage return, since
+//!   there is no display context in this module where raw control bytes
+//!   from an untrusted server name or finding target are safe to emit
+//!   verbatim. Sanitize untrusted fragments with this **before** composing
+//!   them into a larger string or applying EtherFence's own terminal
+//!   styling — once a fragment is stripped this way, wrapping the composed
+//!   string in [`sanitize_terminal_text`] (as [`wrap_prefixed`]'s
+//!   single-line fast path does) can no longer resurrect anything
+//!   dangerous from it.
 
 use unicode_width::UnicodeWidthChar;
 
@@ -29,34 +47,40 @@ pub fn display_width(text: &str) -> usize {
 /// DCS, and other string-introduced sequences) and every other C0/C1 control
 /// byte, keeping only plain SGR styling sequences EtherFence itself emits.
 ///
-/// This is the only sanitizer this module ships: width measurement
-/// ([`strip_ansi`]) and safe-for-terminal output ([`sanitize_terminal_text`])
-/// are the same scan with different output — see `keep_sgr` below. Consumers
-/// must never emit un-sanitized configuration-derived text to a terminal, so
-/// there is deliberately no "keep everything" mode.
+/// This is the only scan this module ships: width measurement
+/// ([`strip_ansi`]), trusted-content output ([`sanitize_terminal_text`]),
+/// and untrusted-content output ([`sanitize_untrusted_text`]) are the same
+/// scan with different output — see `keep_sgr` and `keep_whitespace_controls`
+/// below. Consumers must never emit un-sanitized configuration-derived text
+/// to a terminal, so there is deliberately no "keep everything" mode.
 ///
 /// Single-cursor over `chars()`: a byte index desynchronises from the char
 /// iterator the moment a multi-byte or escape sequence is skipped, which
 /// previously corrupted and truncated every styled line that was wrapped.
-fn scan_ansi(text: &str, keep_sgr: bool) -> String {
+fn scan_ansi(text: &str, keep_sgr: bool, keep_whitespace_controls: bool) -> String {
     let mut result = String::with_capacity(text.len());
     let mut chars = text.chars().peekable();
 
     while let Some(c) = chars.next() {
         if c != '\u{1b}' {
+            // Tab and newline are ordinary whitespace in report text, but
+            // only for callers that trust the text: for untrusted
+            // configuration-derived values a raw newline is a line-injection
+            // vector (e.g. forging an extra "Setup complete" line) so
+            // `keep_whitespace_controls` gates them separately from the rest
+            // of C0.
+            if (c == '\u{09}' || c == '\u{0a}') && keep_whitespace_controls {
+                result.push(c);
+                continue;
+            }
             match c {
-                // Drop every C0 control byte and DEL except tab/newline,
-                // which are ordinary whitespace in report text, and every C1
+                // Drop every other C0 control byte and DEL, and every C1
                 // control byte (U+0080–U+009F, the 8-bit form of the same
                 // control families handled below for the 7-bit ESC form).
-                // Carriage return is dropped too: a bare CR is a classic
-                // status-line-overwrite spoofing trick and has no legitimate
-                // use in this single-line-oriented report text.
-                '\u{00}'..='\u{08}'
-                | '\u{0b}'..='\u{0d}'
-                | '\u{0e}'..='\u{1f}'
-                | '\u{7f}'
-                | '\u{80}'..='\u{9f}' => {}
+                // Carriage return is dropped unconditionally: a bare CR is a
+                // classic status-line-overwrite spoofing trick and has no
+                // legitimate use in this single-line-oriented report text.
+                '\u{00}'..='\u{1f}' | '\u{7f}' | '\u{80}'..='\u{9f}' => {}
                 _ => result.push(c),
             }
             continue;
@@ -132,19 +156,51 @@ fn scan_ansi(text: &str, keep_sgr: bool) -> String {
 }
 
 fn strip_ansi(text: &str) -> String {
-    scan_ansi(text, false)
+    scan_ansi(text, false, true)
 }
 
-/// Sanitize configuration-derived text before it reaches a terminal: strip
-/// every control sequence except plain SGR styling. See the module docs and
+/// Sanitize text EtherFence itself generated (literal strings, or text
+/// already run through EtherFence's own terminal styling) before it reaches
+/// a terminal: strip every control sequence except plain SGR styling, and
+/// keep tab/newline as ordinary whitespace. See the module docs and
 /// [`scan_ansi`] for the trust model.
+///
+/// Do not call this on configuration- or scan-derived values (MCP server
+/// names, finding targets, and similar): the same plain-SGR bytes this
+/// function preserves let untrusted input conceal text, reverse video, or
+/// reset EtherFence's own surrounding styling, and the newline it preserves
+/// lets untrusted input forge extra terminal lines. Use
+/// [`sanitize_untrusted_text`] for that content instead, before composing it
+/// into a larger string.
 pub fn sanitize_terminal_text(text: &str) -> String {
-    scan_ansi(text, true)
+    scan_ansi(text, true, true)
+}
+
+/// Sanitize configuration- or scan-derived text (MCP server names, finding
+/// targets, and similar) that does not originate from EtherFence itself,
+/// before it is composed into any string that may reach a terminal.
+///
+/// Unlike [`sanitize_terminal_text`], this strips every escape sequence
+/// (including plain SGR) and every C0/C1 control byte, including tab,
+/// newline, and carriage return: there is no safe way to distinguish
+/// EtherFence's own styling from identical bytes supplied by untrusted
+/// input, and no legitimate reason for a server name or finding target to
+/// carry a raw newline or ANSI styling of its own. Call this on the raw
+/// value first; EtherFence's own styling can then be applied on top of the
+/// sanitized result.
+pub fn sanitize_untrusted_text(text: &str) -> String {
+    scan_ansi(text, false, false)
 }
 
 /// Wrap plain or styled text behind a first-line prefix and a stable continuation prefix.
 /// Long words are split at Unicode character boundaries so a hostile or unusual
 /// finding value cannot force arbitrary horizontal overflow.
+///
+/// `text` must be either content EtherFence itself generated, or
+/// configuration-/scan-derived content that the caller has already run
+/// through [`sanitize_untrusted_text`]: the single-line fast path below
+/// preserves plain SGR styling via [`sanitize_terminal_text`], which is only
+/// safe once any untrusted fragment inside `text` has already been stripped.
 pub fn wrap_prefixed(prefix: &str, continuation: &str, text: &str, width: usize) -> Vec<String> {
     let width = width.max(MIN_SUPPORTED_WIDTH);
     let mut lines = Vec::new();
@@ -298,6 +354,53 @@ mod tests {
         // Bare C0 controls and DEL are dropped; tab/newline survive as
         // ordinary whitespace.
         assert_eq!(sanitize_terminal_text("a\rb\x07c\x7fd\te\nf"), "abcd\te\nf");
+    }
+
+    /// A malicious server name or finding target must never keep any escape
+    /// sequence, including plain SGR: `sanitize_terminal_text` trusts SGR
+    /// because only EtherFence's own theming ever emits it, but the same
+    /// bytes from configuration can conceal text (ESC[8m), reverse video
+    /// (ESC[7m), recolor it, or reset EtherFence's own surrounding styling
+    /// (ESC[0m). `sanitize_untrusted_text` must strip all of it.
+    #[test]
+    fn sanitize_untrusted_text_strips_all_sgr() {
+        assert_eq!(
+            sanitize_untrusted_text("innocuous\x1b[8mHIDDEN\x1b[0m"),
+            "innocuousHIDDEN"
+        );
+        assert_eq!(
+            sanitize_untrusted_text("evil-server\x1b[7mreverse\x1b[0m"),
+            "evil-serverreverse"
+        );
+        assert_eq!(
+            sanitize_untrusted_text("\x1b[31;1mred-bold-server-name\x1b[0m"),
+            "red-bold-server-name"
+        );
+    }
+
+    /// A crafted server name embedding a fake wizard step must not be able
+    /// to forge an extra terminal line: newline and carriage return must be
+    /// stripped, not preserved as whitespace like `sanitize_terminal_text`
+    /// does for trusted content.
+    #[test]
+    fn sanitize_untrusted_text_strips_newline_cr_and_tab() {
+        assert_eq!(
+            sanitize_untrusted_text("evil-server\nStep 7 of 7 Setup complete"),
+            "evil-serverStep 7 of 7 Setup complete"
+        );
+        assert_eq!(sanitize_untrusted_text("a\rb"), "ab");
+        assert_eq!(sanitize_untrusted_text("a\tb"), "ab");
+    }
+
+    #[test]
+    fn sanitize_untrusted_text_still_drops_osc_and_other_csi() {
+        assert_eq!(sanitize_untrusted_text("a\x1b[2Jb\x1b[?25lc"), "abc");
+        assert_eq!(
+            sanitize_untrusted_text(
+                "before\x1b]8;;http://evil.example\x07link text\x1b]8;;\x07after"
+            ),
+            "beforelink textafter"
+        );
     }
 
     #[test]

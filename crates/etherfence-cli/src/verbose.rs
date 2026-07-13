@@ -451,7 +451,11 @@ fn render_consolidated_recommendations(
         // Affected clients/servers
         let mut affected: Vec<String> = Vec::new();
         for finding in findings {
-            let entry = format!("{}/{}", finding.agent, finding.target);
+            let entry = format!(
+                "{}/{}",
+                finding.agent,
+                etherfence_report::human_layout::sanitize_untrusted_text(&finding.target)
+            );
             if !affected.contains(&entry) {
                 affected.push(entry);
             }

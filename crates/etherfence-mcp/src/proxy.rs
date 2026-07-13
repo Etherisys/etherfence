@@ -779,6 +779,14 @@ fn method_denied_error_response(request_id: &Value, method: &str, reason: &str) 
 /// Run the stdio boundary proxy until the client closes its input stream, the
 /// child server exits, or a fatal proxy error occurs.
 ///
+/// `etherfence-mcp` is a library: it never calls `std::process::exit`, even
+/// on a fatal error, because doing so would let a misbehaving MCP server
+/// (an oversized frame, invalid UTF-8, a client-output failure) terminate
+/// the *entire host process* embedding this crate — including processes
+/// that run multiple proxies, need to flush their own logs, or run
+/// destructors before exiting. Every fatal condition is instead reported
+/// through this function's `Result`.
+///
 /// Lifecycle guarantees:
 /// - The child server is spawned before any client traffic is inspected.
 /// - On a clean client EOF the proxy closes the server's stdin so the child can
@@ -793,12 +801,21 @@ fn method_denied_error_response(request_id: &Value, method: &str, reason: &str) 
 ///   still waiting on stdin — is guaranteed to unblock instead of leaving the
 ///   proxy's scoped-thread join hanging forever.
 /// - A fatal error in the server→client pump (an oversized/invalid server
-///   frame, a hard write failure) kills the child and terminates the whole
-///   process immediately. That pump runs on a background thread while the
-///   client→server pump may be blocked in a plain blocking read on the
-///   client's own input stream with no portable way to interrupt it from
-///   another thread, so a full process exit is the only way to guarantee the
-///   runtime-enforcement proxy never hangs instead of failing closed.
+///   frame, a hard write failure) kills the child and this function returns
+///   `Err`. That pump runs on a background thread while the client→server
+///   pump may be blocked in a plain blocking read on the client's own input
+///   stream with no portable way to interrupt it from another thread, so
+///   `run_proxy` cannot always return promptly: it still waits for both
+///   pumps to finish, which for a non-interruptible foreground reader (real
+///   process stdin, in particular) may not happen until that reader also
+///   unblocks on its own. `on_fatal_error`, when supplied, is invoked from
+///   the background pump thread *as soon as* such an error occurs — before
+///   `run_proxy` itself can return — so a caller that owns the whole
+///   process (a CLI) and needs a hard guarantee of immediate termination
+///   can act (e.g. `std::process::exit`) from inside that callback instead
+///   of waiting on the `Result`. A library embedder that owns an
+///   interruptible client reader can instead simply react to the returned
+///   `ProxyError` and does not need to supply a callback.
 /// - Any I/O, spawn, or audit-open failure returns a `ProxyError` with a
 ///   documented exit code; the caller is responsible for reaping the child.
 /// - A broken pipe to the client (the client closed stdout) terminates the
@@ -810,6 +827,7 @@ pub fn run_proxy<ClientIn, ClientOut>(
     policy: &McpPolicyFile,
     server_name: &str,
     mut audit_log: Option<AuditLog>,
+    on_fatal_error: Option<&(dyn Fn(&ProxyError) + Sync)>,
 ) -> std::result::Result<i32, ProxyError>
 where
     ClientIn: BufRead,
@@ -853,6 +871,7 @@ where
                 &audit_log,
                 &server_in,
                 &child,
+                on_fatal_error,
             )
         });
 
@@ -960,22 +979,34 @@ where
     child_status
 }
 
-/// Terminate the proxy immediately after a fatal server→client pump failure.
+/// Handle a fatal server→client pump failure without terminating the process.
 ///
 /// This pump runs on a background thread while the client→server pump may be
 /// blocked in a plain blocking read on the client's own input stream (in
-/// production, the process's real stdin). There is no portable way to
-/// interrupt that read from another thread, so killing the child alone cannot
-/// unblock it — only a full process exit guarantees the proxy does not hang
-/// instead of failing closed. The child is killed and reaped first so it is
-/// never left running after this process exits.
-fn fail_closed_shutdown(child: &Arc<Mutex<Child>>, error: ProxyError) -> ! {
+/// production, the process's real stdin), which has no portable way to be
+/// interrupted from another thread. Killing the child here cannot unblock
+/// that read, so `run_proxy` itself may not return until the foreground
+/// reader also unblocks on its own — but this function never calls
+/// `std::process::exit` to force the issue, because `etherfence-mcp` is a
+/// library and doing so would terminate the whole embedding process instead
+/// of just this proxy. The child is killed and reaped here so it is never
+/// left running while `run_proxy` waits to return, and `on_fatal_error` (if
+/// supplied) is invoked immediately so a caller that owns the process — and
+/// so can safely decide to terminate it — does not have to wait either.
+fn handle_fatal_server_pump_error(
+    child: &Arc<Mutex<Child>>,
+    on_fatal_error: Option<&(dyn Fn(&ProxyError) + Sync)>,
+    error: ProxyError,
+) -> ProxyError {
     if let Ok(mut child) = child.lock() {
         let _ = child.kill();
         let _ = child.wait();
     }
     eprintln!("etherfence mcp-proxy: {}", error.message());
-    std::process::exit(error.code());
+    if let Some(on_fatal_error) = on_fatal_error {
+        on_fatal_error(&error);
+    }
+    error
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -988,6 +1019,7 @@ fn pump_server_to_client<ClientOut: Write>(
     audit_log: &Arc<Mutex<Option<AuditLog>>>,
     server_in: &Arc<Mutex<Option<std::process::ChildStdin>>>,
     child: &Arc<Mutex<Child>>,
+    on_fatal_error: Option<&(dyn Fn(&ProxyError) + Sync)>,
 ) -> std::result::Result<(), ProxyError> {
     let mut reader = BufReader::new(server_out);
     let mut server_frame = Vec::new();
@@ -995,7 +1027,13 @@ fn pump_server_to_client<ClientOut: Write>(
         let line = match read_bounded_frame(&mut reader, &mut server_frame) {
             Ok(Some(line)) => line,
             Ok(None) => return Ok(()),
-            Err(error) => fail_closed_shutdown(child, ProxyError::ServerRead(format!("{error:?}"))),
+            Err(error) => {
+                return Err(handle_fatal_server_pump_error(
+                    child,
+                    on_fatal_error,
+                    ProxyError::ServerRead(format!("{error:?}")),
+                ))
+            }
         };
         let inspected = inspect_server_line(
             policy,
@@ -1031,24 +1069,29 @@ fn pump_server_to_client<ClientOut: Write>(
                     Ok(()) => {
                         if let Err(error) = out.flush() {
                             drop(out);
-                            fail_closed_shutdown(
+                            return Err(handle_fatal_server_pump_error(
                                 child,
+                                on_fatal_error,
                                 ProxyError::ClientWrite(format!("{error:?}")),
-                            );
+                            ));
                         }
                     }
                     // Client closed its output: stop the server pump cleanly.
                     Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => return Ok(()),
                     Err(error) => {
                         drop(out);
-                        fail_closed_shutdown(child, ProxyError::ClientWrite(format!("{error:?}")));
+                        return Err(handle_fatal_server_pump_error(
+                            child,
+                            on_fatal_error,
+                            ProxyError::ClientWrite(format!("{error:?}")),
+                        ));
                     }
                 }
             }
             ServerAction::Deny { response_to_server } => {
                 if let Some(response) = response_to_server {
                     if let Err(error) = write_to_server(server_in, &response) {
-                        fail_closed_shutdown(child, error);
+                        return Err(handle_fatal_server_pump_error(child, on_fatal_error, error));
                     }
                 }
             }

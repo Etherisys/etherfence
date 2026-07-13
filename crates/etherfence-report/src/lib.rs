@@ -359,7 +359,10 @@ fn append_human_posture(out: &mut String, report: &ScanReport, width: usize) {
                 "  ",
                 &format!(
                     "{} {} [{} / {}]",
-                    risk.finding_id, risk.title, risk.agent, risk.target
+                    risk.finding_id,
+                    risk.title,
+                    risk.agent,
+                    human_layout::sanitize_untrusted_text(&risk.target)
                 ),
                 width,
             );
@@ -502,7 +505,11 @@ fn append_human_inventory(out: &mut String, report: &ScanReport, width: usize) {
                             })
                             .map(|sc| &sc.status);
                         let badge = status.map(coverage_badge).unwrap_or("[unknown]");
-                        format!("{} {}", server.name, badge)
+                        format!(
+                            "{} {}",
+                            human_layout::sanitize_untrusted_text(&server.name),
+                            badge
+                        )
                     })
                     .collect();
                 let servers_str = badges.join(", ");
@@ -551,7 +558,7 @@ fn append_human_findings(out: &mut String, report: &ScanReport, width: usize) {
                         "{} {}: {} [{} / {}] status={} policy_status={} fingerprint={}",
                         finding.id,
                         finding.title,
-                        finding.target,
+                        human_layout::sanitize_untrusted_text(&finding.target),
                         finding.agent,
                         finding.config_path,
                         finding.baseline_status.label(),

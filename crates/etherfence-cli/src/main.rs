@@ -1447,7 +1447,7 @@ fn run_setup_wizard() -> Result<()> {
                     client.agent,
                     theme
                         .info
-                        .apply_to(etherfence_report::human_layout::sanitize_terminal_text(
+                        .apply_to(etherfence_report::human_layout::sanitize_untrusted_text(
                             &server.name
                         ))
                 );
@@ -1680,7 +1680,7 @@ fn run_setup_wizard() -> Result<()> {
                 "  {}",
                 theme
                     .info
-                    .apply_to(etherfence_report::human_layout::sanitize_terminal_text(
+                    .apply_to(etherfence_report::human_layout::sanitize_untrusted_text(
                         &server.server_name
                     ))
             );
@@ -1736,7 +1736,11 @@ fn run_setup_wizard() -> Result<()> {
                     && s.server_name == server.name
             });
             if !selected {
-                unchanged.push(format!("{} / {}", detection.agent, server.name));
+                unchanged.push(format!(
+                    "{} / {}",
+                    detection.agent,
+                    etherfence_report::human_layout::sanitize_untrusted_text(&server.name)
+                ));
             }
         }
     }
@@ -2188,6 +2192,19 @@ fn run_mcp_proxy(
             std::process::exit(etherfence_mcp::exit_code::INVALID_POLICY);
         }
     };
+    // `run_proxy` never calls `process::exit` itself (it is a library
+    // function). A fatal error in its background server-to-client pump can
+    // occur while this process's own foreground stdin read is blocked and
+    // unable to be interrupted, so `run_proxy` may not return promptly in
+    // that case. The CLI is the process, though, and needs a hard guarantee
+    // that such an error ends it immediately rather than waiting on a stuck
+    // foreground read: this callback runs from inside `run_proxy`'s
+    // background pump thread as soon as the error occurs and terminates the
+    // process itself, which is a decision only the CLI layer is allowed to
+    // make.
+    let on_fatal_error = |error: &etherfence_mcp::ProxyError| {
+        std::process::exit(error.code());
+    };
     let exit_code = match etherfence_mcp::run_proxy(
         std::io::stdin().lock(),
         std::io::stdout(),
@@ -2195,6 +2212,7 @@ fn run_mcp_proxy(
         &policy,
         server_name,
         audit_log,
+        Some(&on_fatal_error),
     ) {
         Ok(code) => code,
         Err(proxy_error) => {
@@ -2601,7 +2619,11 @@ fn render_scan_summary(report: &ScanReport) -> String {
                     ui::wrap_prefixed(
                         "        Scope: ",
                         "               ",
-                        &format!("{} / {}", risk.agent, risk.target),
+                        &format!(
+                            "{} / {}",
+                            risk.agent,
+                            etherfence_report::human_layout::sanitize_untrusted_text(&risk.target)
+                        ),
                         width,
                     )
                 );
