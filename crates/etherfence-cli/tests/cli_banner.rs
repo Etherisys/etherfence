@@ -29,6 +29,7 @@ fn temp_root(name: &str) -> PathBuf {
     dir
 }
 
+#[cfg(unix)]
 fn fixture_root(name: &str) -> String {
     format!("{}/../../tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"))
 }
