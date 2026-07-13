@@ -343,6 +343,21 @@ fn proxy_forwards_allowed_calls_and_denies_denied_calls() {
         "stderr: {}",
         String::from_utf8_lossy(&run.output.stderr)
     );
+
+    // A successfully-running mcp-proxy session must never write splash/banner
+    // text to protocol stdout: `stdout_json_lines` below already implicitly
+    // proves this (a stray banner line would fail JSON parsing), but this
+    // makes the invariant explicit and independent of that parsing step.
+    let stdout_text = String::from_utf8_lossy(&run.output.stdout);
+    assert!(
+        !stdout_text.contains("ETHERFENCE"),
+        "mcp-proxy protocol stdout must never contain banner text:\n{stdout_text}"
+    );
+    assert!(
+        !stdout_text.contains("AI Agent Security Posture & Runtime Control"),
+        "mcp-proxy protocol stdout must never contain the banner tagline:\n{stdout_text}"
+    );
+
     let lines = stdout_json_lines(&run.output);
 
     // Protocol messages that are not tool calls pass through untouched.

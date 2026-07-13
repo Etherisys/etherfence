@@ -18,6 +18,50 @@ pub(crate) enum OutputMode {
     Protocol,
 }
 
+/// Which standard stream a given splash print targets. The splash always
+/// travels on the same stream as the content it precedes: stdout for
+/// successful human commands and Clap help/version output, stderr for Clap
+/// usage/argument errors.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Stream {
+    Stdout,
+    Stderr,
+}
+
+impl Stream {
+    fn is_terminal(self) -> bool {
+        match self {
+            Stream::Stdout => io::stdout().is_terminal(),
+            Stream::Stderr => io::stderr().is_terminal(),
+        }
+    }
+
+    fn terminal_width(self) -> Option<u16> {
+        match self {
+            Stream::Stdout => terminal_size_of(io::stdout()).map(|(Width(width), _)| width),
+            Stream::Stderr => terminal_size_of(io::stderr()).map(|(Width(width), _)| width),
+        }
+    }
+
+    fn ansi_supported(self) -> bool {
+        match self {
+            Stream::Stdout => !matches!(AutoStream::choice(&io::stdout()), ColorChoice::Never),
+            Stream::Stderr => !matches!(AutoStream::choice(&io::stderr()), ColorChoice::Never),
+        }
+    }
+
+    fn write(self, bytes: &[u8]) {
+        match self {
+            Stream::Stdout => {
+                let _ = anstream::stdout().lock().write_all(bytes);
+            }
+            Stream::Stderr => {
+                let _ = anstream::stderr().lock().write_all(bytes);
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BannerStyle {
     Standard,
@@ -26,7 +70,7 @@ enum BannerStyle {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct TerminalEnvironment {
-    stdout_is_terminal: bool,
+    stream_is_terminal: bool,
     no_color: bool,
     ci: bool,
     clicolor_disabled: bool,
@@ -37,21 +81,21 @@ struct TerminalEnvironment {
 }
 
 impl TerminalEnvironment {
-    fn current() -> Self {
+    fn current(stream: Stream) -> Self {
         Self {
-            stdout_is_terminal: io::stdout().is_terminal(),
+            stream_is_terminal: stream.is_terminal(),
             no_color: env::var_os("NO_COLOR").is_some(),
             ci: env::var_os("CI").is_some(),
             clicolor_disabled: env::var("CLICOLOR").is_ok_and(|value| value == "0"),
             term: env::var("TERM").ok(),
-            columns: terminal_width().or_else(columns_env),
-            ansi_supported: ansi_supported_by_stdout(),
+            columns: stream.terminal_width().or_else(columns_env),
+            ansi_supported: stream.ansi_supported(),
             unicode: super::ui::unicode_supported(),
         }
     }
 
     fn colors_enabled(&self) -> bool {
-        self.stdout_is_terminal
+        self.stream_is_terminal
             && !self.no_color
             && !self.ci
             && !self.clicolor_disabled
@@ -60,24 +104,17 @@ impl TerminalEnvironment {
     }
 }
 
-fn terminal_width() -> Option<u16> {
-    terminal_size_of(io::stdout()).map(|(Width(width), _)| width)
-}
-
 fn columns_env() -> Option<u16> {
     env::var("COLUMNS")
         .ok()
         .and_then(|value| value.parse::<u16>().ok())
 }
 
-fn ansi_supported_by_stdout() -> bool {
-    !matches!(AutoStream::choice(&io::stdout()), ColorChoice::Never)
-}
-
-pub(crate) fn print_startup_banner(mode: OutputMode, mode_label: Option<&str>) {
-    if let Some(output) = render_startup_banner(mode, &TerminalEnvironment::current(), mode_label) {
-        let mut stdout = anstream::stdout().lock();
-        let _ = stdout.write_all(output.as_bytes());
+pub(crate) fn print_startup_banner(stream: Stream, mode: OutputMode, mode_label: Option<&str>) {
+    if let Some(output) =
+        render_startup_banner(mode, &TerminalEnvironment::current(stream), mode_label)
+    {
+        stream.write(output.as_bytes());
     }
 }
 
@@ -261,9 +298,9 @@ const STANDARD_BANNER_LINES: &[(&str, &str)] = &[
 mod tests {
     use super::*;
 
-    fn env(stdout_is_terminal: bool, columns: Option<u16>) -> TerminalEnvironment {
+    fn env(stream_is_terminal: bool, columns: Option<u16>) -> TerminalEnvironment {
         TerminalEnvironment {
-            stdout_is_terminal,
+            stream_is_terminal,
             no_color: false,
             ci: false,
             clicolor_disabled: false,
